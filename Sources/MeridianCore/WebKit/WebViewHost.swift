@@ -9,9 +9,11 @@ public struct WebViewHost: NSViewRepresentable {
     private let dataStoreProvider: ProfileWebsiteDataStoreProvider
     private let securityPolicy: URLSecurityPolicy
     private let downloadSafetyPolicy: DownloadSafetyPolicy
+    private let sitePermissionPolicy: SitePermissionPolicy
     private let onStateChange: @MainActor (String?, URL?, Bool) -> Void
     private let onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
     private let onDownloadConfirmationRequired: @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
+    private let onSitePermissionRequest: @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
 
     public init(
         state: WebViewState,
@@ -19,18 +21,24 @@ public struct WebViewHost: NSViewRepresentable {
         dataStoreProvider: ProfileWebsiteDataStoreProvider,
         securityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
         downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy(),
+        sitePermissionPolicy: SitePermissionPolicy = SitePermissionPolicy(),
         onStateChange: @escaping @MainActor (String?, URL?, Bool) -> Void,
         onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void = { _, _, _ in },
-        onDownloadConfirmationRequired: @escaping @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void = { _, completion in completion(nil) }
+        onDownloadConfirmationRequired: @escaping @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void = { _, completion in completion(nil) },
+        onSitePermissionRequest: @escaping @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation = { _, _ in
+            .deny(reason: "Site permission request was blocked because no permission handler is installed.")
+        }
     ) {
         self.state = state
         self.profile = profile
         self.dataStoreProvider = dataStoreProvider
         self.securityPolicy = securityPolicy
         self.downloadSafetyPolicy = downloadSafetyPolicy
+        self.sitePermissionPolicy = sitePermissionPolicy
         self.onStateChange = onStateChange
         self.onURLConfirmationRequired = onURLConfirmationRequired
         self.onDownloadConfirmationRequired = onDownloadConfirmationRequired
+        self.onSitePermissionRequest = onSitePermissionRequest
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -40,7 +48,8 @@ public struct WebViewHost: NSViewRepresentable {
             downloadSafetyPolicy: downloadSafetyPolicy,
             onStateChange: onStateChange,
             onURLConfirmationRequired: onURLConfirmationRequired,
-            onDownloadConfirmationRequired: onDownloadConfirmationRequired
+            onDownloadConfirmationRequired: onDownloadConfirmationRequired,
+            onSitePermissionRequest: onSitePermissionRequest
         )
     }
 
@@ -49,6 +58,9 @@ public struct WebViewHost: NSViewRepresentable {
         configuration.websiteDataStore = dataStoreProvider.websiteDataStore(for: profile)
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        if sitePermissionPolicy.requiresUserActionForAutoplay {
+            configuration.mediaTypesRequiringUserActionForPlayback = .all
+        }
         ContentBlockerService.installDefaultRules(into: configuration.userContentController)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
@@ -68,6 +80,7 @@ public struct WebViewHost: NSViewRepresentable {
         context.coordinator.onStateChange = onStateChange
         context.coordinator.onURLConfirmationRequired = onURLConfirmationRequired
         context.coordinator.onDownloadConfirmationRequired = onDownloadConfirmationRequired
+        context.coordinator.onSitePermissionRequest = onSitePermissionRequest
 
         if let commandRequest = state.pendingCommand,
            context.coordinator.lastHandledCommandID != commandRequest.id {
@@ -103,6 +116,7 @@ public struct WebViewHost: NSViewRepresentable {
         fileprivate var onStateChange: @MainActor (String?, URL?, Bool) -> Void
         fileprivate var onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
         fileprivate var onDownloadConfirmationRequired: @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
+        fileprivate var onSitePermissionRequest: @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
         fileprivate var lastHandledCommandID: UUID?
         private var downloadSourceMetadata: [ObjectIdentifier: DownloadSourceMetadata] = [:]
         private var downloadDestinations: [ObjectIdentifier: URL] = [:]
@@ -113,7 +127,8 @@ public struct WebViewHost: NSViewRepresentable {
             downloadSafetyPolicy: DownloadSafetyPolicy,
             onStateChange: @escaping @MainActor (String?, URL?, Bool) -> Void,
             onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void,
-            onDownloadConfirmationRequired: @escaping @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
+            onDownloadConfirmationRequired: @escaping @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void,
+            onSitePermissionRequest: @escaping @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
         ) {
             self.state = state
             self.securityPolicy = securityPolicy
@@ -121,6 +136,7 @@ public struct WebViewHost: NSViewRepresentable {
             self.onStateChange = onStateChange
             self.onURLConfirmationRequired = onURLConfirmationRequired
             self.onDownloadConfirmationRequired = onDownloadConfirmationRequired
+            self.onSitePermissionRequest = onSitePermissionRequest
         }
 
         public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -294,9 +310,31 @@ public struct WebViewHost: NSViewRepresentable {
             windowFeatures: WKWindowFeatures
         ) -> WKWebView? {
             if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
-                webView.load(URLRequest(url: url))
+                let origin = SitePermissionOrigin(securityOrigin: navigationAction.sourceFrame.securityOrigin)
+                    ?? SitePermissionOrigin(url: webView.url ?? url)
+                switch onSitePermissionRequest(.popupWindow, origin) {
+                case .allow:
+                    webView.load(URLRequest(url: url))
+                case .ask:
+                    state.securityMessage = "Pop-up windows require permission for this site."
+                case .deny(let reason):
+                    state.securityMessage = reason
+                }
             }
             return nil
+        }
+
+        public func webView(
+            _ webView: WKWebView,
+            requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+            initiatedByFrame frame: WKFrameInfo,
+            type: WKMediaCaptureType,
+            decisionHandler: @escaping @MainActor (WKPermissionDecision) -> Void
+        ) {
+            let permissionOrigin = SitePermissionOrigin(securityOrigin: origin)
+                ?? frame.request.url.flatMap(SitePermissionOrigin.init(url:))
+            let evaluation = onSitePermissionRequest(Self.permissionKind(for: type), permissionOrigin)
+            decisionHandler(Self.webKitPermissionDecision(for: evaluation))
         }
 
         private func requestConfirmation(
@@ -342,5 +380,42 @@ public struct WebViewHost: NSViewRepresentable {
                 onStateChange(title, url, isLoading)
             }
         }
+
+        private static func permissionKind(for type: WKMediaCaptureType) -> SitePermissionKind {
+            switch type {
+            case .camera:
+                .camera
+            case .microphone:
+                .microphone
+            case .cameraAndMicrophone:
+                .cameraAndMicrophone
+            @unknown default:
+                .cameraAndMicrophone
+            }
+        }
+
+        private static func webKitPermissionDecision(
+            for evaluation: SitePermissionPolicy.Evaluation
+        ) -> WKPermissionDecision {
+            switch evaluation {
+            case .allow:
+                .grant
+            case .ask:
+                .prompt
+            case .deny:
+                .deny
+            }
+        }
+    }
+}
+
+@MainActor
+private extension SitePermissionOrigin {
+    init?(securityOrigin: WKSecurityOrigin) {
+        self.init(
+            scheme: securityOrigin.protocol,
+            host: securityOrigin.host,
+            port: securityOrigin.port
+        )
     }
 }
