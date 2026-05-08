@@ -55,9 +55,14 @@ public struct BrowserContentView: View {
                 profile: profile,
                 dataStoreProvider: dataStoreProvider,
                 securityPolicy: store.urlSecurityPolicy,
+                downloadSafetyPolicy: store.downloadSafetyPolicy,
                 sitePermissionPolicy: store.sitePermissionPolicy
             ) { title, url, isLoading in
                 store.updateActiveTabFromWebView(title: title, url: url, isLoading: isLoading)
+            } onURLConfirmationRequired: { kind, url, sourceContext in
+                store.requestURLConfirmation(kind: kind, url: url, sourceContext: sourceContext)
+            } onDownloadConfirmationRequired: { request, completion in
+                store.requestDownloadConfirmation(request, completion: completion)
             } onSitePermissionRequest: { kind, origin in
                 store.requestSitePermission(kind: kind, origin: origin, profileID: profile.id)
             }

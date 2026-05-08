@@ -21,9 +21,12 @@
 
 - URL navigation is centralized in `URLSecurityPolicy`.
 - Unsafe script/data schemes are blocked.
-- External app and `file://` links require confirmation rather than silent opening.
+- External app and `file://` links create a pending native confirmation before any external handoff, retaining the target URL for approval while reducing source page context to a sanitized host or scheme label.
 - Non-local HTTP pages are flagged as insecure transport.
-- Download filenames are sanitized and risky executable-like extensions are classified.
+- WebKit downloads are routed through a native save-location confirmation before bytes are written.
+- The download policy sanitizes candidate filenames, avoids existing destination paths, blocks installer-like packages, and requires explicit confirmation for executable-like extensions.
+- Download source metadata published to UI/store state is reduced to a display host plus optional quarantine origin; full source URLs are not retained after WebKit callbacks.
+- Completed downloads attempt to apply macOS quarantine metadata with only a privacy-safe source origin; failure is surfaced as a browser security message.
 - Persistent profile metadata stores a WebKit data store UUID; private profiles intentionally do not.
 - Site permission decisions now pass through `SitePermissionPolicy`, which models camera, microphone, geolocation, notifications, autoplay, and pop-up/new-window behavior with conservative defaults.
 - Pop-up/new-window requests and WebKit media-capture permission callbacks are routed through store state before any grant; unsupported permission kinds are denied with an explicit message.
@@ -33,8 +36,7 @@
 
 ## Required Follow-Up
 
-- Implement user-facing confirmation UI for external apps, local files, and risky downloads.
-- Add `WKDownloadDelegate` destination handling with quarantine metadata where feasible.
+- Add end-to-end local WebKit download fixture tests once the Xcode UI test host exists.
 - Extend site permission UI and persistence beyond the first in-memory camera, microphone, pop-up, and autoplay policy slice.
 - Revisit geolocation and notification permissions if future macOS WebKit SDKs expose safe delegate callbacks.
 - Add automated profile isolation tests using local web fixtures.

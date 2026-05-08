@@ -14,8 +14,9 @@ Current coverage:
 - Search query routing.
 - Command routing for URLs, search, spaces, and folders.
 - URL scheme security decisions.
+- Pending confirmation state for external app and local file URLs.
 - Insecure HTTP detection.
-- Download filename sanitization and risk classification.
+- Download filename sanitization, risk classification, safe destination selection, and pending confirmation state.
 - Site permission origin sanitization, supported/unsupported defaults, stored allow/deny decisions, and pending store state.
 - Profile metadata for persistent and private browsing.
 - Browser store relationships for spaces, folders, tabs, and session snapshots.
@@ -37,5 +38,5 @@ Current coverage:
 - UI tests for creating spaces, folders, profiles, opening tabs, switching tabs, restoring sessions, and split view.
 - Local web fixture tests proving cookies/localStorage do not leak between profiles.
 - Private browsing persistence tests proving website data does not survive window/session close.
-- Download delegate tests for filenames, destination handling, quarantine, and risky extensions.
+- End-to-end WebKit download fixture tests for delegate callbacks, save panel behavior, and quarantine metadata.
 - UI or WebKit fixture tests for camera/microphone and pop-up prompts once the app test host exists.
