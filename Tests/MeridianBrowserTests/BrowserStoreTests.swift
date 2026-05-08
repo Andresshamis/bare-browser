@@ -121,4 +121,184 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(openedURL, fileURL)
         XCTAssertNil(store.pendingURLConfirmation)
     }
+
+    func testBlockedDownloadCompletesWithoutPendingPrompt() {
+        let store = BrowserStore()
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "installer.pkg",
+            sourceURL: URL(string: "https://example.com/installer.pkg")
+        )
+        var completedURL: URL? = URL(fileURLWithPath: "/tmp/should-not-save")
+
+        store.requestDownloadConfirmation(request) { destinationURL in
+            completedURL = destinationURL
+        }
+
+        XCTAssertNil(completedURL)
+        XCTAssertNil(store.pendingDownloadConfirmation)
+        XCTAssertEqual(store.lastUserMessage, "Downloads ending in .pkg require a dedicated installer flow.")
+    }
+
+    func testPendingDownloadConfirmationStoresSanitizedSourceMetadata() throws {
+        let store = BrowserStore()
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "report.pdf",
+            sourceURL: URL(string: "https://user:password@example.com/private/source-name.zip?token=secret#fragment")
+        )
+        var completionCalled = false
+
+        store.requestDownloadConfirmation(request) { _ in
+            completionCalled = true
+        }
+
+        let pendingRequest = try XCTUnwrap(store.pendingDownloadConfirmation)
+        XCTAssertFalse(completionCalled)
+        XCTAssertEqual(pendingRequest.sourceDescription, "example.com")
+        XCTAssertEqual(pendingRequest.sourceMetadata.quarantineOrigin, "https://example.com")
+
+        let exposedState = [
+            pendingRequest.sourceDescription,
+            pendingRequest.sourceMetadata.quarantineOrigin ?? "",
+            pendingRequest.confirmationMessage
+        ].joined(separator: "\n")
+        XCTAssertFalse(exposedState.contains("user"))
+        XCTAssertFalse(exposedState.contains("password"))
+        XCTAssertFalse(exposedState.contains("private"))
+        XCTAssertFalse(exposedState.contains("source-name"))
+        XCTAssertFalse(exposedState.contains("token"))
+        XCTAssertFalse(exposedState.contains("secret"))
+        XCTAssertFalse(exposedState.contains("fragment"))
+    }
+
+    func testRiskyDownloadApprovalUsesSafeNonExistingDestination() throws {
+        let store = BrowserStore()
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let existingURL = temporaryDirectory.appendingPathComponent("script.sh")
+        FileManager.default.createFile(atPath: existingURL.path, contents: Data())
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "../script.sh",
+            sourceURL: URL(string: "https://example.com/script.sh")
+        )
+        var completedURL: URL?
+
+        store.requestDownloadConfirmation(request) { destinationURL in
+            completedURL = destinationURL
+        }
+        let didApprove = store.approvePendingDownloadConfirmation(destination: existingURL)
+
+        XCTAssertTrue(didApprove)
+        XCTAssertEqual(completedURL?.lastPathComponent, "script 2.sh")
+        XCTAssertNil(store.pendingDownloadConfirmation)
+        XCTAssertEqual(store.lastUserMessage, "Download will be saved as script 2.sh.")
+    }
+
+    func testDownloadAlertDismissalDuringDestinationSelectionKeepsPendingDownload() throws {
+        let store = BrowserStore()
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "archive.zip",
+            sourceURL: URL(string: "https://example.com/archive.zip")
+        )
+        let selectedURL = temporaryDirectory.appendingPathComponent("archive.zip")
+        var completedURL: URL?
+        var completionCallCount = 0
+
+        store.requestDownloadConfirmation(request) { destinationURL in
+            completionCallCount += 1
+            completedURL = destinationURL
+        }
+
+        XCTAssertTrue(store.beginPendingDownloadDestinationSelection())
+        XCTAssertTrue(store.isChoosingDownloadDestination)
+
+        store.dismissPendingDownloadConfirmationAlert()
+
+        XCTAssertEqual(completionCallCount, 0)
+        XCTAssertNotNil(store.pendingDownloadConfirmation)
+        XCTAssertTrue(store.isChoosingDownloadDestination)
+
+        let didApprove = store.approvePendingDownloadConfirmation(destination: selectedURL)
+
+        XCTAssertTrue(didApprove)
+        XCTAssertEqual(completionCallCount, 1)
+        XCTAssertEqual(completedURL, selectedURL)
+        XCTAssertNil(store.pendingDownloadConfirmation)
+        XCTAssertFalse(store.isChoosingDownloadDestination)
+    }
+
+    func testDownloadAlertDismissalWithoutDestinationSelectionCancelsDownload() {
+        let store = BrowserStore()
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "archive.zip",
+            sourceURL: URL(string: "https://example.com/archive.zip")
+        )
+        var completedURL: URL? = URL(fileURLWithPath: "/tmp/should-not-save")
+
+        store.requestDownloadConfirmation(request) { destinationURL in
+            completedURL = destinationURL
+        }
+
+        store.dismissPendingDownloadConfirmationAlert()
+
+        XCTAssertNil(completedURL)
+        XCTAssertNil(store.pendingDownloadConfirmation)
+        XCTAssertFalse(store.isChoosingDownloadDestination)
+        XCTAssertEqual(store.lastUserMessage, request.cancelledMessage)
+    }
+
+    func testLowRiskDownloadRejectsDestinationChangedToRiskyExtension() throws {
+        let store = BrowserStore()
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "archive.zip",
+            sourceURL: URL(string: "https://example.com/archive.zip")
+        )
+        var completedURL: URL? = URL(fileURLWithPath: "/tmp/should-not-save")
+
+        store.requestDownloadConfirmation(request) { destinationURL in
+            completedURL = destinationURL
+        }
+        let didApprove = store.approvePendingDownloadConfirmation(
+            destination: temporaryDirectory.appendingPathComponent("renamed.sh")
+        )
+
+        XCTAssertFalse(didApprove)
+        XCTAssertNil(completedURL)
+        XCTAssertNil(store.pendingDownloadConfirmation)
+        XCTAssertEqual(
+            store.lastUserMessage,
+            "Download destination requires confirmation. Downloads ending in .sh can execute code."
+        )
+    }
+
+    func testCancelingPendingDownloadCompletesWithNilDestination() {
+        let store = BrowserStore()
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "archive.zip",
+            sourceURL: URL(string: "https://example.com/archive.zip")
+        )
+        var completedURL: URL? = URL(fileURLWithPath: "/tmp/should-not-save")
+
+        store.requestDownloadConfirmation(request) { destinationURL in
+            completedURL = destinationURL
+        }
+        store.cancelPendingDownloadConfirmation()
+
+        XCTAssertNil(completedURL)
+        XCTAssertNil(store.pendingDownloadConfirmation)
+        XCTAssertEqual(store.lastUserMessage, request.cancelledMessage)
+    }
+
+    private func makeTemporaryDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
 }
