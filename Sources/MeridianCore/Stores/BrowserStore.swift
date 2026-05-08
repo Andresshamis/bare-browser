@@ -16,17 +16,22 @@ public final class BrowserStore: ObservableObject {
     @Published public var pendingDownloadConfirmation: DownloadConfirmationRequest?
     @Published public private(set) var isChoosingDownloadDestination: Bool
     @Published public var lastUserMessage: String?
+    @Published public private(set) var pendingSitePermissionRequest: SitePermissionRequest?
+    @Published public private(set) var sitePermissionSettings: [SitePermissionSetting]
 
     public let commandRouter: CommandRouter
     public let urlSecurityPolicy: URLSecurityPolicy
     public let downloadSafetyPolicy: DownloadSafetyPolicy
+    public let sitePermissionPolicy: SitePermissionPolicy
     private var pendingDownloadCompletion: (@MainActor (URL?) -> Void)?
 
     public init(
         snapshot: BrowserSessionSnapshot = SessionSnapshotFactory.initial(),
         commandRouter: CommandRouter = CommandRouter(),
         urlSecurityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
-        downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy()
+        downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy(),
+        sitePermissionPolicy: SitePermissionPolicy = SitePermissionPolicy(),
+        sitePermissionSettings: [SitePermissionSetting] = []
     ) {
         self.profiles = snapshot.profiles
         self.spaces = snapshot.spaces
@@ -41,9 +46,12 @@ public final class BrowserStore: ObservableObject {
         self.pendingDownloadConfirmation = nil
         self.isChoosingDownloadDestination = false
         self.lastUserMessage = nil
+        self.pendingSitePermissionRequest = nil
+        self.sitePermissionSettings = sitePermissionSettings
         self.commandRouter = commandRouter
         self.urlSecurityPolicy = urlSecurityPolicy
         self.downloadSafetyPolicy = downloadSafetyPolicy
+        self.sitePermissionPolicy = sitePermissionPolicy
         self.pendingDownloadCompletion = nil
     }
 
@@ -278,6 +286,84 @@ public final class BrowserStore: ObservableObject {
         }
     }
 
+    @discardableResult
+    public func requestSitePermission(
+        kind: SitePermissionKind,
+        origin: SitePermissionOrigin?,
+        profileID: ProfileID? = nil,
+        date: Date = Date()
+    ) -> SitePermissionPolicy.Evaluation {
+        guard let origin else {
+            let reason = "Site permission request was blocked because its origin is unavailable."
+            pendingSitePermissionRequest = nil
+            lastUserMessage = reason
+            return .deny(reason: reason)
+        }
+
+        let resolvedProfileID = profileID ?? activeProfile?.id
+        guard let profile = profiles.first(where: { $0.id == resolvedProfileID }) else {
+            let reason = "Site permission request was blocked because its profile is unavailable."
+            pendingSitePermissionRequest = nil
+            lastUserMessage = reason
+            return .deny(reason: reason)
+        }
+
+        let request = SitePermissionRequest(
+            kind: kind,
+            origin: origin,
+            profileID: profile.id,
+            isEphemeralProfile: profile.isEphemeral,
+            requestedAt: date
+        )
+        let evaluation = sitePermissionPolicy.evaluation(for: request, settings: sitePermissionSettings)
+
+        switch evaluation {
+        case .allow:
+            pendingSitePermissionRequest = nil
+            lastUserMessage = nil
+        case .ask:
+            pendingSitePermissionRequest = request
+            lastUserMessage = request.promptMessage
+        case .deny(let reason):
+            pendingSitePermissionRequest = nil
+            lastUserMessage = reason
+        }
+
+        return evaluation
+    }
+
+    @discardableResult
+    public func resolvePendingSitePermission(
+        _ decision: SitePermissionDecision,
+        requestID: UUID,
+        date: Date = Date()
+    ) -> SitePermissionPolicy.Evaluation? {
+        guard let request = pendingSitePermissionRequest,
+              request.id == requestID else {
+            return nil
+        }
+
+        if let setting = sitePermissionPolicy.setting(for: request, decision: decision, date: date) {
+            upsertSitePermissionSetting(setting)
+        }
+
+        pendingSitePermissionRequest = nil
+        let evaluation = sitePermissionPolicy.evaluation(for: decision, kind: request.kind)
+        switch evaluation {
+        case .allow:
+            lastUserMessage = "\(request.kind.displayName.capitalized) allowed for \(request.origin.displayString)."
+        case .ask:
+            lastUserMessage = request.promptMessage
+        case .deny(let reason):
+            lastUserMessage = reason
+        }
+        return evaluation
+    }
+
+    public func cancelPendingSitePermissionRequest() {
+        pendingSitePermissionRequest = nil
+    }
+
     public func requestURLConfirmation(
         kind: URLConfirmationRequest.Kind,
         url: URL,
@@ -461,6 +547,18 @@ public final class BrowserStore: ObservableObject {
             return
         }
         mutate(&tabs[index])
+    }
+
+    private func upsertSitePermissionSetting(_ setting: SitePermissionSetting) {
+        if let index = sitePermissionSettings.firstIndex(where: {
+            $0.kind == setting.kind
+                && $0.origin == setting.origin
+                && $0.profileID == setting.profileID
+        }) {
+            sitePermissionSettings[index] = setting
+        } else {
+            sitePermissionSettings.append(setting)
+        }
     }
 
     private func cancelPendingDownloadCompletion(message: String?) {
