@@ -14,7 +14,10 @@ let package = Package(
     targets: [
         .target(
             name: "MeridianCore",
-            path: "Sources/MeridianCore"
+            path: "Sources/MeridianCore",
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
+            ]
         ),
         .executableTarget(
             name: "MeridianBrowser",

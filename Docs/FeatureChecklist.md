@@ -14,11 +14,11 @@
 - Native pending confirmation for external app and local file URL handoff.
 - WebKit download delegate handling with native destination approval and risky download confirmation.
 - Session snapshot model and JSON round-trip tests.
+- SQLite-backed durable session persistence and startup restore through the private-state filtering boundary.
 - App Sandbox entitlement draft.
 
 ## Not Yet Implemented
 
-- Durable persistence/session restore.
 - Full native menu set.
 - Drag-and-drop sidebar reordering and moves.
 - Multi-tab web view lifecycle/pool and tab unloading.

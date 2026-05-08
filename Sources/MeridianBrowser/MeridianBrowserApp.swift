@@ -3,7 +3,21 @@ import SwiftUI
 
 @main
 struct MeridianBrowserApp: App {
-    @StateObject private var store = BrowserStore()
+    private let sessionPersistence: SQLiteSessionPersistenceStore
+    @StateObject private var store: BrowserStore
+
+    init() {
+        let sessionPersistence = SQLiteSessionPersistenceStore()
+        let loadResult = sessionPersistence.loadSnapshot()
+        self.sessionPersistence = sessionPersistence
+        _store = StateObject(
+            wrappedValue: BrowserStore(
+                snapshot: loadResult.snapshot,
+                lastUserMessage: loadResult.recoveryReason?.userMessage,
+                sessionPersistence: sessionPersistence
+            )
+        )
+    }
 
     var body: some Scene {
         WindowGroup("Meridian Browser") {

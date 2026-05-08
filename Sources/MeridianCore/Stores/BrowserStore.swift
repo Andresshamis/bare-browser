@@ -23,6 +23,7 @@ public final class BrowserStore: ObservableObject {
     public let urlSecurityPolicy: URLSecurityPolicy
     public let downloadSafetyPolicy: DownloadSafetyPolicy
     public let sitePermissionPolicy: SitePermissionPolicy
+    private let sessionPersistence: SessionSnapshotPersisting?
     private var pendingDownloadCompletion: (@MainActor (URL?) -> Void)?
 
     public init(
@@ -31,7 +32,9 @@ public final class BrowserStore: ObservableObject {
         urlSecurityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
         downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy(),
         sitePermissionPolicy: SitePermissionPolicy = SitePermissionPolicy(),
-        sitePermissionSettings: [SitePermissionSetting] = []
+        sitePermissionSettings: [SitePermissionSetting] = [],
+        lastUserMessage: String? = nil,
+        sessionPersistence: SessionSnapshotPersisting? = nil
     ) {
         self.profiles = snapshot.profiles
         self.spaces = snapshot.spaces
@@ -45,13 +48,14 @@ public final class BrowserStore: ObservableObject {
         self.pendingURLConfirmation = nil
         self.pendingDownloadConfirmation = nil
         self.isChoosingDownloadDestination = false
-        self.lastUserMessage = nil
+        self.lastUserMessage = lastUserMessage
         self.pendingSitePermissionRequest = nil
         self.sitePermissionSettings = sitePermissionSettings
         self.commandRouter = commandRouter
         self.urlSecurityPolicy = urlSecurityPolicy
         self.downloadSafetyPolicy = downloadSafetyPolicy
         self.sitePermissionPolicy = sitePermissionPolicy
+        self.sessionPersistence = sessionPersistence
         self.pendingDownloadCompletion = nil
     }
 
@@ -122,6 +126,7 @@ public final class BrowserStore: ObservableObject {
         updateSpace(targetSpaceID) { space in
             space.folderIDs.append(folder.id)
         }
+        persistSession()
         return folder
     }
 
@@ -132,6 +137,7 @@ public final class BrowserStore: ObservableObject {
             ? BrowserProfile.privateBrowsing()
             : BrowserProfile(name: cleanedName.isEmpty ? "Profile \(profiles.count + 1)" : cleanedName)
         profiles.append(profile)
+        persistSession()
         return profile
     }
 
@@ -192,6 +198,7 @@ public final class BrowserStore: ObservableObject {
             ?? space.favoriteTabIDs.first
             ?? space.pinnedTabIDs.first
             ?? space.regularTabIDs.first
+        persistSession()
     }
 
     public func selectTab(_ id: TabID) {
@@ -207,6 +214,7 @@ public final class BrowserStore: ObservableObject {
         updateTab(id) { tab in
             tab.lastActiveDate = Date()
         }
+        persistSession()
     }
 
     public func closeSelectedTab() {
@@ -226,6 +234,7 @@ public final class BrowserStore: ObservableObject {
             folders[index].tabIDs.removeAll { $0 == tab.id }
         }
         selectedTabID = selectedSpace?.selectedTabID
+        persistSession()
     }
 
     public func toggleSidebar() {
@@ -515,6 +524,7 @@ public final class BrowserStore: ObservableObject {
             tab.isLoading = isLoading
             tab.restorationMetadata.lastCommittedURL = url ?? tab.restorationMetadata.lastCommittedURL
         }
+        persistSession()
     }
 
     private func switchToProfile(_ id: ProfileID) {
@@ -570,6 +580,21 @@ public final class BrowserStore: ObservableObject {
             lastUserMessage = message
         }
         completion?(nil)
+    }
+
+    private func persistSession(date: Date = Date()) {
+        guard let sessionPersistence else {
+            return
+        }
+
+        do {
+            try sessionPersistence.saveSnapshot(
+                snapshot(date: date),
+                fallback: SessionSnapshotFactory.initial(date: date)
+            )
+        } catch {
+            lastUserMessage = "Session changes could not be saved. Meridian will keep browsing state in memory for this run."
+        }
     }
 
     private static func defaultTitle(for url: URL?) -> String {
