@@ -11,6 +11,7 @@
 - Persistent and private profile website data store selection.
 - Default content rule list wiring.
 - URL and download safety helpers.
+- Native pending confirmation for external app and local file URL handoff.
 - Session snapshot model and JSON round-trip tests.
 - App Sandbox entitlement draft.
 
@@ -21,7 +22,7 @@
 - Drag-and-drop sidebar reordering and moves.
 - Multi-tab web view lifecycle/pool and tab unloading.
 - Split view UI.
-- Download delegate and safe destination picker.
+- WebKit download delegate, safe destination picker, and risky download confirmation.
 - Site permissions UI and storage.
 - Local history store.
 - UI tests.

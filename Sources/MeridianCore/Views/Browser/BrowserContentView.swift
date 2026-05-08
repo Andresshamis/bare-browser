@@ -43,6 +43,8 @@ public struct BrowserContentView: View {
                 securityPolicy: store.urlSecurityPolicy
             ) { title, url, isLoading in
                 store.updateActiveTabFromWebView(title: title, url: url, isLoading: isLoading)
+            } onURLConfirmationRequired: { kind, url, sourceURL in
+                store.requestURLConfirmation(kind: kind, url: url, sourceURL: sourceURL)
             }
             .id(tab.id)
         } else {

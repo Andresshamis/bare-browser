@@ -39,4 +39,48 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(decoded.tabs.count, snapshot.tabs.count)
         XCTAssertEqual(decoded.selectedTabID, snapshot.selectedTabID)
     }
+
+    func testExternalURLCreatesPendingConfirmationInsteadOfOpeningTab() {
+        let store = BrowserStore()
+        let initialTabCount = store.tabs.count
+        let externalURL = URL(string: "mailto:hello@example.com")!
+
+        store.open(externalURL)
+
+        XCTAssertEqual(store.tabs.count, initialTabCount)
+        XCTAssertEqual(store.pendingURLConfirmation?.kind, .externalApplication)
+        XCTAssertEqual(store.pendingURLConfirmation?.url, externalURL)
+        XCTAssertEqual(store.lastUserMessage, URLConfirmationRequest.Kind.externalApplication.pendingMessage)
+    }
+
+    func testApprovingPendingConfirmationRevalidatesAndOpensURL() {
+        let store = BrowserStore()
+        let externalURL = URL(string: "mailto:hello@example.com")!
+        var openedURL: URL?
+
+        store.open(externalURL)
+        let didOpen = store.approvePendingURLConfirmation { url in
+            openedURL = url
+            return true
+        }
+
+        XCTAssertTrue(didOpen)
+        XCTAssertEqual(openedURL, externalURL)
+        XCTAssertNil(store.pendingURLConfirmation)
+        XCTAssertEqual(store.lastUserMessage, URLConfirmationRequest.Kind.externalApplication.approvedMessage)
+    }
+
+    func testCancelingPendingConfirmationDoesNotOpenURL() {
+        let store = BrowserStore()
+        let fileURL = URL(fileURLWithPath: "/tmp/test.html")
+
+        store.requestURLConfirmation(kind: .localFile, url: fileURL, sourceURL: URL(string: "https://example.com"))
+
+        XCTAssertEqual(store.pendingURLConfirmation?.sourceDescription, "example.com")
+
+        store.cancelPendingURLConfirmation()
+
+        XCTAssertNil(store.pendingURLConfirmation)
+        XCTAssertEqual(store.lastUserMessage, URLConfirmationRequest.Kind.localFile.cancelledMessage)
+    }
 }
