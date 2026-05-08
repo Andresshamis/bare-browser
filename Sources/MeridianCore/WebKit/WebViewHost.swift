@@ -9,7 +9,7 @@ public struct WebViewHost: NSViewRepresentable {
     private let dataStoreProvider: ProfileWebsiteDataStoreProvider
     private let securityPolicy: URLSecurityPolicy
     private let onStateChange: @MainActor (String?, URL?, Bool) -> Void
-    private let onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URL?) -> Void
+    private let onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
 
     public init(
         state: WebViewState,
@@ -17,7 +17,7 @@ public struct WebViewHost: NSViewRepresentable {
         dataStoreProvider: ProfileWebsiteDataStoreProvider,
         securityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
         onStateChange: @escaping @MainActor (String?, URL?, Bool) -> Void,
-        onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URL?) -> Void = { _, _, _ in }
+        onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void = { _, _, _ in }
     ) {
         self.state = state
         self.profile = profile
@@ -91,14 +91,14 @@ public struct WebViewHost: NSViewRepresentable {
         fileprivate var state: WebViewState
         fileprivate let securityPolicy: URLSecurityPolicy
         fileprivate var onStateChange: @MainActor (String?, URL?, Bool) -> Void
-        fileprivate var onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URL?) -> Void
+        fileprivate var onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
         fileprivate var lastHandledCommandID: UUID?
 
         init(
             state: WebViewState,
             securityPolicy: URLSecurityPolicy,
             onStateChange: @escaping @MainActor (String?, URL?, Bool) -> Void,
-            onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URL?) -> Void
+            onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
         ) {
             self.state = state
             self.securityPolicy = securityPolicy
@@ -171,7 +171,7 @@ public struct WebViewHost: NSViewRepresentable {
             sourceURL: URL?
         ) {
             state.securityMessage = kind.pendingMessage
-            onURLConfirmationRequired(kind, url, sourceURL)
+            onURLConfirmationRequired(kind, url, URLConfirmationSourceContext(sourceURL: sourceURL))
         }
 
         private func publish(_ webView: WKWebView, isLoading: Bool, message: String? = nil) {
