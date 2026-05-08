@@ -12,7 +12,7 @@ Meridian Browser is a native macOS, SwiftUI-first, WebKit-based browser. The ear
 
 - `Models/`: Stable value models for tabs, spaces, folders, profiles, split views, and session snapshots.
 - `Stores/`: Main-window observable state and user actions.
-- `Services/`: Address resolution, command routing, snapshot seeding, and future persistence services.
+- `Services/`: Address resolution, command routing, snapshot seeding, and SQLite-backed session persistence.
 - `Security/`: URL and download safety policies. Security-sensitive decisions should stay here instead of view code.
 - `WebKit/`: `WKWebView` configuration, profile website data stores, content blocking, and the SwiftUI/AppKit host bridge.
 - `Views/`: Sidebar-first browser shell, command bar, and browser content surfaces.
@@ -20,14 +20,15 @@ Meridian Browser is a native macOS, SwiftUI-first, WebKit-based browser. The ear
 ## Current Design Decisions
 
 - Profiles carry stable `websiteDataStoreID` values. Persistent profiles use `WKWebsiteDataStore.dataStore(forIdentifier:)`; private profiles use `.nonPersistent()`. If imported persistent metadata is missing a store identifier, the model repairs it from the stable profile ID rather than using WebKit's shared default store.
-- `BrowserStore.snapshot(...)` is the live runtime state shape. Disk persistence must use `BrowserStore.persistentSnapshot(...)`, which routes through `SessionPersistenceBoundary` to filter private profiles and dependent spaces, folders, tabs, split views, selected IDs, and restoration metadata before encoding.
+- `BrowserStore.snapshot(...)` is the live runtime state shape. Disk persistence uses `SQLiteSessionPersistenceStore`, which stores one encoded snapshot only after routing through `SessionPersistenceBoundary` to filter private profiles and dependent spaces, folders, tabs, split views, selected IDs, and restoration metadata before encoding.
+- App startup loads the SQLite session snapshot from Application Support. Missing, unreadable, unsupported, or privacy-invalid saved state falls back to `SessionSnapshotFactory.initial(...)` with a generic in-app message and no URL-bearing diagnostics.
 - Favorites/essentials are currently space-scoped. They are stored on `BrowserSpace.favoriteTabIDs` so each space can have its own persistent anchors.
 - The app lazily creates a `WKWebView` for the selected tab only. A later web view pool can keep recent tabs warm without instantiating all saved tabs.
 - The command bar is native SwiftUI. It routes direct URLs, search queries, tab search, and initial creation commands.
 
 ## Near-Term Gaps
 
-- Add durable persistence using SwiftData, SQLite, or Core Data on top of `SessionPersistenceBoundary`.
+- Add runtime WebKit fixture coverage proving profile cookies/localStorage isolation and private browsing cleanup once the signed UI test host is available.
 - Add an Xcode project for app bundle identity, signing, UI tests, and release packaging.
 - Expand `WKNavigationDelegate`, `WKUIDelegate`, and `WKDownloadDelegate` handling for permissions, downloads, popups, and TLS/authentication edge cases.
 - Add drag-and-drop and reorder support for tabs, spaces, and folders.
