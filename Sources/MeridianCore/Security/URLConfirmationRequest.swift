@@ -1,5 +1,35 @@
 import Foundation
 
+public struct URLConfirmationSourceContext: Equatable, Sendable {
+    public var displayDescription: String
+
+    public init(displayDescription: String) {
+        let cleanedDescription = displayDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.displayDescription = cleanedDescription.isEmpty ? "Unknown source" : cleanedDescription
+    }
+
+    public init(sourceURL: URL?) {
+        guard let sourceURL else {
+            self = .commandBar
+            return
+        }
+
+        if let host = sourceURL.host(percentEncoded: false), !host.isEmpty {
+            self.init(displayDescription: host)
+            return
+        }
+
+        if let scheme = sourceURL.scheme?.lowercased(), !scheme.isEmpty {
+            self.init(displayDescription: "\(scheme) URL")
+            return
+        }
+
+        self.init(displayDescription: "Unknown source")
+    }
+
+    public static let commandBar = URLConfirmationSourceContext(displayDescription: "Command bar")
+}
+
 public struct URLConfirmationRequest: Identifiable, Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
         case externalApplication
@@ -54,20 +84,20 @@ public struct URLConfirmationRequest: Identifiable, Equatable, Sendable {
     public var id: UUID
     public var kind: Kind
     public var url: URL
-    public var sourceURL: URL?
+    public var sourceContext: URLConfirmationSourceContext
     public var createdAt: Date
 
     public init(
         id: UUID = UUID(),
         kind: Kind,
         url: URL,
-        sourceURL: URL? = nil,
+        sourceContext: URLConfirmationSourceContext = .commandBar,
         createdAt: Date = Date()
     ) {
         self.id = id
         self.kind = kind
         self.url = url
-        self.sourceURL = sourceURL
+        self.sourceContext = sourceContext
         self.createdAt = createdAt
     }
 
@@ -96,18 +126,6 @@ public struct URLConfirmationRequest: Identifiable, Equatable, Sendable {
     }
 
     public var sourceDescription: String {
-        guard let sourceURL else {
-            return "Command bar"
-        }
-
-        if let host = sourceURL.host(percentEncoded: false), !host.isEmpty {
-            return host
-        }
-
-        if let scheme = sourceURL.scheme, !scheme.isEmpty {
-            return "\(scheme) URL"
-        }
-
-        return sourceURL.absoluteString
+        sourceContext.displayDescription
     }
 }

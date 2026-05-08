@@ -21,7 +21,7 @@
 
 - URL navigation is centralized in `URLSecurityPolicy`.
 - Unsafe script/data schemes are blocked.
-- External app and `file://` links create a pending native confirmation before any external handoff.
+- External app and `file://` links create a pending native confirmation before any external handoff, retaining the target URL for approval while reducing source page context to a sanitized host or scheme label.
 - Non-local HTTP pages are flagged as insecure transport.
 - The download policy helper sanitizes candidate filenames and classifies risky executable-like extensions.
 - Persistent profile metadata stores a WebKit data store UUID; private profiles intentionally do not.

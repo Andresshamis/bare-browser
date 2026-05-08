@@ -83,4 +83,42 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertNil(store.pendingURLConfirmation)
         XCTAssertEqual(store.lastUserMessage, URLConfirmationRequest.Kind.localFile.cancelledMessage)
     }
+
+    func testPendingExternalURLConfirmationStoresSanitizedSourceContext() throws {
+        let store = BrowserStore()
+        let externalURL = URL(string: "mailto:help@meridian.test")!
+        let sourceURL = URL(string: "https://user:pass@example.com/private/start?token=fixture#frag")!
+
+        store.requestURLConfirmation(kind: .externalApplication, url: externalURL, sourceURL: sourceURL)
+
+        let request = try XCTUnwrap(store.pendingURLConfirmation)
+        XCTAssertEqual(request.url, externalURL)
+        XCTAssertEqual(request.sourceDescription, "example.com")
+        for sensitiveComponent in ["user", "pass", "/private", "token", "fixture", "frag"] {
+            XCTAssertFalse(request.confirmationMessage.contains(sensitiveComponent), sensitiveComponent)
+            XCTAssertFalse(request.sourceDescription.contains(sensitiveComponent), sensitiveComponent)
+        }
+    }
+
+    func testPendingLocalFileConfirmationPreservesTargetAndSanitizesSourceContext() throws {
+        let store = BrowserStore()
+        let fileURL = URL(fileURLWithPath: "/tmp/report.html")
+        let sourceURL = URL(string: "https://user:pass@example.com/private/start?token=fixture#frag")!
+        var openedURL: URL?
+
+        store.requestURLConfirmation(kind: .localFile, url: fileURL, sourceURL: sourceURL)
+
+        let request = try XCTUnwrap(store.pendingURLConfirmation)
+        XCTAssertEqual(request.url, fileURL)
+        XCTAssertEqual(request.sourceDescription, "example.com")
+
+        let didOpen = store.approvePendingURLConfirmation { url in
+            openedURL = url
+            return true
+        }
+
+        XCTAssertTrue(didOpen)
+        XCTAssertEqual(openedURL, fileURL)
+        XCTAssertNil(store.pendingURLConfirmation)
+    }
 }
