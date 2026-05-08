@@ -9,26 +9,30 @@ public struct WebViewHost: NSViewRepresentable {
     private let dataStoreProvider: ProfileWebsiteDataStoreProvider
     private let securityPolicy: URLSecurityPolicy
     private let onStateChange: @MainActor (String?, URL?, Bool) -> Void
+    private let onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URL?) -> Void
 
     public init(
         state: WebViewState,
         profile: BrowserProfile,
         dataStoreProvider: ProfileWebsiteDataStoreProvider,
         securityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
-        onStateChange: @escaping @MainActor (String?, URL?, Bool) -> Void
+        onStateChange: @escaping @MainActor (String?, URL?, Bool) -> Void,
+        onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URL?) -> Void = { _, _, _ in }
     ) {
         self.state = state
         self.profile = profile
         self.dataStoreProvider = dataStoreProvider
         self.securityPolicy = securityPolicy
         self.onStateChange = onStateChange
+        self.onURLConfirmationRequired = onURLConfirmationRequired
     }
 
     public func makeCoordinator() -> Coordinator {
         Coordinator(
             state: state,
             securityPolicy: securityPolicy,
-            onStateChange: onStateChange
+            onStateChange: onStateChange,
+            onURLConfirmationRequired: onURLConfirmationRequired
         )
     }
 
@@ -54,6 +58,7 @@ public struct WebViewHost: NSViewRepresentable {
     public func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.state = state
         context.coordinator.onStateChange = onStateChange
+        context.coordinator.onURLConfirmationRequired = onURLConfirmationRequired
 
         if let commandRequest = state.pendingCommand,
            context.coordinator.lastHandledCommandID != commandRequest.id {
@@ -86,16 +91,19 @@ public struct WebViewHost: NSViewRepresentable {
         fileprivate var state: WebViewState
         fileprivate let securityPolicy: URLSecurityPolicy
         fileprivate var onStateChange: @MainActor (String?, URL?, Bool) -> Void
+        fileprivate var onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URL?) -> Void
         fileprivate var lastHandledCommandID: UUID?
 
         init(
             state: WebViewState,
             securityPolicy: URLSecurityPolicy,
-            onStateChange: @escaping @MainActor (String?, URL?, Bool) -> Void
+            onStateChange: @escaping @MainActor (String?, URL?, Bool) -> Void,
+            onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URL?) -> Void
         ) {
             self.state = state
             self.securityPolicy = securityPolicy
             self.onStateChange = onStateChange
+            self.onURLConfirmationRequired = onURLConfirmationRequired
         }
 
         public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -132,14 +140,10 @@ public struct WebViewHost: NSViewRepresentable {
             case .allowInWebView:
                 decisionHandler(.allow)
             case .requireExternalApplicationConfirmation:
-                Task { @MainActor in
-                    state.securityMessage = "External application links require confirmation."
-                }
+                requestConfirmation(.externalApplication, url: url, sourceURL: webView.url)
                 decisionHandler(.cancel)
             case .requireLocalFileConfirmation:
-                Task { @MainActor in
-                    state.securityMessage = "Local file links require confirmation."
-                }
+                requestConfirmation(.localFile, url: url, sourceURL: webView.url)
                 decisionHandler(.cancel)
             case .block(let reason):
                 Task { @MainActor in
@@ -159,6 +163,15 @@ public struct WebViewHost: NSViewRepresentable {
                 webView.load(URLRequest(url: url))
             }
             return nil
+        }
+
+        private func requestConfirmation(
+            _ kind: URLConfirmationRequest.Kind,
+            url: URL,
+            sourceURL: URL?
+        ) {
+            state.securityMessage = kind.pendingMessage
+            onURLConfirmationRequired(kind, url, sourceURL)
         }
 
         private func publish(_ webView: WKWebView, isLoading: Bool, message: String? = nil) {

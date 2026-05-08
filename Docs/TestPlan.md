@@ -14,6 +14,7 @@ Current coverage:
 - Search query routing.
 - Command routing for URLs, search, spaces, and folders.
 - URL scheme security decisions.
+- Pending confirmation state for external app and local file URLs.
 - Insecure HTTP detection.
 - Download filename sanitization and risk classification.
 - Profile metadata for persistent and private browsing.

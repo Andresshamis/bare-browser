@@ -46,6 +46,17 @@ public struct URLSecurityPolicy: Sendable {
         return .block(reason: "Unsupported URL scheme: \(scheme).")
     }
 
+    public func confirmationKind(for url: URL) -> URLConfirmationRequest.Kind? {
+        switch decision(for: url) {
+        case .requireExternalApplicationConfirmation:
+            return .externalApplication
+        case .requireLocalFileConfirmation:
+            return .localFile
+        case .allowInWebView, .block:
+            return nil
+        }
+    }
+
     public func isInsecureTransport(_ url: URL) -> Bool {
         url.scheme?.lowercased() == "http" && !isLoopbackOrLocalhost(url)
     }
