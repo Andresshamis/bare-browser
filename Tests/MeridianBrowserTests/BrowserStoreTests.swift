@@ -194,6 +194,62 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.lastUserMessage, "Download will be saved as script 2.sh.")
     }
 
+    func testDownloadAlertDismissalDuringDestinationSelectionKeepsPendingDownload() throws {
+        let store = BrowserStore()
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "archive.zip",
+            sourceURL: URL(string: "https://example.com/archive.zip")
+        )
+        let selectedURL = temporaryDirectory.appendingPathComponent("archive.zip")
+        var completedURL: URL?
+        var completionCallCount = 0
+
+        store.requestDownloadConfirmation(request) { destinationURL in
+            completionCallCount += 1
+            completedURL = destinationURL
+        }
+
+        XCTAssertTrue(store.beginPendingDownloadDestinationSelection())
+        XCTAssertTrue(store.isChoosingDownloadDestination)
+
+        store.dismissPendingDownloadConfirmationAlert()
+
+        XCTAssertEqual(completionCallCount, 0)
+        XCTAssertNotNil(store.pendingDownloadConfirmation)
+        XCTAssertTrue(store.isChoosingDownloadDestination)
+
+        let didApprove = store.approvePendingDownloadConfirmation(destination: selectedURL)
+
+        XCTAssertTrue(didApprove)
+        XCTAssertEqual(completionCallCount, 1)
+        XCTAssertEqual(completedURL, selectedURL)
+        XCTAssertNil(store.pendingDownloadConfirmation)
+        XCTAssertFalse(store.isChoosingDownloadDestination)
+    }
+
+    func testDownloadAlertDismissalWithoutDestinationSelectionCancelsDownload() {
+        let store = BrowserStore()
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "archive.zip",
+            sourceURL: URL(string: "https://example.com/archive.zip")
+        )
+        var completedURL: URL? = URL(fileURLWithPath: "/tmp/should-not-save")
+
+        store.requestDownloadConfirmation(request) { destinationURL in
+            completedURL = destinationURL
+        }
+
+        store.dismissPendingDownloadConfirmationAlert()
+
+        XCTAssertNil(completedURL)
+        XCTAssertNil(store.pendingDownloadConfirmation)
+        XCTAssertFalse(store.isChoosingDownloadDestination)
+        XCTAssertEqual(store.lastUserMessage, request.cancelledMessage)
+    }
+
     func testLowRiskDownloadRejectsDestinationChangedToRiskyExtension() throws {
         let store = BrowserStore()
         let temporaryDirectory = try makeTemporaryDirectory()

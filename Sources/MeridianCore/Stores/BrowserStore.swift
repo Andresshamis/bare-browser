@@ -14,6 +14,7 @@ public final class BrowserStore: ObservableObject {
     @Published public var sidebarIsVisible: Bool
     @Published public var pendingURLConfirmation: URLConfirmationRequest?
     @Published public var pendingDownloadConfirmation: DownloadConfirmationRequest?
+    @Published public private(set) var isChoosingDownloadDestination: Bool
     @Published public var lastUserMessage: String?
 
     public let commandRouter: CommandRouter
@@ -38,6 +39,7 @@ public final class BrowserStore: ObservableObject {
         self.sidebarIsVisible = true
         self.pendingURLConfirmation = nil
         self.pendingDownloadConfirmation = nil
+        self.isChoosingDownloadDestination = false
         self.lastUserMessage = nil
         self.commandRouter = commandRouter
         self.urlSecurityPolicy = urlSecurityPolicy
@@ -343,9 +345,35 @@ public final class BrowserStore: ObservableObject {
     }
 
     @discardableResult
+    public func beginPendingDownloadDestinationSelection() -> Bool {
+        guard pendingDownloadConfirmation != nil,
+              pendingDownloadCompletion != nil else {
+            isChoosingDownloadDestination = false
+            return false
+        }
+
+        isChoosingDownloadDestination = true
+        return true
+    }
+
+    public func dismissPendingDownloadConfirmationAlert() {
+        guard pendingDownloadConfirmation != nil else {
+            isChoosingDownloadDestination = false
+            return
+        }
+
+        if isChoosingDownloadDestination {
+            return
+        }
+
+        cancelPendingDownloadConfirmation()
+    }
+
+    @discardableResult
     public func approvePendingDownloadConfirmation(destination selectedURL: URL) -> Bool {
         guard let request = pendingDownloadConfirmation,
               let completion = pendingDownloadCompletion else {
+            isChoosingDownloadDestination = false
             return false
         }
 
@@ -367,6 +395,7 @@ public final class BrowserStore: ObservableObject {
 
         pendingDownloadConfirmation = nil
         pendingDownloadCompletion = nil
+        isChoosingDownloadDestination = false
         lastUserMessage = "Download will be saved as \(destinationURL.lastPathComponent)."
         completion(destinationURL)
         return true
@@ -374,6 +403,7 @@ public final class BrowserStore: ObservableObject {
 
     public func cancelPendingDownloadConfirmation() {
         guard let request = pendingDownloadConfirmation else {
+            isChoosingDownloadDestination = false
             return
         }
 
@@ -430,6 +460,7 @@ public final class BrowserStore: ObservableObject {
         let completion = pendingDownloadCompletion
         pendingDownloadConfirmation = nil
         pendingDownloadCompletion = nil
+        isChoosingDownloadDestination = false
         if let message {
             lastUserMessage = message
         }

@@ -56,7 +56,9 @@ public struct BrowserWindowView: View {
                 store.cancelPendingDownloadConfirmation()
             }
             Button(request.confirmButtonTitle) {
-                presentSavePanel(for: request)
+                if store.beginPendingDownloadDestinationSelection() {
+                    presentSavePanel(for: request)
+                }
             }
         } message: { request in
             Text(request.confirmationMessage)
@@ -75,10 +77,10 @@ public struct BrowserWindowView: View {
 
     private var pendingDownloadConfirmationIsPresented: Binding<Bool> {
         Binding {
-            store.pendingDownloadConfirmation != nil
+            store.pendingDownloadConfirmation != nil && !store.isChoosingDownloadDestination
         } set: { isPresented in
             if !isPresented {
-                store.cancelPendingDownloadConfirmation()
+                store.dismissPendingDownloadConfirmationAlert()
             }
         }
     }
