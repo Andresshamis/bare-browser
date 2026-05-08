@@ -47,6 +47,20 @@ public struct BrowserWindowView: View {
         } message: { request in
             Text(request.confirmationMessage)
         }
+        .alert(
+            store.pendingDownloadConfirmation?.confirmationTitle ?? "Download File?",
+            isPresented: pendingDownloadConfirmationIsPresented,
+            presenting: store.pendingDownloadConfirmation
+        ) { request in
+            Button("Cancel", role: .cancel) {
+                store.cancelPendingDownloadConfirmation()
+            }
+            Button(request.confirmButtonTitle) {
+                presentSavePanel(for: request)
+            }
+        } message: { request in
+            Text(request.confirmationMessage)
+        }
     }
 
     private var pendingURLConfirmationIsPresented: Binding<Bool> {
@@ -55,6 +69,35 @@ public struct BrowserWindowView: View {
         } set: { isPresented in
             if !isPresented {
                 store.cancelPendingURLConfirmation()
+            }
+        }
+    }
+
+    private var pendingDownloadConfirmationIsPresented: Binding<Bool> {
+        Binding {
+            store.pendingDownloadConfirmation != nil
+        } set: { isPresented in
+            if !isPresented {
+                store.cancelPendingDownloadConfirmation()
+            }
+        }
+    }
+
+    private func presentSavePanel(for request: DownloadConfirmationRequest) {
+        let panel = NSSavePanel()
+        panel.title = request.confirmationTitle
+        panel.nameFieldStringValue = request.sanitizedFilename
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+
+        panel.begin { response in
+            Task { @MainActor in
+                guard response == .OK, let destinationURL = panel.url else {
+                    store.cancelPendingDownloadConfirmation()
+                    return
+                }
+
+                store.approvePendingDownloadConfirmation(destination: destinationURL)
             }
         }
     }

@@ -23,15 +23,16 @@
 - Unsafe script/data schemes are blocked.
 - External app and `file://` links create a pending native confirmation before any external handoff.
 - Non-local HTTP pages are flagged as insecure transport.
-- The download policy helper sanitizes candidate filenames and classifies risky executable-like extensions.
+- WebKit downloads are routed through a native save-location confirmation before bytes are written.
+- The download policy sanitizes candidate filenames, avoids existing destination paths, blocks installer-like packages, and requires explicit confirmation for executable-like extensions.
+- Completed downloads attempt to apply macOS quarantine metadata; failure is surfaced as a browser security message.
 - Persistent profile metadata stores a WebKit data store UUID; private profiles intentionally do not.
 - App Sandbox entitlement file includes only sandbox and outbound network client entitlement.
 - A small `WKContentRuleList` blocks common tracker/ad endpoints without request interception hacks.
 
 ## Required Follow-Up
 
-- Implement user-facing confirmation UI for risky downloads.
-- Add `WKDownloadDelegate` destination handling with quarantine metadata where feasible.
+- Add end-to-end local WebKit download fixture tests once the Xcode UI test host exists.
 - Add site permission state for camera, microphone, geolocation, notifications, popups, downloads, and autoplay.
 - Add automated profile isolation tests using local web fixtures.
 - Verify private browsing data removal with WebKit data store APIs.

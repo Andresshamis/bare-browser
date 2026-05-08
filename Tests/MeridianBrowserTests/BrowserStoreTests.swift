@@ -83,4 +83,97 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertNil(store.pendingURLConfirmation)
         XCTAssertEqual(store.lastUserMessage, URLConfirmationRequest.Kind.localFile.cancelledMessage)
     }
+
+    func testBlockedDownloadCompletesWithoutPendingPrompt() {
+        let store = BrowserStore()
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "installer.pkg",
+            sourceURL: URL(string: "https://example.com/installer.pkg")
+        )
+        var completedURL: URL? = URL(fileURLWithPath: "/tmp/should-not-save")
+
+        store.requestDownloadConfirmation(request) { destinationURL in
+            completedURL = destinationURL
+        }
+
+        XCTAssertNil(completedURL)
+        XCTAssertNil(store.pendingDownloadConfirmation)
+        XCTAssertEqual(store.lastUserMessage, "Downloads ending in .pkg require a dedicated installer flow.")
+    }
+
+    func testRiskyDownloadApprovalUsesSafeNonExistingDestination() throws {
+        let store = BrowserStore()
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let existingURL = temporaryDirectory.appendingPathComponent("script.sh")
+        FileManager.default.createFile(atPath: existingURL.path, contents: Data())
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "../script.sh",
+            sourceURL: URL(string: "https://example.com/script.sh")
+        )
+        var completedURL: URL?
+
+        store.requestDownloadConfirmation(request) { destinationURL in
+            completedURL = destinationURL
+        }
+        let didApprove = store.approvePendingDownloadConfirmation(destination: existingURL)
+
+        XCTAssertTrue(didApprove)
+        XCTAssertEqual(completedURL?.lastPathComponent, "script 2.sh")
+        XCTAssertNil(store.pendingDownloadConfirmation)
+        XCTAssertEqual(store.lastUserMessage, "Download will be saved as script 2.sh.")
+    }
+
+    func testLowRiskDownloadRejectsDestinationChangedToRiskyExtension() throws {
+        let store = BrowserStore()
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "archive.zip",
+            sourceURL: URL(string: "https://example.com/archive.zip")
+        )
+        var completedURL: URL? = URL(fileURLWithPath: "/tmp/should-not-save")
+
+        store.requestDownloadConfirmation(request) { destinationURL in
+            completedURL = destinationURL
+        }
+        let didApprove = store.approvePendingDownloadConfirmation(
+            destination: temporaryDirectory.appendingPathComponent("renamed.sh")
+        )
+
+        XCTAssertFalse(didApprove)
+        XCTAssertNil(completedURL)
+        XCTAssertNil(store.pendingDownloadConfirmation)
+        XCTAssertEqual(
+            store.lastUserMessage,
+            "Download destination requires confirmation. Downloads ending in .sh can execute code."
+        )
+    }
+
+    func testCancelingPendingDownloadCompletesWithNilDestination() {
+        let store = BrowserStore()
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "archive.zip",
+            sourceURL: URL(string: "https://example.com/archive.zip")
+        )
+        var completedURL: URL? = URL(fileURLWithPath: "/tmp/should-not-save")
+
+        store.requestDownloadConfirmation(request) { destinationURL in
+            completedURL = destinationURL
+        }
+        store.cancelPendingDownloadConfirmation()
+
+        XCTAssertNil(completedURL)
+        XCTAssertNil(store.pendingDownloadConfirmation)
+        XCTAssertEqual(store.lastUserMessage, request.cancelledMessage)
+    }
+
+    private func makeTemporaryDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
 }

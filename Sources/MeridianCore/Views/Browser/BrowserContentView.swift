@@ -40,11 +40,14 @@ public struct BrowserContentView: View {
                 state: webViewState,
                 profile: profile,
                 dataStoreProvider: dataStoreProvider,
-                securityPolicy: store.urlSecurityPolicy
+                securityPolicy: store.urlSecurityPolicy,
+                downloadSafetyPolicy: store.downloadSafetyPolicy
             ) { title, url, isLoading in
                 store.updateActiveTabFromWebView(title: title, url: url, isLoading: isLoading)
             } onURLConfirmationRequired: { kind, url, sourceURL in
                 store.requestURLConfirmation(kind: kind, url: url, sourceURL: sourceURL)
+            } onDownloadConfirmationRequired: { request, completion in
+                store.requestDownloadConfirmation(request, completion: completion)
             }
             .id(tab.id)
         } else {

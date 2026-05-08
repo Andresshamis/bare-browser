@@ -13,15 +13,19 @@ public final class BrowserStore: ObservableObject {
     @Published public var isCommandBarPresented: Bool
     @Published public var sidebarIsVisible: Bool
     @Published public var pendingURLConfirmation: URLConfirmationRequest?
+    @Published public var pendingDownloadConfirmation: DownloadConfirmationRequest?
     @Published public var lastUserMessage: String?
 
     public let commandRouter: CommandRouter
     public let urlSecurityPolicy: URLSecurityPolicy
+    public let downloadSafetyPolicy: DownloadSafetyPolicy
+    private var pendingDownloadCompletion: (@MainActor (URL?) -> Void)?
 
     public init(
         snapshot: BrowserSessionSnapshot = SessionSnapshotFactory.initial(),
         commandRouter: CommandRouter = CommandRouter(),
-        urlSecurityPolicy: URLSecurityPolicy = URLSecurityPolicy()
+        urlSecurityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
+        downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy()
     ) {
         self.profiles = snapshot.profiles
         self.spaces = snapshot.spaces
@@ -33,9 +37,12 @@ public final class BrowserStore: ObservableObject {
         self.isCommandBarPresented = false
         self.sidebarIsVisible = true
         self.pendingURLConfirmation = nil
+        self.pendingDownloadConfirmation = nil
         self.lastUserMessage = nil
         self.commandRouter = commandRouter
         self.urlSecurityPolicy = urlSecurityPolicy
+        self.downloadSafetyPolicy = downloadSafetyPolicy
+        self.pendingDownloadCompletion = nil
     }
 
     public var selectedSpace: BrowserSpace? {
@@ -304,6 +311,61 @@ public final class BrowserStore: ObservableObject {
         lastUserMessage = request.kind.cancelledMessage
     }
 
+    public func requestDownloadConfirmation(
+        _ request: DownloadConfirmationRequest,
+        completion: @escaping @MainActor (URL?) -> Void
+    ) {
+        cancelPendingDownloadCompletion(message: nil)
+
+        switch request.risk {
+        case .blocked(let reason):
+            lastUserMessage = reason
+            completion(nil)
+        case .low, .requiresConfirmation:
+            pendingDownloadConfirmation = request
+            pendingDownloadCompletion = completion
+            lastUserMessage = request.pendingMessage
+        }
+    }
+
+    @discardableResult
+    public func approvePendingDownloadConfirmation(destination selectedURL: URL) -> Bool {
+        guard let request = pendingDownloadConfirmation,
+              let completion = pendingDownloadCompletion else {
+            return false
+        }
+
+        guard let destinationURL = downloadSafetyPolicy.safeDestinationURL(for: selectedURL) else {
+            cancelPendingDownloadCompletion(message: "Download destination is unavailable.")
+            return false
+        }
+
+        let destinationRisk = downloadSafetyPolicy.risk(for: destinationURL.lastPathComponent)
+        if case .blocked(let reason) = destinationRisk {
+            cancelPendingDownloadCompletion(message: reason)
+            return false
+        }
+        if case .low = request.risk,
+           case .requiresConfirmation(let reason) = destinationRisk {
+            cancelPendingDownloadCompletion(message: "Download destination requires confirmation. \(reason)")
+            return false
+        }
+
+        pendingDownloadConfirmation = nil
+        pendingDownloadCompletion = nil
+        lastUserMessage = "Download will be saved as \(destinationURL.lastPathComponent)."
+        completion(destinationURL)
+        return true
+    }
+
+    public func cancelPendingDownloadConfirmation() {
+        guard let request = pendingDownloadConfirmation else {
+            return
+        }
+
+        cancelPendingDownloadCompletion(message: request.cancelledMessage)
+    }
+
     public func updateActiveTabFromWebView(title: String?, url: URL?, isLoading: Bool) {
         guard let selectedTabID else {
             return
@@ -348,6 +410,16 @@ public final class BrowserStore: ObservableObject {
             return
         }
         mutate(&tabs[index])
+    }
+
+    private func cancelPendingDownloadCompletion(message: String?) {
+        let completion = pendingDownloadCompletion
+        pendingDownloadConfirmation = nil
+        pendingDownloadCompletion = nil
+        if let message {
+            lastUserMessage = message
+        }
+        completion?(nil)
     }
 
     private static func defaultTitle(for url: URL?) -> String {

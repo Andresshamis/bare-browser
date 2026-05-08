@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public struct DownloadSafetyPolicy: Sendable {
@@ -29,7 +30,23 @@ public struct DownloadSafetyPolicy: Sendable {
             invalidCharacters.contains(scalar) ? "-" : Character(scalar)
         }
         let sanitized = String(sanitizedScalars).trimmingCharacters(in: .whitespacesAndNewlines)
-        return sanitized.isEmpty ? "download" : sanitized
+        let visibleFilename = sanitized.drop { $0 == "." }
+        return visibleFilename.isEmpty ? "download" : String(visibleFilename)
+    }
+
+    public func confirmationRequest(
+        suggestedFilename: String,
+        sourceURL: URL? = nil,
+        date: Date = Date()
+    ) -> DownloadConfirmationRequest {
+        let sanitizedFilename = sanitizedFilename(from: suggestedFilename)
+        return DownloadConfirmationRequest(
+            suggestedFilename: suggestedFilename,
+            sanitizedFilename: sanitizedFilename,
+            sourceURL: sourceURL,
+            risk: risk(for: sanitizedFilename),
+            createdAt: date
+        )
     }
 
     public func risk(for filename: String) -> Risk {
@@ -47,5 +64,85 @@ public struct DownloadSafetyPolicy: Sendable {
         }
 
         return .low
+    }
+
+    public func safeDestinationURL(
+        for selectedURL: URL,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        guard selectedURL.isFileURL else {
+            return nil
+        }
+
+        let directoryURL = selectedURL.deletingLastPathComponent()
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue,
+              fileManager.isWritableFile(atPath: directoryURL.path) else {
+            return nil
+        }
+
+        let safeFilename = sanitizedFilename(from: selectedURL.lastPathComponent)
+        let requestedURL = directoryURL.appendingPathComponent(safeFilename, isDirectory: false)
+        return availableDestinationURL(for: requestedURL, fileManager: fileManager)
+    }
+
+    public func availableDestinationURL(
+        for requestedURL: URL,
+        fileManager: FileManager = .default
+    ) -> URL {
+        guard requestedURL.isFileURL else {
+            return requestedURL
+        }
+
+        let directoryURL = requestedURL.deletingLastPathComponent()
+        let baseName = requestedURL.deletingPathExtension().lastPathComponent
+        let pathExtension = requestedURL.pathExtension
+        var candidateURL = requestedURL
+        var suffix = 2
+
+        while fileManager.fileExists(atPath: candidateURL.path) {
+            let candidateFilename = pathExtension.isEmpty
+                ? "\(baseName) \(suffix)"
+                : "\(baseName) \(suffix).\(pathExtension)"
+            candidateURL = directoryURL.appendingPathComponent(candidateFilename, isDirectory: false)
+            suffix += 1
+        }
+
+        return candidateURL
+    }
+
+    public func quarantineMetadataValue(sourceURL: URL?, date: Date = Date()) -> String {
+        let timestamp = String(Int(date.timeIntervalSince1970), radix: 16)
+        let origin = sourceURL?.absoluteString ?? ""
+        return "0083;\(timestamp);Meridian Browser;\(origin)"
+    }
+
+    @discardableResult
+    public func applyQuarantineMetadata(
+        to fileURL: URL,
+        sourceURL: URL?,
+        date: Date = Date()
+    ) -> Bool {
+        guard fileURL.isFileURL else {
+            return false
+        }
+
+        let value = quarantineMetadataValue(sourceURL: sourceURL, date: date)
+        let bytes = Array(value.utf8)
+
+        return bytes.withUnsafeBufferPointer { buffer in
+            guard let baseAddress = buffer.baseAddress else {
+                return false
+            }
+
+            return fileURL.withUnsafeFileSystemRepresentation { path in
+                guard let path else {
+                    return false
+                }
+
+                return setxattr(path, "com.apple.quarantine", baseAddress, buffer.count, 0, 0) == 0
+            }
+        }
     }
 }
