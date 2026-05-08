@@ -12,6 +12,7 @@
 - Default content rule list wiring.
 - URL and download safety helpers.
 - Native pending confirmation for external app and local file URL handoff.
+- WebKit download delegate handling with native destination approval and risky download confirmation.
 - Session snapshot model and JSON round-trip tests.
 - App Sandbox entitlement draft.
 
@@ -22,7 +23,7 @@
 - Drag-and-drop sidebar reordering and moves.
 - Multi-tab web view lifecycle/pool and tab unloading.
 - Split view UI.
-- WebKit download delegate, safe destination picker, and risky download confirmation.
+- End-to-end WebKit download UI tests.
 - Site permissions UI and storage.
 - Local history store.
 - UI tests.
