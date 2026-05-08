@@ -21,15 +21,22 @@ final class URLSecurityPolicyTests: XCTestCase {
 
     func testRequiresConfirmationForExternalAndLocalSchemes() {
         let policy = URLSecurityPolicy()
+        let externalURL = URL(string: "mailto:hello@example.com")!
+        let fileURL = URL(fileURLWithPath: "/tmp/test.html")
 
         XCTAssertEqual(
-            policy.decision(for: URL(string: "mailto:hello@example.com")!),
+            policy.decision(for: externalURL),
             .requireExternalApplicationConfirmation
         )
         XCTAssertEqual(
-            policy.decision(for: URL(fileURLWithPath: "/tmp/test.html")),
+            policy.confirmationKind(for: externalURL),
+            .externalApplication
+        )
+        XCTAssertEqual(
+            policy.decision(for: fileURL),
             .requireLocalFileConfirmation
         )
+        XCTAssertEqual(policy.confirmationKind(for: fileURL), .localFile)
     }
 
     func testFlagsNonLocalHTTPAsInsecureTransport() {

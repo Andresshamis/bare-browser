@@ -12,6 +12,7 @@ public final class BrowserStore: ObservableObject {
     @Published public var selectedTabID: TabID?
     @Published public var isCommandBarPresented: Bool
     @Published public var sidebarIsVisible: Bool
+    @Published public var pendingURLConfirmation: URLConfirmationRequest?
     @Published public var lastUserMessage: String?
 
     public let commandRouter: CommandRouter
@@ -31,6 +32,7 @@ public final class BrowserStore: ObservableObject {
         self.selectedTabID = snapshot.selectedTabID
         self.isCommandBarPresented = false
         self.sidebarIsVisible = true
+        self.pendingURLConfirmation = nil
         self.lastUserMessage = nil
         self.commandRouter = commandRouter
         self.urlSecurityPolicy = urlSecurityPolicy
@@ -252,12 +254,68 @@ public final class BrowserStore: ObservableObject {
                 lastUserMessage = "This page uses insecure HTTP."
             }
         case .requireExternalApplicationConfirmation:
-            lastUserMessage = "Opening external applications requires confirmation."
+            requestURLConfirmation(kind: .externalApplication, url: url)
         case .requireLocalFileConfirmation:
-            lastUserMessage = "Opening local files requires confirmation."
+            requestURLConfirmation(kind: .localFile, url: url)
         case .block(let reason):
             lastUserMessage = reason
         }
+    }
+
+    public func requestURLConfirmation(
+        kind: URLConfirmationRequest.Kind,
+        url: URL,
+        sourceContext: URLConfirmationSourceContext = .commandBar,
+        date: Date = Date()
+    ) {
+        pendingURLConfirmation = URLConfirmationRequest(
+            kind: kind,
+            url: url,
+            sourceContext: sourceContext,
+            createdAt: date
+        )
+        lastUserMessage = kind.pendingMessage
+    }
+
+    public func requestURLConfirmation(
+        kind: URLConfirmationRequest.Kind,
+        url: URL,
+        sourceURL: URL?,
+        date: Date = Date()
+    ) {
+        requestURLConfirmation(
+            kind: kind,
+            url: url,
+            sourceContext: URLConfirmationSourceContext(sourceURL: sourceURL),
+            date: date
+        )
+    }
+
+    @discardableResult
+    public func approvePendingURLConfirmation(open: (URL) -> Bool) -> Bool {
+        guard let request = pendingURLConfirmation else {
+            return false
+        }
+
+        guard urlSecurityPolicy.confirmationKind(for: request.url) == request.kind else {
+            pendingURLConfirmation = nil
+            lastUserMessage = "URL confirmation was rejected because the link no longer matches its security decision."
+            return false
+        }
+
+        pendingURLConfirmation = nil
+        let didOpen = open(request.url)
+        lastUserMessage = didOpen ? request.kind.approvedMessage : "Unable to open confirmed link."
+        return didOpen
+    }
+
+    public func cancelPendingURLConfirmation() {
+        guard let request = pendingURLConfirmation else {
+            return
+        }
+
+        pendingURLConfirmation = nil
+        lastUserMessage = request.kind.cancelledMessage
     }
 
     public func updateActiveTabFromWebView(title: String?, url: URL?, isLoading: Bool) {

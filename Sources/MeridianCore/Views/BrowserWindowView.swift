@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 public struct BrowserWindowView: View {
@@ -30,5 +31,31 @@ public struct BrowserWindowView: View {
             }
         }
         .animation(.snappy(duration: 0.16), value: store.isCommandBarPresented)
+        .alert(
+            store.pendingURLConfirmation?.confirmationTitle ?? "Open Link?",
+            isPresented: pendingURLConfirmationIsPresented,
+            presenting: store.pendingURLConfirmation
+        ) { request in
+            Button("Cancel", role: .cancel) {
+                store.cancelPendingURLConfirmation()
+            }
+            Button(request.confirmButtonTitle) {
+                store.approvePendingURLConfirmation { url in
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        } message: { request in
+            Text(request.confirmationMessage)
+        }
+    }
+
+    private var pendingURLConfirmationIsPresented: Binding<Bool> {
+        Binding {
+            store.pendingURLConfirmation != nil
+        } set: { isPresented in
+            if !isPresented {
+                store.cancelPendingURLConfirmation()
+            }
+        }
     }
 }
