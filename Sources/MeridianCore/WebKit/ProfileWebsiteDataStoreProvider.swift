@@ -10,9 +10,9 @@ public final class ProfileWebsiteDataStoreProvider {
             return .nonPersistent()
         }
 
-        guard let identifier = profile.websiteDataStoreID else {
+        guard let identifier = profile.persistentWebsiteDataStoreID else {
             assertionFailure("Persistent profiles must have a website data store identifier.")
-            return .default()
+            return .nonPersistent()
         }
 
         return WKWebsiteDataStore(forIdentifier: identifier)
