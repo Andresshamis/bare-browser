@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.mobileprovision
+
+# Codex local workspace config
+.codex/
