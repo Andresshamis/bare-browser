@@ -39,11 +39,23 @@ public struct DownloadSafetyPolicy: Sendable {
         sourceURL: URL? = nil,
         date: Date = Date()
     ) -> DownloadConfirmationRequest {
+        confirmationRequest(
+            suggestedFilename: suggestedFilename,
+            sourceMetadata: sourceMetadata(from: sourceURL),
+            date: date
+        )
+    }
+
+    public func confirmationRequest(
+        suggestedFilename: String,
+        sourceMetadata: DownloadSourceMetadata,
+        date: Date = Date()
+    ) -> DownloadConfirmationRequest {
         let sanitizedFilename = sanitizedFilename(from: suggestedFilename)
         return DownloadConfirmationRequest(
             suggestedFilename: suggestedFilename,
             sanitizedFilename: sanitizedFilename,
-            sourceURL: sourceURL,
+            sourceMetadata: sourceMetadata,
             risk: risk(for: sanitizedFilename),
             createdAt: date
         )
@@ -112,10 +124,38 @@ public struct DownloadSafetyPolicy: Sendable {
         return candidateURL
     }
 
+    public func sourceMetadata(from sourceURL: URL?) -> DownloadSourceMetadata {
+        guard let sourceURL else {
+            return .currentPage
+        }
+
+        return DownloadSourceMetadata(
+            displayDescription: sourceDisplayDescription(from: sourceURL),
+            quarantineOrigin: quarantineMetadataOrigin(from: sourceURL)
+        )
+    }
+
     public func quarantineMetadataValue(sourceURL: URL?, date: Date = Date()) -> String {
+        quarantineMetadataValue(sourceMetadata: sourceMetadata(from: sourceURL), date: date)
+    }
+
+    public func quarantineMetadataValue(sourceMetadata: DownloadSourceMetadata, date: Date = Date()) -> String {
         let timestamp = String(Int(date.timeIntervalSince1970), radix: 16)
-        let origin = quarantineMetadataOrigin(from: sourceURL) ?? ""
+        let origin = sourceMetadata.quarantineOrigin
+            .flatMap { quarantineMetadataOrigin(from: URL(string: $0)) } ?? ""
         return "0083;\(timestamp);Meridian Browser;\(origin)"
+    }
+
+    private func sourceDisplayDescription(from sourceURL: URL) -> String {
+        if let host = sourceURL.host(percentEncoded: false), !host.isEmpty {
+            return host
+        }
+
+        if let scheme = sourceURL.scheme?.lowercased(), !scheme.isEmpty {
+            return "\(scheme) URL"
+        }
+
+        return "Current page"
     }
 
     private func quarantineMetadataOrigin(from sourceURL: URL?) -> String? {
@@ -143,11 +183,24 @@ public struct DownloadSafetyPolicy: Sendable {
         sourceURL: URL?,
         date: Date = Date()
     ) -> Bool {
+        applyQuarantineMetadata(
+            to: fileURL,
+            sourceMetadata: sourceMetadata(from: sourceURL),
+            date: date
+        )
+    }
+
+    @discardableResult
+    public func applyQuarantineMetadata(
+        to fileURL: URL,
+        sourceMetadata: DownloadSourceMetadata,
+        date: Date = Date()
+    ) -> Bool {
         guard fileURL.isFileURL else {
             return false
         }
 
-        let value = quarantineMetadataValue(sourceURL: sourceURL, date: date)
+        let value = quarantineMetadataValue(sourceMetadata: sourceMetadata, date: date)
         let bytes = Array(value.utf8)
 
         return bytes.withUnsafeBufferPointer { buffer in

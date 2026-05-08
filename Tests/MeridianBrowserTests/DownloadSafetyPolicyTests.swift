@@ -50,6 +50,28 @@ final class DownloadSafetyPolicyTests: XCTestCase {
         XCTAssertEqual(value, "0083;10;Meridian Browser;https://example.com:8443")
     }
 
+    func testBuildsSanitizedDownloadSourceMetadata() {
+        let policy = DownloadSafetyPolicy()
+        let metadata = policy.sourceMetadata(
+            from: URL(string: "https://user:password@example.com/private/source-name.zip?token=secret#fragment")
+        )
+
+        XCTAssertEqual(metadata.displayDescription, "example.com")
+        XCTAssertEqual(metadata.quarantineOrigin, "https://example.com")
+
+        let exposedMetadata = [
+            metadata.displayDescription,
+            metadata.quarantineOrigin ?? ""
+        ].joined(separator: "\n")
+        XCTAssertFalse(exposedMetadata.contains("user"))
+        XCTAssertFalse(exposedMetadata.contains("password"))
+        XCTAssertFalse(exposedMetadata.contains("private"))
+        XCTAssertFalse(exposedMetadata.contains("source-name"))
+        XCTAssertFalse(exposedMetadata.contains("token"))
+        XCTAssertFalse(exposedMetadata.contains("secret"))
+        XCTAssertFalse(exposedMetadata.contains("fragment"))
+    }
+
     func testQuarantineMetadataOmitsSensitiveSourceURLComponents() {
         let policy = DownloadSafetyPolicy()
         let value = policy.quarantineMetadataValue(

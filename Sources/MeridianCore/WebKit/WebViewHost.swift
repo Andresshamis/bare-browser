@@ -104,7 +104,7 @@ public struct WebViewHost: NSViewRepresentable {
         fileprivate var onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URL?) -> Void
         fileprivate var onDownloadConfirmationRequired: @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
         fileprivate var lastHandledCommandID: UUID?
-        private var downloadSourceURLs: [ObjectIdentifier: URL] = [:]
+        private var downloadSourceMetadata: [ObjectIdentifier: DownloadSourceMetadata] = [:]
         private var downloadDestinations: [ObjectIdentifier: URL] = [:]
 
         init(
@@ -201,10 +201,10 @@ public struct WebViewHost: NSViewRepresentable {
             completionHandler: @escaping @MainActor @Sendable (URL?) -> Void
         ) {
             let identifier = ObjectIdentifier(download)
-            let sourceURL = downloadSourceURLs[identifier] ?? response.url
+            let sourceMetadata = downloadSourceMetadata[identifier] ?? downloadSafetyPolicy.sourceMetadata(from: response.url)
             let request = downloadSafetyPolicy.confirmationRequest(
                 suggestedFilename: suggestedFilename,
-                sourceURL: sourceURL
+                sourceMetadata: sourceMetadata
             )
 
             state.securityMessage = request.pendingMessage
@@ -216,7 +216,7 @@ public struct WebViewHost: NSViewRepresentable {
 
                 if let destinationURL {
                     self.downloadDestinations[identifier] = destinationURL
-                    self.downloadSourceURLs[identifier] = sourceURL
+                    self.downloadSourceMetadata[identifier] = sourceMetadata
                 } else {
                     self.cleanup(download)
                 }
@@ -228,12 +228,12 @@ public struct WebViewHost: NSViewRepresentable {
         public func downloadDidFinish(_ download: WKDownload) {
             let identifier = ObjectIdentifier(download)
             let destinationURL = downloadDestinations[identifier]
-            let sourceURL = downloadSourceURLs[identifier]
+            let sourceMetadata = downloadSourceMetadata[identifier] ?? .currentPage
 
             if let destinationURL {
                 let didApplyQuarantine = downloadSafetyPolicy.applyQuarantineMetadata(
                     to: destinationURL,
-                    sourceURL: sourceURL
+                    sourceMetadata: sourceMetadata
                 )
                 state.securityMessage = didApplyQuarantine
                     ? "Download finished: \(destinationURL.lastPathComponent)"
@@ -268,7 +268,7 @@ public struct WebViewHost: NSViewRepresentable {
 
             switch securityPolicy.decision(for: url) {
             case .allowInWebView:
-                downloadSourceURLs[ObjectIdentifier(download)] = url
+                downloadSourceMetadata[ObjectIdentifier(download)] = downloadSafetyPolicy.sourceMetadata(from: url)
                 decisionHandler(.allow)
             case .requireExternalApplicationConfirmation, .requireLocalFileConfirmation:
                 state.securityMessage = "Download redirect was blocked because it left the web download flow."
@@ -309,13 +309,18 @@ public struct WebViewHost: NSViewRepresentable {
         }
 
         private func prepare(_ download: WKDownload, sourceURL: URL?) {
-            downloadSourceURLs[ObjectIdentifier(download)] = sourceURL
+            let identifier = ObjectIdentifier(download)
+            if let sourceURL {
+                downloadSourceMetadata[identifier] = downloadSafetyPolicy.sourceMetadata(from: sourceURL)
+            } else {
+                downloadSourceMetadata.removeValue(forKey: identifier)
+            }
             download.delegate = self
         }
 
         private func cleanup(_ download: WKDownload) {
             let identifier = ObjectIdentifier(download)
-            downloadSourceURLs.removeValue(forKey: identifier)
+            downloadSourceMetadata.removeValue(forKey: identifier)
             downloadDestinations.removeValue(forKey: identifier)
         }
 

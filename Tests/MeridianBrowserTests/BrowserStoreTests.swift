@@ -101,6 +101,37 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.lastUserMessage, "Downloads ending in .pkg require a dedicated installer flow.")
     }
 
+    func testPendingDownloadConfirmationStoresSanitizedSourceMetadata() throws {
+        let store = BrowserStore()
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "report.pdf",
+            sourceURL: URL(string: "https://user:password@example.com/private/source-name.zip?token=secret#fragment")
+        )
+        var completionCalled = false
+
+        store.requestDownloadConfirmation(request) { _ in
+            completionCalled = true
+        }
+
+        let pendingRequest = try XCTUnwrap(store.pendingDownloadConfirmation)
+        XCTAssertFalse(completionCalled)
+        XCTAssertEqual(pendingRequest.sourceDescription, "example.com")
+        XCTAssertEqual(pendingRequest.sourceMetadata.quarantineOrigin, "https://example.com")
+
+        let exposedState = [
+            pendingRequest.sourceDescription,
+            pendingRequest.sourceMetadata.quarantineOrigin ?? "",
+            pendingRequest.confirmationMessage
+        ].joined(separator: "\n")
+        XCTAssertFalse(exposedState.contains("user"))
+        XCTAssertFalse(exposedState.contains("password"))
+        XCTAssertFalse(exposedState.contains("private"))
+        XCTAssertFalse(exposedState.contains("source-name"))
+        XCTAssertFalse(exposedState.contains("token"))
+        XCTAssertFalse(exposedState.contains("secret"))
+        XCTAssertFalse(exposedState.contains("fragment"))
+    }
+
     func testRiskyDownloadApprovalUsesSafeNonExistingDestination() throws {
         let store = BrowserStore()
         let temporaryDirectory = try makeTemporaryDirectory()

@@ -1,10 +1,26 @@
 import Foundation
 
+public struct DownloadSourceMetadata: Equatable, Sendable {
+    public static let currentPage = DownloadSourceMetadata()
+
+    public var displayDescription: String
+    public var quarantineOrigin: String?
+
+    public init(
+        displayDescription: String = "Current page",
+        quarantineOrigin: String? = nil
+    ) {
+        let trimmedDescription = displayDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.displayDescription = trimmedDescription.isEmpty ? "Current page" : trimmedDescription
+        self.quarantineOrigin = quarantineOrigin
+    }
+}
+
 public struct DownloadConfirmationRequest: Identifiable, Equatable, Sendable {
     public var id: UUID
     public var suggestedFilename: String
     public var sanitizedFilename: String
-    public var sourceURL: URL?
+    public var sourceMetadata: DownloadSourceMetadata
     public var risk: DownloadSafetyPolicy.Risk
     public var createdAt: Date
 
@@ -12,14 +28,14 @@ public struct DownloadConfirmationRequest: Identifiable, Equatable, Sendable {
         id: UUID = UUID(),
         suggestedFilename: String,
         sanitizedFilename: String,
-        sourceURL: URL? = nil,
+        sourceMetadata: DownloadSourceMetadata = .currentPage,
         risk: DownloadSafetyPolicy.Risk,
         createdAt: Date = Date()
     ) {
         self.id = id
         self.suggestedFilename = suggestedFilename
         self.sanitizedFilename = sanitizedFilename
-        self.sourceURL = sourceURL
+        self.sourceMetadata = sourceMetadata
         self.risk = risk
         self.createdAt = createdAt
     }
@@ -74,18 +90,6 @@ public struct DownloadConfirmationRequest: Identifiable, Equatable, Sendable {
     }
 
     public var sourceDescription: String {
-        guard let sourceURL else {
-            return "Current page"
-        }
-
-        if let host = sourceURL.host(percentEncoded: false), !host.isEmpty {
-            return host
-        }
-
-        if let scheme = sourceURL.scheme, !scheme.isEmpty {
-            return "\(scheme) URL"
-        }
-
-        return sourceURL.absoluteString
+        sourceMetadata.displayDescription
     }
 }
