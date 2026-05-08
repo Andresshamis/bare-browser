@@ -21,16 +21,16 @@
 
 - URL navigation is centralized in `URLSecurityPolicy`.
 - Unsafe script/data schemes are blocked.
-- External app and `file://` links require confirmation rather than silent opening.
+- External app and `file://` links create a pending native confirmation before any external handoff, retaining the target URL for approval while reducing source page context to a sanitized host or scheme label.
 - Non-local HTTP pages are flagged as insecure transport.
-- Download filenames are sanitized and risky executable-like extensions are classified.
+- The download policy helper sanitizes candidate filenames and classifies risky executable-like extensions.
 - Persistent profile metadata stores a WebKit data store UUID; private profiles intentionally do not.
 - App Sandbox entitlement file includes only sandbox and outbound network client entitlement.
 - A small `WKContentRuleList` blocks common tracker/ad endpoints without request interception hacks.
 
 ## Required Follow-Up
 
-- Implement user-facing confirmation UI for external apps, local files, and risky downloads.
+- Implement user-facing confirmation UI for risky downloads.
 - Add `WKDownloadDelegate` destination handling with quarantine metadata where feasible.
 - Add site permission state for camera, microphone, geolocation, notifications, popups, downloads, and autoplay.
 - Add automated profile isolation tests using local web fixtures.
