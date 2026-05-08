@@ -1,0 +1,405 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		10A000000000000000000001 /* MeridianBrowserApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10A000000000000000000101 /* MeridianBrowserApp.swift */; };
+		10A000000000000000000002 /* MeridianCore in Frameworks */ = {isa = PBXBuildFile; productRef = 10A000000000000000000501 /* MeridianCore */; };
+		10A000000000000000000003 /* MeridianBrowserUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10A000000000000000000102 /* MeridianBrowserUITests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		10A000000000000000000201 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 10A000000000000000000401 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 10A000000000000000000301;
+			remoteInfo = MeridianBrowser;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		10A000000000000000000101 /* MeridianBrowserApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeridianBrowserApp.swift; sourceTree = "<group>"; };
+		10A000000000000000000102 /* MeridianBrowserUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeridianBrowserUITests.swift; sourceTree = "<group>"; };
+		10A000000000000000000103 /* MeridianBrowser.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MeridianBrowser.entitlements; sourceTree = "<group>"; };
+		10A000000000000000000104 /* Package.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Package.swift; sourceTree = SOURCE_ROOT; };
+		10A000000000000000000111 /* MeridianBrowser.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MeridianBrowser.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		10A000000000000000000112 /* MeridianBrowserUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MeridianBrowserUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		10A000000000000000000211 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				10A000000000000000000002 /* MeridianCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		10A000000000000000000212 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		10A000000000000000000010 = {
+			isa = PBXGroup;
+			children = (
+				10A000000000000000000104 /* Package.swift */,
+				10A000000000000000000011 /* Sources */,
+				10A000000000000000000012 /* UITests */,
+				10A000000000000000000013 /* Configuration */,
+				10A000000000000000000014 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		10A000000000000000000011 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				10A000000000000000000021 /* MeridianBrowser */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		10A000000000000000000012 /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				10A000000000000000000022 /* MeridianBrowserUITests */,
+			);
+			path = UITests;
+			sourceTree = "<group>";
+		};
+		10A000000000000000000013 /* Configuration */ = {
+			isa = PBXGroup;
+			children = (
+				10A000000000000000000103 /* MeridianBrowser.entitlements */,
+			);
+			path = Configuration;
+			sourceTree = "<group>";
+		};
+		10A000000000000000000014 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				10A000000000000000000111 /* MeridianBrowser.app */,
+				10A000000000000000000112 /* MeridianBrowserUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		10A000000000000000000021 /* MeridianBrowser */ = {
+			isa = PBXGroup;
+			children = (
+				10A000000000000000000101 /* MeridianBrowserApp.swift */,
+			);
+			path = MeridianBrowser;
+			sourceTree = "<group>";
+		};
+		10A000000000000000000022 /* MeridianBrowserUITests */ = {
+			isa = PBXGroup;
+			children = (
+				10A000000000000000000102 /* MeridianBrowserUITests.swift */,
+			);
+			path = MeridianBrowserUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		10A000000000000000000301 /* MeridianBrowser */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 10A000000000000000000601 /* Build configuration list for PBXNativeTarget "MeridianBrowser" */;
+			buildPhases = (
+				10A000000000000000000221 /* Sources */,
+				10A000000000000000000211 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MeridianBrowser;
+			packageProductDependencies = (
+				10A000000000000000000501 /* MeridianCore */,
+			);
+			productName = MeridianBrowser;
+			productReference = 10A000000000000000000111 /* MeridianBrowser.app */;
+			productType = "com.apple.product-type.application";
+		};
+		10A000000000000000000302 /* MeridianBrowserUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 10A000000000000000000602 /* Build configuration list for PBXNativeTarget "MeridianBrowserUITests" */;
+			buildPhases = (
+				10A000000000000000000222 /* Sources */,
+				10A000000000000000000212 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				10A000000000000000000202 /* PBXTargetDependency */,
+			);
+			name = MeridianBrowserUITests;
+			productName = MeridianBrowserUITests;
+			productReference = 10A000000000000000000112 /* MeridianBrowserUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		10A000000000000000000401 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2620;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					10A000000000000000000301 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					10A000000000000000000302 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 10A000000000000000000301;
+					};
+				};
+			};
+			buildConfigurationList = 10A000000000000000000600 /* Build configuration list for PBXProject "MeridianBrowser" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 10A000000000000000000010;
+			packageReferences = (
+				10A000000000000000000500 /* XCLocalSwiftPackageReference "." */,
+			);
+			productRefGroup = 10A000000000000000000014 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				10A000000000000000000301 /* MeridianBrowser */,
+				10A000000000000000000302 /* MeridianBrowserUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		10A000000000000000000221 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				10A000000000000000000001 /* MeridianBrowserApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		10A000000000000000000222 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				10A000000000000000000003 /* MeridianBrowserUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		10A000000000000000000202 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 10A000000000000000000301 /* MeridianBrowser */;
+			targetProxy = 10A000000000000000000201 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		10A000000000000000000701 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				SDKROOT = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		10A000000000000000000702 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		10A000000000000000000711 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Configuration/MeridianBrowser.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Meridian Browser";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_LSMinimumSystemVersion = 26.0;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Meridian Browser contributors.";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.meridianbrowser.MeridianBrowser;
+				PRODUCT_MODULE_NAME = MeridianBrowser;
+				PRODUCT_NAME = MeridianBrowser;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		10A000000000000000000712 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Configuration/MeridianBrowser.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Meridian Browser";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_LSMinimumSystemVersion = 26.0;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Meridian Browser contributors.";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.meridianbrowser.MeridianBrowser;
+				PRODUCT_MODULE_NAME = MeridianBrowser;
+				PRODUCT_NAME = MeridianBrowser;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		10A000000000000000000721 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.meridianbrowser.MeridianBrowserUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+				UITargetAppPath = "$(BUILT_PRODUCTS_DIR)/MeridianBrowser.app";
+			};
+			name = Debug;
+		};
+		10A000000000000000000722 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.meridianbrowser.MeridianBrowserUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				UITargetAppPath = "$(BUILT_PRODUCTS_DIR)/MeridianBrowser.app";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		10A000000000000000000600 /* Build configuration list for PBXProject "MeridianBrowser" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				10A000000000000000000701 /* Debug */,
+				10A000000000000000000702 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		10A000000000000000000601 /* Build configuration list for PBXNativeTarget "MeridianBrowser" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				10A000000000000000000711 /* Debug */,
+				10A000000000000000000712 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		10A000000000000000000602 /* Build configuration list for PBXNativeTarget "MeridianBrowserUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				10A000000000000000000721 /* Debug */,
+				10A000000000000000000722 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		10A000000000000000000500 /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ".";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		10A000000000000000000501 /* MeridianCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 10A000000000000000000500 /* XCLocalSwiftPackageReference "." */;
+			productName = MeridianCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 10A000000000000000000401 /* Project object */;
+}

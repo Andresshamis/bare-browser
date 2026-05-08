@@ -6,6 +6,7 @@ Run:
 
 ```sh
 swift test
+xcodebuild -project MeridianBrowser.xcodeproj -scheme MeridianBrowserApp -configuration Debug -derivedDataPath DerivedData/xcode -destination 'platform=macOS,arch=arm64' test
 ```
 
 Current coverage:
@@ -18,6 +19,13 @@ Current coverage:
 - Download filename sanitization and risk classification.
 - Profile metadata for persistent and private browsing.
 - Browser store relationships for spaces, folders, tabs, and session snapshots.
+- Xcode UI smoke host for launching the signed app bundle and observing the
+  first browser window.
+
+The Xcode UI test host requires a valid local macOS code-signing identity.
+Ad-hoc signing can compile the runner and test bundle, but local execution may
+fail before tests run if the runner and bundle cannot load under compatible Team
+IDs.
 
 ## Manual QA Targets
 
