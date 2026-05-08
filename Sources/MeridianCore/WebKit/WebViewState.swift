@@ -1,0 +1,61 @@
+import Combine
+import Foundation
+
+@MainActor
+public final class WebViewState: ObservableObject {
+    public enum Command: Equatable, Sendable {
+        case goBack
+        case goForward
+        case reload
+        case stopLoading
+    }
+
+    public struct CommandRequest: Equatable, Sendable {
+        public var id: UUID
+        public var command: Command
+
+        public init(id: UUID = UUID(), command: Command) {
+            self.id = id
+            self.command = command
+        }
+    }
+
+    @Published public var requestedURL: URL?
+    @Published public var committedURL: URL?
+    @Published public var title: String
+    @Published public var isLoading: Bool
+    @Published public var estimatedProgress: Double
+    @Published public var canGoBack: Bool
+    @Published public var canGoForward: Bool
+    @Published public var securityMessage: String?
+    @Published public var pendingCommand: CommandRequest?
+
+    public init(
+        requestedURL: URL? = nil,
+        committedURL: URL? = nil,
+        title: String = "New Tab",
+        isLoading: Bool = false,
+        estimatedProgress: Double = 0,
+        canGoBack: Bool = false,
+        canGoForward: Bool = false,
+        securityMessage: String? = nil
+    ) {
+        self.requestedURL = requestedURL
+        self.committedURL = committedURL
+        self.title = title
+        self.isLoading = isLoading
+        self.estimatedProgress = estimatedProgress
+        self.canGoBack = canGoBack
+        self.canGoForward = canGoForward
+        self.securityMessage = securityMessage
+        self.pendingCommand = nil
+    }
+
+    public func request(_ url: URL?) {
+        requestedURL = url
+    }
+
+    public func dispatch(_ command: Command) {
+        pendingCommand = CommandRequest(command: command)
+    }
+}
