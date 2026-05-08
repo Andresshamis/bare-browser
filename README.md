@@ -29,8 +29,13 @@ and notarization require the next Xcode project/bundle setup slice.
 ```sh
 swift build
 swift test
-swift run MeridianBrowser
+./script/build_and_run.sh
 ```
+
+`script/build_and_run.sh` stages the SwiftPM GUI executable into
+`dist/Meridian Browser.app` before launching it, which gives the app foreground
+macOS bundle behavior that `swift run MeridianBrowser` does not reliably provide.
+It also supports `--debug`, `--logs`, `--telemetry`, and `--verify`.
 
 ## Documentation
 
