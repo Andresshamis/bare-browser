@@ -25,6 +25,7 @@
 - Non-local HTTP pages are flagged as insecure transport.
 - Download filenames are sanitized and risky executable-like extensions are classified.
 - Persistent profile metadata stores a WebKit data store UUID; private profiles intentionally do not.
+- Session persistence has an explicit boundary that filters private profiles and dependent browser metadata before disk encoding.
 - App Sandbox entitlement file includes only sandbox and outbound network client entitlement.
 - A small `WKContentRuleList` blocks common tracker/ad endpoints without request interception hacks.
 
@@ -33,6 +34,7 @@
 - Implement user-facing confirmation UI for external apps, local files, and risky downloads.
 - Add `WKDownloadDelegate` destination handling with quarantine metadata where feasible.
 - Add site permission state for camera, microphone, geolocation, notifications, popups, downloads, and autoplay.
+- Add the durable persistence backend and ensure all writes use the private-state filtering boundary.
 - Add automated profile isolation tests using local web fixtures.
 - Verify private browsing data removal with WebKit data store APIs.
 - Add a no-telemetry policy section to README and settings.
