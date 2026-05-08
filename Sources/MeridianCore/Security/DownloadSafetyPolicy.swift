@@ -114,8 +114,27 @@ public struct DownloadSafetyPolicy: Sendable {
 
     public func quarantineMetadataValue(sourceURL: URL?, date: Date = Date()) -> String {
         let timestamp = String(Int(date.timeIntervalSince1970), radix: 16)
-        let origin = sourceURL?.absoluteString ?? ""
+        let origin = quarantineMetadataOrigin(from: sourceURL) ?? ""
         return "0083;\(timestamp);Meridian Browser;\(origin)"
+    }
+
+    private func quarantineMetadataOrigin(from sourceURL: URL?) -> String? {
+        guard let sourceURL,
+              var components = URLComponents(url: sourceURL, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              let host = components.host,
+              !host.isEmpty else {
+            return nil
+        }
+
+        components.scheme = scheme
+        components.user = nil
+        components.password = nil
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.string
     }
 
     @discardableResult

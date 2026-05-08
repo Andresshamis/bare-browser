@@ -43,11 +43,38 @@ final class DownloadSafetyPolicyTests: XCTestCase {
     func testBuildsQuarantineMetadataValue() {
         let policy = DownloadSafetyPolicy()
         let value = policy.quarantineMetadataValue(
-            sourceURL: URL(string: "https://example.com/archive.zip"),
+            sourceURL: URL(string: "https://example.com:8443/archive.zip"),
             date: Date(timeIntervalSince1970: 16)
         )
 
-        XCTAssertEqual(value, "0083;10;Meridian Browser;https://example.com/archive.zip")
+        XCTAssertEqual(value, "0083;10;Meridian Browser;https://example.com:8443")
+    }
+
+    func testQuarantineMetadataOmitsSensitiveSourceURLComponents() {
+        let policy = DownloadSafetyPolicy()
+        let value = policy.quarantineMetadataValue(
+            sourceURL: URL(string: "https://user:password@example.com/private/archive.zip?token=secret#fragment"),
+            date: Date(timeIntervalSince1970: 16)
+        )
+
+        XCTAssertEqual(value, "0083;10;Meridian Browser;https://example.com")
+        XCTAssertFalse(value.contains("user"))
+        XCTAssertFalse(value.contains("password"))
+        XCTAssertFalse(value.contains("private"))
+        XCTAssertFalse(value.contains("archive.zip"))
+        XCTAssertFalse(value.contains("token"))
+        XCTAssertFalse(value.contains("secret"))
+        XCTAssertFalse(value.contains("fragment"))
+    }
+
+    func testQuarantineMetadataOmitsUnsafeSourceOrigins() {
+        let policy = DownloadSafetyPolicy()
+        let value = policy.quarantineMetadataValue(
+            sourceURL: URL(string: "file:///Users/example/secret.txt"),
+            date: Date(timeIntervalSince1970: 16)
+        )
+
+        XCTAssertEqual(value, "0083;10;Meridian Browser;")
     }
 
     private func makeTemporaryDirectory() throws -> URL {

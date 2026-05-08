@@ -25,7 +25,7 @@
 - Non-local HTTP pages are flagged as insecure transport.
 - WebKit downloads are routed through a native save-location confirmation before bytes are written.
 - The download policy sanitizes candidate filenames, avoids existing destination paths, blocks installer-like packages, and requires explicit confirmation for executable-like extensions.
-- Completed downloads attempt to apply macOS quarantine metadata; failure is surfaced as a browser security message.
+- Completed downloads attempt to apply macOS quarantine metadata with only a privacy-safe source origin; failure is surfaced as a browser security message.
 - Persistent profile metadata stores a WebKit data store UUID; private profiles intentionally do not.
 - App Sandbox entitlement file includes only sandbox and outbound network client entitlement.
 - A small `WKContentRuleList` blocks common tracker/ad endpoints without request interception hacks.
