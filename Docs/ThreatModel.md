@@ -34,6 +34,7 @@
 - Autoplay is configured to require a user gesture by default.
 - App Sandbox entitlement file includes only sandbox and outbound network client entitlement.
 - A small `WKContentRuleList` blocks common tracker/ad endpoints without request interception hacks.
+- Meridian does not collect product analytics, browsing telemetry, page contents, URLs, credentials, cookies, tokens, or private browsing data; developer log modes stream only local OS logs.
 
 ## Required Follow-Up
 
@@ -42,4 +43,4 @@
 - Revisit geolocation and notification permissions if future macOS WebKit SDKs expose safe delegate callbacks.
 - Add automated profile isolation tests using local web fixtures.
 - Verify private browsing data removal with WebKit data store APIs.
-- Add a no-telemetry policy section to README and settings.
+- Add a future in-app privacy/settings surface for the no-telemetry policy when settings UI exists.
