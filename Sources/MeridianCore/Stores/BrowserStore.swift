@@ -12,15 +12,21 @@ public final class BrowserStore: ObservableObject {
     @Published public var selectedTabID: TabID?
     @Published public var isCommandBarPresented: Bool
     @Published public var sidebarIsVisible: Bool
+    @Published public var pendingURLConfirmation: URLConfirmationRequest?
+    @Published public var pendingDownloadConfirmation: DownloadConfirmationRequest?
+    @Published public private(set) var isChoosingDownloadDestination: Bool
     @Published public var lastUserMessage: String?
 
     public let commandRouter: CommandRouter
     public let urlSecurityPolicy: URLSecurityPolicy
+    public let downloadSafetyPolicy: DownloadSafetyPolicy
+    private var pendingDownloadCompletion: (@MainActor (URL?) -> Void)?
 
     public init(
         snapshot: BrowserSessionSnapshot = SessionSnapshotFactory.initial(),
         commandRouter: CommandRouter = CommandRouter(),
-        urlSecurityPolicy: URLSecurityPolicy = URLSecurityPolicy()
+        urlSecurityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
+        downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy()
     ) {
         self.profiles = snapshot.profiles
         self.spaces = snapshot.spaces
@@ -31,9 +37,14 @@ public final class BrowserStore: ObservableObject {
         self.selectedTabID = snapshot.selectedTabID
         self.isCommandBarPresented = false
         self.sidebarIsVisible = true
+        self.pendingURLConfirmation = nil
+        self.pendingDownloadConfirmation = nil
+        self.isChoosingDownloadDestination = false
         self.lastUserMessage = nil
         self.commandRouter = commandRouter
         self.urlSecurityPolicy = urlSecurityPolicy
+        self.downloadSafetyPolicy = downloadSafetyPolicy
+        self.pendingDownloadCompletion = nil
     }
 
     public var selectedSpace: BrowserSpace? {
@@ -259,12 +270,151 @@ public final class BrowserStore: ObservableObject {
                 lastUserMessage = "This page uses insecure HTTP."
             }
         case .requireExternalApplicationConfirmation:
-            lastUserMessage = "Opening external applications requires confirmation."
+            requestURLConfirmation(kind: .externalApplication, url: url)
         case .requireLocalFileConfirmation:
-            lastUserMessage = "Opening local files requires confirmation."
+            requestURLConfirmation(kind: .localFile, url: url)
         case .block(let reason):
             lastUserMessage = reason
         }
+    }
+
+    public func requestURLConfirmation(
+        kind: URLConfirmationRequest.Kind,
+        url: URL,
+        sourceContext: URLConfirmationSourceContext = .commandBar,
+        date: Date = Date()
+    ) {
+        pendingURLConfirmation = URLConfirmationRequest(
+            kind: kind,
+            url: url,
+            sourceContext: sourceContext,
+            createdAt: date
+        )
+        lastUserMessage = kind.pendingMessage
+    }
+
+    public func requestURLConfirmation(
+        kind: URLConfirmationRequest.Kind,
+        url: URL,
+        sourceURL: URL?,
+        date: Date = Date()
+    ) {
+        requestURLConfirmation(
+            kind: kind,
+            url: url,
+            sourceContext: URLConfirmationSourceContext(sourceURL: sourceURL),
+            date: date
+        )
+    }
+
+    @discardableResult
+    public func approvePendingURLConfirmation(open: (URL) -> Bool) -> Bool {
+        guard let request = pendingURLConfirmation else {
+            return false
+        }
+
+        guard urlSecurityPolicy.confirmationKind(for: request.url) == request.kind else {
+            pendingURLConfirmation = nil
+            lastUserMessage = "URL confirmation was rejected because the link no longer matches its security decision."
+            return false
+        }
+
+        pendingURLConfirmation = nil
+        let didOpen = open(request.url)
+        lastUserMessage = didOpen ? request.kind.approvedMessage : "Unable to open confirmed link."
+        return didOpen
+    }
+
+    public func cancelPendingURLConfirmation() {
+        guard let request = pendingURLConfirmation else {
+            return
+        }
+
+        pendingURLConfirmation = nil
+        lastUserMessage = request.kind.cancelledMessage
+    }
+
+    public func requestDownloadConfirmation(
+        _ request: DownloadConfirmationRequest,
+        completion: @escaping @MainActor (URL?) -> Void
+    ) {
+        cancelPendingDownloadCompletion(message: nil)
+
+        switch request.risk {
+        case .blocked(let reason):
+            lastUserMessage = reason
+            completion(nil)
+        case .low, .requiresConfirmation:
+            pendingDownloadConfirmation = request
+            pendingDownloadCompletion = completion
+            lastUserMessage = request.pendingMessage
+        }
+    }
+
+    @discardableResult
+    public func beginPendingDownloadDestinationSelection() -> Bool {
+        guard pendingDownloadConfirmation != nil,
+              pendingDownloadCompletion != nil else {
+            isChoosingDownloadDestination = false
+            return false
+        }
+
+        isChoosingDownloadDestination = true
+        return true
+    }
+
+    public func dismissPendingDownloadConfirmationAlert() {
+        guard pendingDownloadConfirmation != nil else {
+            isChoosingDownloadDestination = false
+            return
+        }
+
+        if isChoosingDownloadDestination {
+            return
+        }
+
+        cancelPendingDownloadConfirmation()
+    }
+
+    @discardableResult
+    public func approvePendingDownloadConfirmation(destination selectedURL: URL) -> Bool {
+        guard let request = pendingDownloadConfirmation,
+              let completion = pendingDownloadCompletion else {
+            isChoosingDownloadDestination = false
+            return false
+        }
+
+        guard let destinationURL = downloadSafetyPolicy.safeDestinationURL(for: selectedURL) else {
+            cancelPendingDownloadCompletion(message: "Download destination is unavailable.")
+            return false
+        }
+
+        let destinationRisk = downloadSafetyPolicy.risk(for: destinationURL.lastPathComponent)
+        if case .blocked(let reason) = destinationRisk {
+            cancelPendingDownloadCompletion(message: reason)
+            return false
+        }
+        if case .low = request.risk,
+           case .requiresConfirmation(let reason) = destinationRisk {
+            cancelPendingDownloadCompletion(message: "Download destination requires confirmation. \(reason)")
+            return false
+        }
+
+        pendingDownloadConfirmation = nil
+        pendingDownloadCompletion = nil
+        isChoosingDownloadDestination = false
+        lastUserMessage = "Download will be saved as \(destinationURL.lastPathComponent)."
+        completion(destinationURL)
+        return true
+    }
+
+    public func cancelPendingDownloadConfirmation() {
+        guard let request = pendingDownloadConfirmation else {
+            isChoosingDownloadDestination = false
+            return
+        }
+
+        cancelPendingDownloadCompletion(message: request.cancelledMessage)
     }
 
     public func updateActiveTabFromWebView(title: String?, url: URL?, isLoading: Bool) {
@@ -311,6 +461,17 @@ public final class BrowserStore: ObservableObject {
             return
         }
         mutate(&tabs[index])
+    }
+
+    private func cancelPendingDownloadCompletion(message: String?) {
+        let completion = pendingDownloadCompletion
+        pendingDownloadConfirmation = nil
+        pendingDownloadCompletion = nil
+        isChoosingDownloadDestination = false
+        if let message {
+            lastUserMessage = message
+        }
+        completion?(nil)
     }
 
     private static func defaultTitle(for url: URL?) -> String {
