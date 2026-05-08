@@ -21,6 +21,7 @@ Current coverage:
 - Profile metadata for persistent and private browsing.
 - Browser store relationships for spaces, folders, tabs, and session snapshots.
 - Session persistence boundary filtering for private profiles, dependent browser state, encoded payloads, and all-private fallback.
+- SQLite session persistence save/load, missing-store fallback, unsupported-store fallback, unreadable-store recovery, and private session exclusion from the on-disk payload.
 
 ## Manual QA Targets
 
@@ -39,6 +40,5 @@ Current coverage:
 - UI tests for creating spaces, folders, profiles, opening tabs, switching tabs, restoring sessions, and split view.
 - Local web fixture tests proving cookies/localStorage do not leak between profiles.
 - Private browsing persistence tests proving website data does not survive window/session close.
-- Durable persistence backend tests proving all disk writes use the filtered session snapshot boundary.
 - End-to-end WebKit download fixture tests for delegate callbacks, save panel behavior, destination handling, quarantine metadata, and risky extension confirmation.
 - UI or WebKit fixture tests for camera/microphone and pop-up prompts once the app test host exists.

@@ -12,11 +12,15 @@ implementation.
 The repository now contains the first package-based macOS scaffold:
 
 - `MeridianBrowser`: SwiftUI app entry point.
-- `MeridianCore`: models, store, security helpers, WebKit host, and native views.
+- `MeridianCore`: models, store, persistence services, security helpers, WebKit host, and native views.
 - `MeridianBrowserTests`: unit tests for foundational behavior.
 
 This is not a release package yet. Signing, hardened runtime packaging, UI tests,
 and notarization require the next Xcode project/bundle setup slice.
+
+The app restores public session state from a local SQLite store under Application
+Support. Private browsing profiles and dependent tab metadata are filtered before
+any session snapshot is written to disk.
 
 ## Requirements
 
