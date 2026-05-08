@@ -20,13 +20,14 @@ Meridian Browser is a native macOS, SwiftUI-first, WebKit-based browser. The ear
 ## Current Design Decisions
 
 - Profiles carry stable `websiteDataStoreID` values. Persistent profiles use `WKWebsiteDataStore.dataStore(forIdentifier:)`; private profiles use `.nonPersistent()`. If imported persistent metadata is missing a store identifier, the model repairs it from the stable profile ID rather than using WebKit's shared default store.
+- `BrowserStore.snapshot(...)` is the live runtime state shape. Disk persistence must use `BrowserStore.persistentSnapshot(...)`, which routes through `SessionPersistenceBoundary` to filter private profiles and dependent spaces, folders, tabs, split views, selected IDs, and restoration metadata before encoding.
 - Favorites/essentials are currently space-scoped. They are stored on `BrowserSpace.favoriteTabIDs` so each space can have its own persistent anchors.
 - The app lazily creates a `WKWebView` for the selected tab only. A later web view pool can keep recent tabs warm without instantiating all saved tabs.
 - The command bar is native SwiftUI. It routes direct URLs, search queries, tab search, and initial creation commands.
 
 ## Near-Term Gaps
 
-- Add durable persistence using SwiftData, SQLite, or Core Data.
+- Add durable persistence using SwiftData, SQLite, or Core Data on top of `SessionPersistenceBoundary`.
 - Add an Xcode project for app bundle identity, signing, UI tests, and release packaging.
 - Expand `WKNavigationDelegate`, `WKUIDelegate`, and `WKDownloadDelegate` handling for permissions, downloads, popups, and TLS/authentication edge cases.
 - Add drag-and-drop and reorder support for tabs, spaces, and folders.
