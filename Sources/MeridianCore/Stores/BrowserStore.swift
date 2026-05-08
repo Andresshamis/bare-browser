@@ -89,6 +89,13 @@ public final class BrowserStore: ObservableObject {
         )
     }
 
+    public func persistentSnapshot(date: Date = Date()) -> BrowserSessionSnapshot {
+        SessionPersistenceBoundary.persistentSnapshot(
+            from: snapshot(date: date),
+            fallback: SessionSnapshotFactory.initial(date: date)
+        )
+    }
+
     @discardableResult
     public func createSpace(name: String, profileID: ProfileID? = nil) -> BrowserSpace {
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -28,6 +28,7 @@
 - Download source metadata published to UI/store state is reduced to a display host plus optional quarantine origin; full source URLs are not retained after WebKit callbacks.
 - Completed downloads attempt to apply macOS quarantine metadata with only a privacy-safe source origin; failure is surfaced as a browser security message.
 - Persistent profile metadata stores a WebKit data store UUID; private profiles intentionally do not.
+- Session persistence has an explicit boundary that filters private profiles and dependent browser metadata before disk encoding.
 - Site permission decisions now pass through `SitePermissionPolicy`, which models camera, microphone, geolocation, notifications, autoplay, and pop-up/new-window behavior with conservative defaults.
 - Pop-up/new-window requests and WebKit media-capture permission callbacks are routed through store state before any grant; unsupported permission kinds are denied with an explicit message.
 - Autoplay is configured to require a user gesture by default.
@@ -37,6 +38,7 @@
 ## Required Follow-Up
 
 - Add end-to-end local WebKit download fixture tests once the Xcode UI test host exists.
+- Add the durable persistence backend and ensure all writes use the private-state filtering boundary.
 - Extend site permission UI and persistence beyond the first in-memory camera, microphone, pop-up, and autoplay policy slice.
 - Revisit geolocation and notification permissions if future macOS WebKit SDKs expose safe delegate callbacks.
 - Add automated profile isolation tests using local web fixtures.
