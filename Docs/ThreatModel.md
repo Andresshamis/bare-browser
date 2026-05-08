@@ -25,6 +25,9 @@
 - Non-local HTTP pages are flagged as insecure transport.
 - Download filenames are sanitized and risky executable-like extensions are classified.
 - Persistent profile metadata stores a WebKit data store UUID; private profiles intentionally do not.
+- Site permission decisions now pass through `SitePermissionPolicy`, which models camera, microphone, geolocation, notifications, autoplay, and pop-up/new-window behavior with conservative defaults.
+- Pop-up/new-window requests and WebKit media-capture permission callbacks are routed through store state before any grant; unsupported permission kinds are denied with an explicit message.
+- Autoplay is configured to require a user gesture by default.
 - App Sandbox entitlement file includes only sandbox and outbound network client entitlement.
 - A small `WKContentRuleList` blocks common tracker/ad endpoints without request interception hacks.
 
@@ -32,7 +35,8 @@
 
 - Implement user-facing confirmation UI for external apps, local files, and risky downloads.
 - Add `WKDownloadDelegate` destination handling with quarantine metadata where feasible.
-- Add site permission state for camera, microphone, geolocation, notifications, popups, downloads, and autoplay.
+- Extend site permission UI and persistence beyond the first in-memory camera, microphone, pop-up, and autoplay policy slice.
+- Revisit geolocation and notification permissions if future macOS WebKit SDKs expose safe delegate callbacks.
 - Add automated profile isolation tests using local web fixtures.
 - Verify private browsing data removal with WebKit data store APIs.
 - Add a no-telemetry policy section to README and settings.

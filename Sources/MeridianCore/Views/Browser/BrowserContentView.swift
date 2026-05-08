@@ -22,6 +22,20 @@ public struct BrowserContentView: View {
             webSurface
         }
         .background(.background)
+        .alert(
+            "Site Permission",
+            isPresented: sitePermissionAlertIsPresented,
+            presenting: store.pendingSitePermissionRequest
+        ) { request in
+            Button("Deny", role: .cancel) {
+                _ = store.resolvePendingSitePermission(.deny, requestID: request.id)
+            }
+            Button("Allow") {
+                _ = store.resolvePendingSitePermission(.allow, requestID: request.id)
+            }
+        } message: { request in
+            Text(request.promptMessage)
+        }
         .onAppear(perform: syncWebViewState)
         .onChange(of: store.selectedTabID) { _, _ in
             syncWebViewState()
@@ -40,9 +54,12 @@ public struct BrowserContentView: View {
                 state: webViewState,
                 profile: profile,
                 dataStoreProvider: dataStoreProvider,
-                securityPolicy: store.urlSecurityPolicy
+                securityPolicy: store.urlSecurityPolicy,
+                sitePermissionPolicy: store.sitePermissionPolicy
             ) { title, url, isLoading in
                 store.updateActiveTabFromWebView(title: title, url: url, isLoading: isLoading)
+            } onSitePermissionRequest: { kind, origin in
+                store.requestSitePermission(kind: kind, origin: origin, profileID: profile.id)
             }
             .id(tab.id)
         } else {
@@ -137,6 +154,16 @@ public struct BrowserContentView: View {
             return "magnifyingglass"
         }
         return store.urlSecurityPolicy.isInsecureTransport(url) ? "exclamationmark.triangle" : "lock"
+    }
+
+    private var sitePermissionAlertIsPresented: Binding<Bool> {
+        Binding {
+            store.pendingSitePermissionRequest != nil
+        } set: { isPresented in
+            if !isPresented {
+                store.cancelPendingSitePermissionRequest()
+            }
+        }
     }
 
     private func syncWebViewState() {
