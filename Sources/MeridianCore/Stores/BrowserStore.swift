@@ -272,16 +272,30 @@ public final class BrowserStore: ObservableObject {
     public func requestURLConfirmation(
         kind: URLConfirmationRequest.Kind,
         url: URL,
-        sourceURL: URL? = nil,
+        sourceContext: URLConfirmationSourceContext = .commandBar,
         date: Date = Date()
     ) {
         pendingURLConfirmation = URLConfirmationRequest(
             kind: kind,
             url: url,
-            sourceURL: sourceURL,
+            sourceContext: sourceContext,
             createdAt: date
         )
         lastUserMessage = kind.pendingMessage
+    }
+
+    public func requestURLConfirmation(
+        kind: URLConfirmationRequest.Kind,
+        url: URL,
+        sourceURL: URL?,
+        date: Date = Date()
+    ) {
+        requestURLConfirmation(
+            kind: kind,
+            url: url,
+            sourceContext: URLConfirmationSourceContext(sourceURL: sourceURL),
+            date: date
+        )
     }
 
     @discardableResult

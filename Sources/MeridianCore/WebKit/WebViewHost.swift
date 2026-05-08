@@ -10,7 +10,7 @@ public struct WebViewHost: NSViewRepresentable {
     private let securityPolicy: URLSecurityPolicy
     private let downloadSafetyPolicy: DownloadSafetyPolicy
     private let onStateChange: @MainActor (String?, URL?, Bool) -> Void
-    private let onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URL?) -> Void
+    private let onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
     private let onDownloadConfirmationRequired: @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
 
     public init(
@@ -20,7 +20,7 @@ public struct WebViewHost: NSViewRepresentable {
         securityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
         downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy(),
         onStateChange: @escaping @MainActor (String?, URL?, Bool) -> Void,
-        onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URL?) -> Void = { _, _, _ in },
+        onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void = { _, _, _ in },
         onDownloadConfirmationRequired: @escaping @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void = { _, completion in completion(nil) }
     ) {
         self.state = state
@@ -101,7 +101,7 @@ public struct WebViewHost: NSViewRepresentable {
         fileprivate let securityPolicy: URLSecurityPolicy
         fileprivate let downloadSafetyPolicy: DownloadSafetyPolicy
         fileprivate var onStateChange: @MainActor (String?, URL?, Bool) -> Void
-        fileprivate var onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URL?) -> Void
+        fileprivate var onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
         fileprivate var onDownloadConfirmationRequired: @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
         fileprivate var lastHandledCommandID: UUID?
         private var downloadSourceMetadata: [ObjectIdentifier: DownloadSourceMetadata] = [:]
@@ -112,7 +112,7 @@ public struct WebViewHost: NSViewRepresentable {
             securityPolicy: URLSecurityPolicy,
             downloadSafetyPolicy: DownloadSafetyPolicy,
             onStateChange: @escaping @MainActor (String?, URL?, Bool) -> Void,
-            onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URL?) -> Void,
+            onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void,
             onDownloadConfirmationRequired: @escaping @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
         ) {
             self.state = state
@@ -305,7 +305,7 @@ public struct WebViewHost: NSViewRepresentable {
             sourceURL: URL?
         ) {
             state.securityMessage = kind.pendingMessage
-            onURLConfirmationRequired(kind, url, sourceURL)
+            onURLConfirmationRequired(kind, url, URLConfirmationSourceContext(sourceURL: sourceURL))
         }
 
         private func prepare(_ download: WKDownload, sourceURL: URL?) {

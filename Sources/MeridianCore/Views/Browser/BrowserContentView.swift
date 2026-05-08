@@ -44,8 +44,8 @@ public struct BrowserContentView: View {
                 downloadSafetyPolicy: store.downloadSafetyPolicy
             ) { title, url, isLoading in
                 store.updateActiveTabFromWebView(title: title, url: url, isLoading: isLoading)
-            } onURLConfirmationRequired: { kind, url, sourceURL in
-                store.requestURLConfirmation(kind: kind, url: url, sourceURL: sourceURL)
+            } onURLConfirmationRequired: { kind, url, sourceContext in
+                store.requestURLConfirmation(kind: kind, url: url, sourceContext: sourceContext)
             } onDownloadConfirmationRequired: { request, completion in
                 store.requestDownloadConfirmation(request, completion: completion)
             }
