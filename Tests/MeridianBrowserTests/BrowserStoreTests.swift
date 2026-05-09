@@ -130,6 +130,51 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(store.isCommandBarPresented)
     }
 
+    func testExplicitHTTPNavigationPublishesSanitizedStatusMessage() {
+        let store = BrowserStore()
+        let initialTabCount = store.tabs.count
+        let url = URL(string: "http://user:pass@example.com/private?token=secret#frag")!
+
+        store.open(url)
+
+        XCTAssertEqual(store.tabs.count, initialTabCount + 1)
+        XCTAssertEqual(store.lastUserMessage, URLSecurityPolicy.insecureTransportMessage)
+        for sensitiveComponent in ["user", "pass", "private", "token", "secret", "frag"] {
+            XCTAssertFalse(store.lastUserMessage?.contains(sensitiveComponent) ?? true, sensitiveComponent)
+        }
+    }
+
+    func testLocalHTTPNavigationDoesNotPublishInsecureStatusMessage() {
+        let store = BrowserStore()
+
+        store.open(URL(string: "http://localhost:3000")!)
+
+        XCTAssertNil(store.lastUserMessage)
+    }
+
+    func testWebViewHTTPUpdatePublishesSameInsecureStatusMessage() {
+        let store = BrowserStore()
+        let url = URL(string: "http://user:pass@example.com/private?auth=secret#fragment")!
+
+        store.updateActiveTabFromWebView(title: "HTTP Page", url: url, isLoading: false)
+
+        XCTAssertEqual(store.lastUserMessage, URLSecurityPolicy.insecureTransportMessage)
+        for sensitiveComponent in ["user", "pass", "private", "auth", "secret", "fragment"] {
+            XCTAssertFalse(store.lastUserMessage?.contains(sensitiveComponent) ?? true, sensitiveComponent)
+        }
+    }
+
+    func testExplicitStatusMessagesCanBeDismissed() {
+        let store = BrowserStore()
+
+        store.publishStatusMessage("  Blocked unsafe URL scheme: javascript.  ")
+        XCTAssertEqual(store.lastUserMessage, "Blocked unsafe URL scheme: javascript.")
+
+        store.dismissLastUserMessage()
+
+        XCTAssertNil(store.lastUserMessage)
+    }
+
     func testSitePermissionRequestPublishesSanitizedPendingState() {
         let store = BrowserStore()
         let profileID = store.activeProfile!.id

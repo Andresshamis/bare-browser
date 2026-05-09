@@ -322,9 +322,7 @@ public final class BrowserStore: ObservableObject {
         switch urlSecurityPolicy.decision(for: url) {
         case .allowInWebView:
             _ = createTab(url: url)
-            if urlSecurityPolicy.isInsecureTransport(url) {
-                lastUserMessage = "This page uses insecure HTTP."
-            }
+            publishStatusMessage(urlSecurityPolicy.securityMessage(forAllowedWebURL: url))
         case .requireExternalApplicationConfirmation:
             requestURLConfirmation(kind: .externalApplication, url: url)
         case .requireLocalFileConfirmation:
@@ -585,7 +583,12 @@ public final class BrowserStore: ObservableObject {
         cancelPendingDownloadCompletion(message: request.cancelledMessage)
     }
 
-    public func updateActiveTabFromWebView(title: String?, url: URL?, isLoading: Bool) {
+    public func updateActiveTabFromWebView(
+        title: String?,
+        url: URL?,
+        isLoading: Bool,
+        securityMessage: String? = nil
+    ) {
         guard let selectedTabID else {
             return
         }
@@ -606,7 +609,24 @@ public final class BrowserStore: ObservableObject {
         if !isLoading {
             recordHistoryVisit(title: visitTitle, url: visitURL, profileID: visitProfileID)
         }
+        if let securityMessage {
+            publishStatusMessage(securityMessage)
+        } else if let statusURL = url ?? visitURL {
+            publishStatusMessage(urlSecurityPolicy.securityMessage(forAllowedWebURL: statusURL))
+        }
         persistSession()
+    }
+
+    public func publishStatusMessage(_ message: String?) {
+        guard let message = message?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !message.isEmpty else {
+            return
+        }
+        lastUserMessage = message
+    }
+
+    public func dismissLastUserMessage() {
+        lastUserMessage = nil
     }
 
     private func switchToProfile(_ id: ProfileID) {

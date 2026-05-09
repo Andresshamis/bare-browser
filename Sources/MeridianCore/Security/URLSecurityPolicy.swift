@@ -1,6 +1,8 @@
 import Foundation
 
 public struct URLSecurityPolicy: Sendable {
+    public static let insecureTransportMessage = "This page uses insecure HTTP."
+
     public enum Decision: Equatable, Sendable {
         case allowInWebView
         case requireExternalApplicationConfirmation
@@ -59,6 +61,10 @@ public struct URLSecurityPolicy: Sendable {
 
     public func isInsecureTransport(_ url: URL) -> Bool {
         url.scheme?.lowercased() == "http" && !isLoopbackOrLocalhost(url)
+    }
+
+    public func securityMessage(forAllowedWebURL url: URL) -> String? {
+        isInsecureTransport(url) ? Self.insecureTransportMessage : nil
     }
 
     private func isLoopbackOrLocalhost(_ url: URL) -> Bool {
