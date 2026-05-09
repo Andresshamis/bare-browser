@@ -65,7 +65,12 @@ case "$MODE" in
     open_app
     /usr/bin/log stream --info --style compact --predicate "process == \"$EXECUTABLE_NAME\""
     ;;
+  --subsystem-logs|subsystem-logs)
+    open_app
+    /usr/bin/log stream --info --style compact --predicate "subsystem == \"$BUNDLE_ID\""
+    ;;
   --telemetry|telemetry)
+    echo "warning: --telemetry is deprecated; use --subsystem-logs for local developer diagnostics" >&2
     open_app
     /usr/bin/log stream --info --style compact --predicate "subsystem == \"$BUNDLE_ID\""
     ;;
@@ -75,7 +80,7 @@ case "$MODE" in
     pgrep -x "$EXECUTABLE_NAME" >/dev/null
     ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2
+    echo "usage: $0 [run|--debug|--logs|--subsystem-logs|--verify]" >&2
     exit 2
     ;;
 esac
