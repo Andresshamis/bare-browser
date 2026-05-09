@@ -21,7 +21,7 @@ Current coverage:
 - Profile metadata for persistent and private browsing.
 - Browser store relationships for spaces, folders, tabs, and session snapshots.
 - Session persistence boundary filtering for private profiles, dependent browser state, encoded payloads, and all-private fallback.
-- SQLite session persistence save/load, missing-store fallback, unsupported-store fallback, unreadable-store recovery, and private session exclusion from the on-disk payload.
+- SQLite session persistence save/load, missing-store fallback, unsupported/corrupt/unreadable store recovery with stale file removal, private session exclusion from the on-disk payload, and repair-time disk scrubbing.
 
 ## Manual QA Targets
 
