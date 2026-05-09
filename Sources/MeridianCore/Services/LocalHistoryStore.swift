@@ -3,16 +3,32 @@ import Foundation
 public struct LocalHistoryStore: Sendable {
     public private(set) var entries: [BrowserHistoryEntry]
 
-    public init(entries: [BrowserHistoryEntry] = []) {
-        self.entries = entries.compactMap { entry in
+    public init(entries: [BrowserHistoryEntry] = [], allowedProfileIDs: Set<ProfileID>? = nil) {
+        var mergedEntries: [HistoryKey: BrowserHistoryEntry] = [:]
+
+        for entry in entries {
+            if let allowedProfileIDs, !allowedProfileIDs.contains(entry.profileID) {
+                continue
+            }
+
             guard let normalizedURL = Self.normalizedHistoryURL(entry.url) else {
-                return nil
+                continue
             }
 
             var normalizedEntry = entry
             normalizedEntry.url = normalizedURL
-            return normalizedEntry
+            normalizedEntry.title = Self.resolvedTitle(entry.title, for: normalizedURL)
+            normalizedEntry.visitCount = max(1, entry.visitCount)
+
+            let key = HistoryKey(profileID: entry.profileID, urlString: normalizedURL.absoluteString)
+            if let existingEntry = mergedEntries[key] {
+                mergedEntries[key] = Self.mergedEntry(existingEntry, normalizedEntry)
+            } else {
+                mergedEntries[key] = normalizedEntry
+            }
         }
+
+        self.entries = Self.sortedEntries(Array(mergedEntries.values))
     }
 
     @discardableResult
@@ -32,7 +48,9 @@ public struct LocalHistoryStore: Sendable {
             entries[index].title = resolvedTitle
             entries[index].lastVisitedAt = visitedAt
             entries[index].visitCount += 1
-            return entries[index]
+            let updatedEntry = entries[index]
+            entries = Self.sortedEntries(entries)
+            return updatedEntry
         }
 
         let entry = BrowserHistoryEntry(
@@ -42,7 +60,26 @@ public struct LocalHistoryStore: Sendable {
             lastVisitedAt: visitedAt
         )
         entries.append(entry)
+        entries = Self.sortedEntries(entries)
         return entry
+    }
+
+    @discardableResult
+    public mutating func deleteEntry(id: UUID, profileID: ProfileID? = nil) -> BrowserHistoryEntry? {
+        guard let index = entries.firstIndex(where: { entry in
+            entry.id == id && (profileID == nil || entry.profileID == profileID)
+        }) else {
+            return nil
+        }
+
+        return entries.remove(at: index)
+    }
+
+    @discardableResult
+    public mutating func clearEntries(profileID: ProfileID) -> [BrowserHistoryEntry] {
+        let removedEntries = entries.filter { $0.profileID == profileID }
+        entries.removeAll { $0.profileID == profileID }
+        return removedEntries
     }
 
     public func query(_ query: String, profileID: ProfileID, limit: Int = 5) -> [BrowserHistoryEntry] {
@@ -98,6 +135,53 @@ public struct LocalHistoryStore: Sendable {
         return components.url
     }
 
+    private static func mergedEntry(
+        _ lhs: BrowserHistoryEntry,
+        _ rhs: BrowserHistoryEntry
+    ) -> BrowserHistoryEntry {
+        let preferredEntry = preferredEntry(lhs, rhs)
+        return BrowserHistoryEntry(
+            id: preferredEntry.id,
+            profileID: preferredEntry.profileID,
+            url: preferredEntry.url,
+            title: resolvedTitle(preferredEntry.title, for: preferredEntry.url),
+            lastVisitedAt: max(lhs.lastVisitedAt, rhs.lastVisitedAt),
+            visitCount: max(1, lhs.visitCount) + max(1, rhs.visitCount)
+        )
+    }
+
+    private static func preferredEntry(
+        _ lhs: BrowserHistoryEntry,
+        _ rhs: BrowserHistoryEntry
+    ) -> BrowserHistoryEntry {
+        if lhs.lastVisitedAt != rhs.lastVisitedAt {
+            return lhs.lastVisitedAt > rhs.lastVisitedAt ? lhs : rhs
+        }
+
+        let titleComparison = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+        if titleComparison != .orderedSame {
+            return titleComparison == .orderedAscending ? lhs : rhs
+        }
+
+        return lhs.id.uuidString < rhs.id.uuidString ? lhs : rhs
+    }
+
+    private static func sortedEntries(_ entries: [BrowserHistoryEntry]) -> [BrowserHistoryEntry] {
+        entries.sorted { lhs, rhs in
+            if lhs.lastVisitedAt != rhs.lastVisitedAt {
+                return lhs.lastVisitedAt > rhs.lastVisitedAt
+            }
+            let titleComparison = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+            if titleComparison != .orderedSame {
+                return titleComparison == .orderedAscending
+            }
+            if lhs.url.absoluteString != rhs.url.absoluteString {
+                return lhs.url.absoluteString < rhs.url.absoluteString
+            }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+    }
+
     private static func resolvedTitle(_ title: String?, for url: URL) -> String {
         let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedTitle.isEmpty {
@@ -134,5 +218,10 @@ public struct LocalHistoryStore: Sendable {
         }
 
         return false
+    }
+
+    private struct HistoryKey: Hashable {
+        var profileID: ProfileID
+        var urlString: String
     }
 }

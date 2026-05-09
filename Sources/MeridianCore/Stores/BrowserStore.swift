@@ -25,6 +25,7 @@ public final class BrowserStore: ObservableObject {
     public let downloadSafetyPolicy: DownloadSafetyPolicy
     public let sitePermissionPolicy: SitePermissionPolicy
     private let sessionPersistence: SessionSnapshotPersisting?
+    private let localHistoryPersistence: LocalHistoryPersisting?
     private var localHistoryStore: LocalHistoryStore
     private var pendingDownloadCompletion: (@MainActor (URL?) -> Void)?
 
@@ -37,7 +38,8 @@ public final class BrowserStore: ObservableObject {
         sitePermissionSettings: [SitePermissionSetting] = [],
         localHistoryStore: LocalHistoryStore = LocalHistoryStore(),
         lastUserMessage: String? = nil,
-        sessionPersistence: SessionSnapshotPersisting? = nil
+        sessionPersistence: SessionSnapshotPersisting? = nil,
+        localHistoryPersistence: LocalHistoryPersisting? = nil
     ) {
         self.profiles = snapshot.profiles
         self.spaces = snapshot.spaces
@@ -60,6 +62,7 @@ public final class BrowserStore: ObservableObject {
         self.downloadSafetyPolicy = downloadSafetyPolicy
         self.sitePermissionPolicy = sitePermissionPolicy
         self.sessionPersistence = sessionPersistence
+        self.localHistoryPersistence = localHistoryPersistence
         self.localHistoryStore = localHistoryStore
         self.pendingDownloadCompletion = nil
     }
@@ -365,7 +368,40 @@ public final class BrowserStore: ObservableObject {
             visitedAt: date
         )
         historyEntries = localHistoryStore.entries
+        if entry != nil {
+            persistHistory()
+        }
         return entry
+    }
+
+    @discardableResult
+    public func clearHistoryForActiveProfile() -> Int {
+        guard let profileID = activeProfile?.id else {
+            return 0
+        }
+
+        let removedEntries = localHistoryStore.clearEntries(profileID: profileID)
+        historyEntries = localHistoryStore.entries
+        if !removedEntries.isEmpty {
+            persistHistory()
+            lastUserMessage = "History cleared for this profile."
+        } else {
+            lastUserMessage = "No history to clear for this profile."
+        }
+        return removedEntries.count
+    }
+
+    @discardableResult
+    public func deleteHistoryEntry(_ id: UUID, profileID: ProfileID? = nil) -> Bool {
+        let resolvedProfileID = profileID ?? activeProfile?.id
+        guard localHistoryStore.deleteEntry(id: id, profileID: resolvedProfileID) != nil else {
+            return false
+        }
+
+        historyEntries = localHistoryStore.entries
+        persistHistory()
+        lastUserMessage = "History entry deleted."
+        return true
     }
 
     @discardableResult
@@ -690,6 +726,18 @@ public final class BrowserStore: ObservableObject {
             )
         } catch {
             lastUserMessage = "Session changes could not be saved. Meridian will keep browsing state in memory for this run."
+        }
+    }
+
+    private func persistHistory() {
+        guard let localHistoryPersistence else {
+            return
+        }
+
+        do {
+            try localHistoryPersistence.saveHistory(localHistoryStore.entries, profiles: profiles)
+        } catch {
+            lastUserMessage = "History changes could not be saved. Meridian will keep history in memory for this run."
         }
     }
 
