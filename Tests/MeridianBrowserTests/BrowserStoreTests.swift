@@ -130,6 +130,94 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(store.isCommandBarPresented)
     }
 
+    func testExplicitHTTPNavigationPublishesSanitizedStatusMessage() {
+        let store = BrowserStore()
+        let initialTabCount = store.tabs.count
+        let url = URL(string: "http://user:pass@example.com/private?token=secret#frag")!
+
+        store.open(url)
+
+        XCTAssertEqual(store.tabs.count, initialTabCount + 1)
+        XCTAssertEqual(store.lastUserMessage, URLSecurityPolicy.insecureTransportMessage)
+        for sensitiveComponent in ["user", "pass", "private", "token", "secret", "frag"] {
+            XCTAssertFalse(store.lastUserMessage?.contains(sensitiveComponent) ?? true, sensitiveComponent)
+        }
+    }
+
+    func testLocalHTTPNavigationDoesNotPublishInsecureStatusMessage() {
+        let store = BrowserStore()
+
+        store.open(URL(string: "http://localhost:3000")!)
+
+        XCTAssertNil(store.lastUserMessage)
+    }
+
+    func testWebViewHTTPUpdatePublishesSameInsecureStatusMessage() {
+        let store = BrowserStore()
+        let url = URL(string: "http://user:pass@example.com/private?auth=secret#fragment")!
+
+        store.updateActiveTabFromWebView(title: "HTTP Page", url: url, isLoading: false)
+
+        XCTAssertEqual(store.lastUserMessage, URLSecurityPolicy.insecureTransportMessage)
+        for sensitiveComponent in ["user", "pass", "private", "auth", "secret", "fragment"] {
+            XCTAssertFalse(store.lastUserMessage?.contains(sensitiveComponent) ?? true, sensitiveComponent)
+        }
+    }
+
+    func testWebViewHTTPSUpdateClearsStaleInsecureStatusMessage() {
+        let store = BrowserStore()
+
+        store.open(URL(string: "http://example.com")!)
+        XCTAssertEqual(store.lastUserMessage, URLSecurityPolicy.insecureTransportMessage)
+
+        store.updateActiveTabFromWebView(
+            title: "Secure Page",
+            url: URL(string: "https://example.com")!,
+            isLoading: false
+        )
+
+        XCTAssertNil(store.lastUserMessage)
+    }
+
+    func testSelectingSecureTabClearsStaleInsecureStatusMessage() throws {
+        let store = BrowserStore()
+        let secureTab = try XCTUnwrap(store.createTab(title: "Secure", url: URL(string: "https://example.com")!))
+
+        store.open(URL(string: "http://example.com")!)
+        let insecureTabID = try XCTUnwrap(store.selectedTabID)
+        XCTAssertEqual(store.lastUserMessage, URLSecurityPolicy.insecureTransportMessage)
+
+        store.selectTab(secureTab.id)
+        XCTAssertNil(store.lastUserMessage)
+
+        store.selectTab(insecureTabID)
+        XCTAssertEqual(store.lastUserMessage, URLSecurityPolicy.insecureTransportMessage)
+    }
+
+    func testSecurePageStatusRefreshPreservesUnrelatedUserMessage() {
+        let store = BrowserStore()
+
+        store.publishStatusMessage("Download failed.")
+        store.updateActiveTabFromWebView(
+            title: "Secure Page",
+            url: URL(string: "https://example.com")!,
+            isLoading: false
+        )
+
+        XCTAssertEqual(store.lastUserMessage, "Download failed.")
+    }
+
+    func testExplicitStatusMessagesCanBeDismissed() {
+        let store = BrowserStore()
+
+        store.publishStatusMessage("  Blocked unsafe URL scheme: javascript.  ")
+        XCTAssertEqual(store.lastUserMessage, "Blocked unsafe URL scheme: javascript.")
+
+        store.dismissLastUserMessage()
+
+        XCTAssertNil(store.lastUserMessage)
+    }
+
     func testRestoredHistoryEntriesAppearInCommandBarSearch() throws {
         let snapshot = SessionSnapshotFactory.initial()
         let profileID = try XCTUnwrap(snapshot.profiles.first?.id)

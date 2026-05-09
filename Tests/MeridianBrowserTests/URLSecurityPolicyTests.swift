@@ -46,4 +46,16 @@ final class URLSecurityPolicyTests: XCTestCase {
         XCTAssertFalse(policy.isInsecureTransport(URL(string: "http://127.0.0.1:8080")!))
         XCTAssertFalse(policy.isInsecureTransport(URL(string: "https://example.com")!))
     }
+
+    func testInsecureTransportMessageDoesNotIncludeURLComponents() {
+        let policy = URLSecurityPolicy()
+        let url = URL(string: "http://user:pass@example.com/private?token=secret#fragment")!
+
+        let message = policy.securityMessage(forAllowedWebURL: url)
+
+        XCTAssertEqual(message, URLSecurityPolicy.insecureTransportMessage)
+        for sensitiveComponent in ["user", "pass", "private", "token", "secret", "fragment"] {
+            XCTAssertFalse(message?.contains(sensitiveComponent) ?? true, sensitiveComponent)
+        }
+    }
 }
