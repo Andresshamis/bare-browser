@@ -46,6 +46,7 @@ public final class SQLiteSessionPersistenceStore: SessionSnapshotPersisting {
 
     public let databaseURL: URL
     private let fileManager: FileManager
+    private let repairScrubInterruption: (() throws -> Void)?
 
     public init(
         databaseURL: URL = SQLiteSessionPersistenceStore.defaultDatabaseURL(),
@@ -53,6 +54,17 @@ public final class SQLiteSessionPersistenceStore: SessionSnapshotPersisting {
     ) {
         self.databaseURL = databaseURL
         self.fileManager = fileManager
+        self.repairScrubInterruption = nil
+    }
+
+    init(
+        databaseURL: URL,
+        fileManager: FileManager = .default,
+        repairScrubInterruption: @escaping () throws -> Void
+    ) {
+        self.databaseURL = databaseURL
+        self.fileManager = fileManager
+        self.repairScrubInterruption = repairScrubInterruption
     }
 
     public static func defaultDatabaseURL(fileManager: FileManager = .default) -> URL {
@@ -78,6 +90,7 @@ public final class SQLiteSessionPersistenceStore: SessionSnapshotPersisting {
         do {
             let record = try readRecord()
             guard record.schemaVersion <= Self.currentSchemaVersion else {
+                try? removeStoreFiles()
                 return SessionPersistenceLoadResult(
                     snapshot: fallback,
                     recoveryReason: .unsupportedSchema(record.schemaVersion)
@@ -89,16 +102,33 @@ public final class SQLiteSessionPersistenceStore: SessionSnapshotPersisting {
                 from: decoded,
                 fallback: fallback
             )
+            let wasRepaired = repaired != decoded
+            if wasRepaired {
+                do {
+                    try scrubRepairedRecord(with: repaired)
+                } catch {
+                    try? removeStoreFiles()
+                    return SessionPersistenceLoadResult(
+                        snapshot: fallback,
+                        recoveryReason: .unreadableStore
+                    )
+                }
+            }
 
             return SessionPersistenceLoadResult(
                 snapshot: repaired,
-                recoveryReason: repaired == decoded ? nil : .repairedSnapshot
+                recoveryReason: wasRepaired ? .repairedSnapshot : nil
             )
         } catch let error as LoadError {
+            if error.removesStoreForPrivacy {
+                try? removeStoreFiles()
+            }
             return SessionPersistenceLoadResult(snapshot: fallback, recoveryReason: error.recoveryReason)
         } catch is DecodingError {
+            try? removeStoreFiles()
             return SessionPersistenceLoadResult(snapshot: fallback, recoveryReason: .corruptPayload)
         } catch {
+            try? removeStoreFiles()
             return SessionPersistenceLoadResult(snapshot: fallback, recoveryReason: .unreadableStore)
         }
     }
@@ -197,6 +227,41 @@ public final class SQLiteSessionPersistenceStore: SessionSnapshotPersisting {
         }
     }
 
+    private func scrubRepairedRecord(with snapshot: BrowserSessionSnapshot) throws {
+        try repairScrubInterruption?()
+
+        var repairedSnapshot = snapshot
+        repairedSnapshot.schemaVersion = Self.currentSchemaVersion
+
+        let payload: Data
+        do {
+            payload = try JSONEncoder().encode(repairedSnapshot)
+        } catch {
+            throw SessionPersistenceStoreError.cannotEncodeSnapshot
+        }
+
+        try withOpenDatabase(createIfNeeded: false) { database in
+            try execute("PRAGMA secure_delete = ON;", database: database)
+            try execute("BEGIN IMMEDIATE TRANSACTION;", database: database)
+            do {
+                try deleteRecord(database: database)
+                try write(
+                    payload: payload,
+                    schemaVersion: repairedSnapshot.schemaVersion,
+                    capturedAt: repairedSnapshot.capturedAt,
+                    database: database
+                )
+                try execute("COMMIT;", database: database)
+            } catch {
+                try? execute("ROLLBACK;", database: database)
+                throw error
+            }
+
+            try execute("VACUUM;", database: database)
+            try execute("PRAGMA wal_checkpoint(TRUNCATE);", database: database)
+        }
+    }
+
     private func write(
         payload: Data,
         schemaVersion: Int,
@@ -231,6 +296,38 @@ public final class SQLiteSessionPersistenceStore: SessionSnapshotPersisting {
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw SessionPersistenceStoreError.cannotExecuteStatement
         }
+    }
+
+    private func deleteRecord(database: OpaquePointer) throws {
+        let statement = try prepare(
+            "DELETE FROM session_snapshots WHERE id = ?;",
+            database: database
+        )
+        defer { sqlite3_finalize(statement) }
+
+        sqlite3_bind_text(statement, 1, Self.recordID, -1, Self.sqliteTransient)
+
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw SessionPersistenceStoreError.cannotExecuteStatement
+        }
+    }
+
+    private func removeStoreFiles() throws {
+        for url in storeFileURLs {
+            guard fileManager.fileExists(atPath: url.path) else {
+                continue
+            }
+            try fileManager.removeItem(at: url)
+        }
+    }
+
+    private var storeFileURLs: [URL] {
+        [
+            databaseURL,
+            URL(fileURLWithPath: databaseURL.path + "-journal"),
+            URL(fileURLWithPath: databaseURL.path + "-shm"),
+            URL(fileURLWithPath: databaseURL.path + "-wal")
+        ]
     }
 
     private func withOpenDatabase<T>(
@@ -289,6 +386,15 @@ public final class SQLiteSessionPersistenceStore: SessionSnapshotPersisting {
                 return .unreadableStore
             case .corruptPayload:
                 return .corruptPayload
+            }
+        }
+
+        var removesStoreForPrivacy: Bool {
+            switch self {
+            case .noSavedSession:
+                return false
+            case .unreadableStore, .corruptPayload:
+                return true
             }
         }
     }

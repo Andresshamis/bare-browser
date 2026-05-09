@@ -1,6 +1,6 @@
 import Foundation
-import MeridianCore
 import SQLite3
+@testable import MeridianCore
 import XCTest
 
 @MainActor
@@ -61,14 +61,113 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
         XCTAssertFalse(rawDatabase.contains(privateProfile.id.uuidString))
     }
 
-    func testUnsupportedSchemaFallsBackToSeededSession() throws {
+    func testLoadRepairScrubsPrivacyInvalidRawRecordFromDisk() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let databaseURL = directory.appendingPathComponent("Session.sqlite3")
         let fallback = SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 4))
+        let store = BrowserStore(snapshot: fallback)
+        let publicSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let publicTab = try XCTUnwrap(store.createTab(
+            title: "Public Research",
+            url: URL(string: "https://public.example/articles"),
+            in: publicSpaceID
+        ))
+        let privateProfile = store.createProfile(name: "Private Session", ephemeral: true)
+        let privateSpace = store.createSpace(name: "Private", profileID: privateProfile.id)
+        let privateTab = try XCTUnwrap(store.createTab(
+            title: "Private Secret",
+            url: URL(string: "https://private.example/secret?token=fixture"),
+            in: privateSpace.id
+        ))
+        let invalidSnapshot = store.snapshot(date: Date(timeIntervalSince1970: 5))
+        let persistence = SQLiteSessionPersistenceStore(databaseURL: databaseURL)
+
+        try writeRawSessionRecord(
+            databaseURL: databaseURL,
+            schemaVersion: SQLiteSessionPersistenceStore.currentSchemaVersion,
+            payload: try JSONEncoder().encode(invalidSnapshot)
+        )
+        let originalDatabase = try rawDatabaseText(at: databaseURL)
+        XCTAssertTrue(originalDatabase.contains("private.example"))
+        XCTAssertTrue(originalDatabase.contains(privateProfile.id.uuidString))
+
+        let result = persistence.loadSnapshot(fallback: fallback)
+
+        XCTAssertEqual(result.recoveryReason, .repairedSnapshot)
+        XCTAssertTrue(result.snapshot.tabs.contains { $0.id == publicTab.id })
+        XCTAssertFalse(result.snapshot.profiles.contains { $0.id == privateProfile.id })
+        XCTAssertFalse(result.snapshot.spaces.contains { $0.id == privateSpace.id })
+        XCTAssertFalse(result.snapshot.tabs.contains { $0.id == privateTab.id })
+        XCTAssertEqual(result.snapshot.selectedSpaceID, publicSpaceID)
+        XCTAssertEqual(result.snapshot.selectedTabID, publicTab.id)
+
+        let repairedDatabase = try rawDatabaseText(at: databaseURL)
+        XCTAssertTrue(repairedDatabase.contains("public.example"))
+        XCTAssertFalse(repairedDatabase.contains("private.example"))
+        XCTAssertFalse(repairedDatabase.contains("secret"))
+        XCTAssertFalse(repairedDatabase.contains("token"))
+        XCTAssertFalse(repairedDatabase.contains("fixture"))
+        XCTAssertFalse(repairedDatabase.contains(privateProfile.id.uuidString))
+    }
+
+    func testLoadFallsBackAndDeletesStoreWhenRepairScrubCannotComplete() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("Session.sqlite3")
+        let fallback = SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 6))
+        let privateProfile = BrowserProfile.privateBrowsing(id: ProfileID())
+        let privateSpace = BrowserSpace(name: "Private", profileID: privateProfile.id)
+        let privateTab = BrowserTab(
+            title: "Private Only",
+            url: URL(string: "https://private.example/secret?token=fixture"),
+            parentSpaceID: privateSpace.id,
+            profileID: privateProfile.id
+        )
+        var selectedPrivateSpace = privateSpace
+        selectedPrivateSpace.regularTabIDs = [privateTab.id]
+        selectedPrivateSpace.selectedTabID = privateTab.id
+        let invalidSnapshot = BrowserSessionSnapshot(
+            profiles: [privateProfile],
+            spaces: [selectedPrivateSpace],
+            folders: [],
+            tabs: [privateTab],
+            selectedSpaceID: selectedPrivateSpace.id,
+            selectedTabID: privateTab.id,
+            capturedAt: Date(timeIntervalSince1970: 7)
+        )
+        let persistence = SQLiteSessionPersistenceStore(
+            databaseURL: databaseURL,
+            repairScrubInterruption: { throw RepairScrubFailure() }
+        )
+
+        try writeRawSessionRecord(
+            databaseURL: databaseURL,
+            schemaVersion: SQLiteSessionPersistenceStore.currentSchemaVersion,
+            payload: try JSONEncoder().encode(invalidSnapshot)
+        )
+        XCTAssertTrue(try rawDatabaseText(at: databaseURL).contains("private.example"))
+
+        let result = persistence.loadSnapshot(fallback: fallback)
+
+        XCTAssertEqual(result.snapshot, fallback)
+        XCTAssertEqual(result.recoveryReason, .unreadableStore)
+        XCTAssertFalse(result.recoveryReason?.userMessage?.contains("private.example") ?? true)
+        XCTAssertFalse(result.recoveryReason?.userMessage?.contains("fixture") ?? true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: databaseURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: databaseURL.path + "-journal"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: databaseURL.path + "-shm"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: databaseURL.path + "-wal"))
+    }
+
+    func testUnsupportedSchemaFallsBackToSeededSession() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("Session.sqlite3")
+        let fallback = SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 8))
         let futureSchemaVersion = SQLiteSessionPersistenceStore.currentSchemaVersion + 1
         let persistence = SQLiteSessionPersistenceStore(databaseURL: databaseURL)
-        let payload = try JSONEncoder().encode(fallback)
+        let payload = Data("https://private.example/secret?token=fixture".utf8)
 
         try writeRawSessionRecord(
             databaseURL: databaseURL,
@@ -80,13 +179,38 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
         XCTAssertEqual(result.snapshot, fallback)
         XCTAssertEqual(result.recoveryReason, .unsupportedSchema(futureSchemaVersion))
         XCTAssertNotNil(result.recoveryReason?.userMessage)
+        XCTAssertFalse(result.recoveryReason?.userMessage?.contains("private.example") ?? true)
+        XCTAssertFalse(result.recoveryReason?.userMessage?.contains("fixture") ?? true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: databaseURL.path))
+    }
+
+    func testCorruptPayloadDeletesStoreWithoutLeakingStoredBytesInMessage() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("Session.sqlite3")
+        let fallback = SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 9))
+        let persistence = SQLiteSessionPersistenceStore(databaseURL: databaseURL)
+
+        try writeRawSessionRecord(
+            databaseURL: databaseURL,
+            schemaVersion: SQLiteSessionPersistenceStore.currentSchemaVersion,
+            payload: Data("{\"url\":\"https://private.example/secret?token=fixture\"}".utf8)
+        )
+
+        let result = persistence.loadSnapshot(fallback: fallback)
+
+        XCTAssertEqual(result.snapshot, fallback)
+        XCTAssertEqual(result.recoveryReason, .corruptPayload)
+        XCTAssertFalse(result.recoveryReason?.userMessage?.contains("private.example") ?? true)
+        XCTAssertFalse(result.recoveryReason?.userMessage?.contains("fixture") ?? true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: databaseURL.path))
     }
 
     func testUnreadableStoreFallsBackWithoutLeakingStoredBytesInMessage() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let databaseURL = directory.appendingPathComponent("Session.sqlite3")
-        let fallback = SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 5))
+        let fallback = SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 10))
         try Data("private.example/token=secret".utf8).write(to: databaseURL)
         let persistence = SQLiteSessionPersistenceStore(databaseURL: databaseURL)
 
@@ -96,6 +220,7 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
         XCTAssertEqual(result.recoveryReason, .unreadableStore)
         XCTAssertFalse(result.recoveryReason?.userMessage?.contains("private.example") ?? true)
         XCTAssertFalse(result.recoveryReason?.userMessage?.contains("secret") ?? true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: databaseURL.path))
     }
 
     func testBrowserStorePersistsSessionMutationsThroughConfiguredWriter() throws {
@@ -114,6 +239,10 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func rawDatabaseText(at databaseURL: URL) throws -> String {
+        String(decoding: try Data(contentsOf: databaseURL), as: UTF8.self)
     }
 
     private func writeRawSessionRecord(
@@ -180,6 +309,8 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
         XCTAssertEqual(sqlite3_step(preparedStatement), SQLITE_DONE)
     }
 }
+
+private struct RepairScrubFailure: Error {}
 
 private final class SessionPersistenceSpy: SessionSnapshotPersisting {
     var savedSnapshots: [BrowserSessionSnapshot] = []
