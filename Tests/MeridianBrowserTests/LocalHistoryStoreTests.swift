@@ -130,6 +130,60 @@ final class LocalHistoryStoreTests: XCTestCase {
         XCTAssertFalse(entry.url.absoluteString.contains("fragment"))
     }
 
+    func testInitialEntriesCollapseDuplicatesAfterNormalization() throws {
+        let profile = BrowserProfile(name: "Imported")
+        let olderEntry = BrowserHistoryEntry(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            profileID: profile.id,
+            url: URL(string: "https://user:pass@example.com/docs?view=full&token=older#frag")!,
+            title: "Older",
+            lastVisitedAt: Date(timeIntervalSince1970: 10),
+            visitCount: 2
+        )
+        let newerEntry = BrowserHistoryEntry(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            profileID: profile.id,
+            url: URL(string: "https://example.com/docs?view=full")!,
+            title: "Newer",
+            lastVisitedAt: Date(timeIntervalSince1970: 20),
+            visitCount: 3
+        )
+
+        let historyStore = LocalHistoryStore(entries: [olderEntry, newerEntry])
+
+        let entry = try XCTUnwrap(historyStore.entries.first)
+        XCTAssertEqual(historyStore.entries.count, 1)
+        XCTAssertEqual(entry.id, newerEntry.id)
+        XCTAssertEqual(entry.url.absoluteString, "https://example.com/docs?view=full")
+        XCTAssertEqual(entry.title, "Newer")
+        XCTAssertEqual(entry.lastVisitedAt, Date(timeIntervalSince1970: 20))
+        XCTAssertEqual(entry.visitCount, 5)
+    }
+
+    func testDeletesIndividualEntriesAndClearsProfileEntries() throws {
+        let workProfile = BrowserProfile(name: "Work")
+        let personalProfile = BrowserProfile(name: "Personal")
+        var historyStore = LocalHistoryStore()
+        let workEntry = try XCTUnwrap(historyStore.recordVisit(
+            url: URL(string: "https://work.example/docs")!,
+            title: "Work Docs",
+            profile: workProfile
+        ))
+        let personalEntry = try XCTUnwrap(historyStore.recordVisit(
+            url: URL(string: "https://personal.example/docs")!,
+            title: "Personal Docs",
+            profile: personalProfile
+        ))
+
+        XCTAssertNil(historyStore.deleteEntry(id: personalEntry.id, profileID: workProfile.id))
+        XCTAssertNotNil(historyStore.deleteEntry(id: workEntry.id, profileID: workProfile.id))
+        XCTAssertEqual(historyStore.entries.map(\.id), [personalEntry.id])
+
+        let removedEntries = historyStore.clearEntries(profileID: personalProfile.id)
+        XCTAssertEqual(removedEntries.map(\.id), [personalEntry.id])
+        XCTAssertTrue(historyStore.entries.isEmpty)
+    }
+
     func testQueryIsScopedToProfileAndSortedByRecency() throws {
         let workProfile = BrowserProfile(name: "Work")
         let personalProfile = BrowserProfile(name: "Personal")
