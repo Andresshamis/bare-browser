@@ -4,7 +4,15 @@ public struct LocalHistoryStore: Sendable {
     public private(set) var entries: [BrowserHistoryEntry]
 
     public init(entries: [BrowserHistoryEntry] = []) {
-        self.entries = entries.filter { Self.isRecordable($0.url) }
+        self.entries = entries.compactMap { entry in
+            guard let normalizedURL = Self.normalizedHistoryURL(entry.url) else {
+                return nil
+            }
+
+            var normalizedEntry = entry
+            normalizedEntry.url = normalizedURL
+            return normalizedEntry
+        }
     }
 
     @discardableResult
@@ -14,12 +22,13 @@ public struct LocalHistoryStore: Sendable {
         profile: BrowserProfile,
         visitedAt: Date = Date()
     ) -> BrowserHistoryEntry? {
-        guard !profile.isEphemeral, Self.isRecordable(url) else {
+        guard !profile.isEphemeral,
+              let normalizedURL = Self.normalizedHistoryURL(url) else {
             return nil
         }
 
-        let resolvedTitle = Self.resolvedTitle(title, for: url)
-        if let index = entries.firstIndex(where: { $0.profileID == profile.id && $0.url == url }) {
+        let resolvedTitle = Self.resolvedTitle(title, for: normalizedURL)
+        if let index = entries.firstIndex(where: { $0.profileID == profile.id && $0.url == normalizedURL }) {
             entries[index].title = resolvedTitle
             entries[index].lastVisitedAt = visitedAt
             entries[index].visitCount += 1
@@ -28,7 +37,7 @@ public struct LocalHistoryStore: Sendable {
 
         let entry = BrowserHistoryEntry(
             profileID: profile.id,
-            url: url,
+            url: normalizedURL,
             title: resolvedTitle,
             lastVisitedAt: visitedAt
         )
@@ -69,11 +78,61 @@ public struct LocalHistoryStore: Sendable {
         return scheme == "http" || scheme == "https"
     }
 
+    private static func normalizedHistoryURL(_ url: URL) -> URL? {
+        guard isRecordable(url),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased() else {
+            return nil
+        }
+
+        components.scheme = scheme
+        components.user = nil
+        components.password = nil
+        components.fragment = nil
+
+        if let queryItems = components.queryItems {
+            let retainedItems = queryItems.filter { !isSensitiveQueryItemName($0.name) }
+            components.queryItems = retainedItems.isEmpty ? nil : retainedItems
+        }
+
+        return components.url
+    }
+
     private static func resolvedTitle(_ title: String?, for url: URL) -> String {
         let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedTitle.isEmpty {
             return trimmedTitle
         }
         return url.host(percentEncoded: false) ?? url.absoluteString
+    }
+
+    private static func isSensitiveQueryItemName(_ name: String) -> Bool {
+        let normalizedName = name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+
+        guard !normalizedName.isEmpty else {
+            return false
+        }
+
+        if normalizedName.contains("token")
+            || normalizedName.contains("password")
+            || normalizedName.contains("passwd")
+            || normalizedName.contains("secret")
+            || normalizedName.contains("credential")
+            || normalizedName.contains("session")
+            || normalizedName.contains("signature")
+            || normalizedName == "sig"
+            || normalizedName == "auth"
+            || normalizedName.hasPrefix("auth_")
+            || normalizedName.hasSuffix("_auth")
+            || normalizedName == "jwt"
+            || normalizedName == "api_key"
+            || normalizedName == "apikey" {
+            return true
+        }
+
+        return false
     }
 }

@@ -23,7 +23,7 @@ Meridian Browser is a native macOS, SwiftUI-first, WebKit-based browser. The ear
 - `BrowserStore.snapshot(...)` is the live runtime state shape. Disk persistence uses `SQLiteSessionPersistenceStore`, which stores one encoded snapshot only after routing through `SessionPersistenceBoundary` to filter private profiles and dependent spaces, folders, tabs, split views, selected IDs, and restoration metadata before encoding.
 - App startup loads the SQLite session snapshot from Application Support. Missing, unreadable, unsupported, or privacy-invalid saved state falls back to `SessionSnapshotFactory.initial(...)` with a generic in-app message and no URL-bearing diagnostics.
 - Favorites/essentials are currently space-scoped. They are stored on `BrowserSpace.favoriteTabIDs` so each space can have its own persistent anchors.
-- Local history is currently an in-memory `LocalHistoryStore`. It records only HTTP(S) visits for non-ephemeral profiles and command-bar history queries are scoped to the active profile. Private profile visits are ignored at the service/store boundary.
+- Local history is currently an in-memory `LocalHistoryStore`. It records only HTTP(S) visits for non-ephemeral profiles, normalizes retained URLs by stripping userinfo, fragments, and known sensitive query parameters, and scopes command-bar history queries to the active profile. Private profile visits are ignored at the service/store boundary.
 - The app lazily creates a `WKWebView` for the selected tab only. A later web view pool can keep recent tabs warm without instantiating all saved tabs.
 - The command bar is native SwiftUI. It routes direct URLs, search queries, open-tab results, active-profile history results, and initial creation commands.
 
