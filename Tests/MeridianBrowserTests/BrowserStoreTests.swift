@@ -218,6 +218,78 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertNil(store.lastUserMessage)
     }
 
+    func testRestoredHistoryEntriesAppearInCommandBarSearch() throws {
+        let snapshot = SessionSnapshotFactory.initial()
+        let profileID = try XCTUnwrap(snapshot.profiles.first?.id)
+        let restoredEntry = BrowserHistoryEntry(
+            profileID: profileID,
+            url: URL(string: "https://docs.example.com/restored?view=reader")!,
+            title: "Restored Docs",
+            lastVisitedAt: Date(timeIntervalSince1970: 10)
+        )
+        let store = BrowserStore(
+            snapshot: snapshot,
+            localHistoryStore: LocalHistoryStore(entries: [restoredEntry])
+        )
+
+        let result = try XCTUnwrap(store.commandBarResults(for: "restored", openTabLimit: 0).first)
+
+        guard case .history(let entry) = result else {
+            return XCTFail("Expected a restored history result.")
+        }
+        XCTAssertEqual(entry.id, restoredEntry.id)
+        XCTAssertEqual(entry.profileID, profileID)
+    }
+
+    func testHistoryMutationsPersistThroughConfiguredWriter() throws {
+        let spy = LocalHistoryPersistenceSpy()
+        let store = BrowserStore(localHistoryPersistence: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+
+        let entry = try XCTUnwrap(store.recordHistoryVisit(
+            title: "Saved History",
+            url: URL(string: "https://history.example/saved")!,
+            profileID: profileID
+        ))
+
+        XCTAssertEqual(spy.savedEntries.last?.map(\.id), [entry.id])
+        XCTAssertEqual(spy.savedProfiles.last?.map(\.id), store.profiles.map(\.id))
+
+        XCTAssertTrue(store.deleteHistoryEntry(entry.id, profileID: profileID))
+        XCTAssertEqual(spy.savedEntries.last, [])
+    }
+
+    func testClearHistoryOnlyRemovesActiveProfileEntries() throws {
+        let spy = LocalHistoryPersistenceSpy()
+        let store = BrowserStore(localHistoryPersistence: spy)
+        let personalProfileID = try XCTUnwrap(store.activeProfile?.id)
+        let personalSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let workProfile = store.createProfile(name: "Work")
+        _ = store.createSpace(name: "Work", profileID: workProfile.id)
+
+        let personalEntry = try XCTUnwrap(store.recordHistoryVisit(
+            title: "Personal Docs",
+            url: URL(string: "https://personal.example/docs")!,
+            profileID: personalProfileID,
+            date: Date(timeIntervalSince1970: 10)
+        ))
+        let workEntry = try XCTUnwrap(store.recordHistoryVisit(
+            title: "Work Docs",
+            url: URL(string: "https://work.example/docs")!,
+            profileID: workProfile.id,
+            date: Date(timeIntervalSince1970: 20)
+        ))
+        store.selectSpace(personalSpaceID)
+
+        let removedCount = store.clearHistoryForActiveProfile()
+
+        XCTAssertEqual(removedCount, 1)
+        XCTAssertFalse(store.historyEntries.contains { $0.id == personalEntry.id })
+        XCTAssertTrue(store.historyEntries.contains { $0.id == workEntry.id })
+        XCTAssertEqual(spy.savedEntries.last?.map(\.id), [workEntry.id])
+        XCTAssertEqual(store.lastUserMessage, "History cleared for this profile.")
+    }
+
     func testSitePermissionRequestPublishesSanitizedPendingState() {
         let store = BrowserStore()
         let profileID = store.activeProfile!.id
@@ -537,5 +609,21 @@ final class BrowserStoreTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+}
+
+private final class LocalHistoryPersistenceSpy: LocalHistoryPersisting {
+    var loadedProfiles: [[BrowserProfile]] = []
+    var savedEntries: [[BrowserHistoryEntry]] = []
+    var savedProfiles: [[BrowserProfile]] = []
+
+    func loadHistory(profiles: [BrowserProfile]) -> LocalHistoryPersistenceLoadResult {
+        loadedProfiles.append(profiles)
+        return LocalHistoryPersistenceLoadResult(entries: [])
+    }
+
+    func saveHistory(_ entries: [BrowserHistoryEntry], profiles: [BrowserProfile]) throws {
+        savedEntries.append(entries)
+        savedProfiles.append(profiles)
     }
 }
