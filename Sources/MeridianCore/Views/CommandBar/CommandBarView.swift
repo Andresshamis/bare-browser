@@ -63,6 +63,13 @@ public struct CommandBarView: View {
                             .padding(.vertical, 6)
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            if case .history(let entry) = result {
+                                Button("Delete History Entry", role: .destructive) {
+                                    store.deleteHistoryEntry(entry.id, profileID: entry.profileID)
+                                }
+                            }
+                        }
                     }
                 }
                 .padding(.bottom, 6)
