@@ -18,11 +18,13 @@ Current coverage:
 - Pending confirmation state for external app and local file URLs.
 - Insecure HTTP detection.
 - Download filename sanitization, risk classification, safe destination selection, and pending confirmation state.
+- Site permission origin sanitization, supported/unsupported defaults, stored allow/deny decisions, and pending store state.
 - Profile metadata for persistent and private browsing.
 - Browser store relationships for spaces, folders, tabs, and session snapshots.
 - Session persistence boundary filtering for private profiles, dependent browser state, encoded payloads, and all-private fallback.
 - Xcode UI smoke host for launching the signed app bundle and observing the
   first browser window.
+- SQLite session persistence save/load, missing-store fallback, unsupported/corrupt/unreadable store recovery with stale file removal, private session exclusion from the on-disk payload, and repair-time disk scrubbing.
 
 The Xcode UI test host requires a valid local macOS code-signing identity.
 Ad-hoc signing can compile the runner and test bundle, but local execution may
@@ -46,5 +48,5 @@ IDs.
 - UI tests for creating spaces, folders, profiles, opening tabs, switching tabs, restoring sessions, and split view.
 - Local web fixture tests proving cookies/localStorage do not leak between profiles.
 - Private browsing persistence tests proving website data does not survive window/session close.
-- Durable persistence backend tests proving all disk writes use the filtered session snapshot boundary.
 - End-to-end WebKit download fixture tests for delegate callbacks, save panel behavior, destination handling, quarantine metadata, and risky extension confirmation.
+- UI or WebKit fixture tests for camera/microphone and pop-up prompts once the app test host exists.

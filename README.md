@@ -12,13 +12,17 @@ implementation.
 The repository now contains the first package-based macOS scaffold:
 
 - `MeridianBrowser`: SwiftUI app entry point.
-- `MeridianCore`: models, store, security helpers, WebKit host, and native views.
+- `MeridianCore`: models, store, persistence services, security helpers, WebKit host, and native views.
 - `MeridianBrowserTests`: unit tests for foundational behavior.
 - `MeridianBrowser.xcodeproj`: native app bundle target, shared Xcode scheme,
   signing entitlements, and a UI test host.
 
 This is not a release package yet. Final signing team configuration,
 notarization, and distribution packaging remain release work.
+
+The app restores public session state from a local SQLite store under Application
+Support. Private browsing profiles and dependent tab metadata are filtered before
+any session snapshot is written to disk.
 
 ## Requirements
 
@@ -40,7 +44,18 @@ xcodebuild -project MeridianBrowser.xcodeproj -scheme MeridianBrowserApp -config
 `script/build_and_run.sh` stages the SwiftPM GUI executable into
 `dist/Meridian Browser.app` before launching it, which gives the app foreground
 macOS bundle behavior that `swift run MeridianBrowser` does not reliably provide.
-It also supports `--debug`, `--logs`, `--telemetry`, and `--verify`.
+It also supports `--debug`, `--logs`, `--subsystem-logs`, and `--verify`.
+
+## Privacy And Diagnostics
+
+Meridian does not collect product analytics, browsing telemetry, page contents,
+URLs, credentials, cookies, tokens, or private browsing data. The current app has
+no analytics SDK, tracking endpoint, or network reporting path.
+
+Developer diagnostics are local only. `script/build_and_run.sh --logs` streams
+local OS log entries for the Meridian process, and `--subsystem-logs` streams
+local OS log entries for Meridian's bundle subsystem. These modes do not send
+diagnostic data off the machine.
 
 The Xcode scheme builds `DerivedData/xcode/Build/Products/Debug/MeridianBrowser.app`
 with `CFBundleDisplayName` set to `Meridian Browser`. UI test execution on macOS
