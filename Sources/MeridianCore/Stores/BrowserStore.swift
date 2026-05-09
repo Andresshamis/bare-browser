@@ -203,6 +203,7 @@ public final class BrowserStore: ObservableObject {
             ?? space.favoriteTabIDs.first
             ?? space.pinnedTabIDs.first
             ?? space.regularTabIDs.first
+        refreshActivePageSecurityStatus()
         persistSession()
     }
 
@@ -219,6 +220,7 @@ public final class BrowserStore: ObservableObject {
         updateTab(id) { tab in
             tab.lastActiveDate = Date()
         }
+        refreshActivePageSecurityStatus()
         persistSession()
     }
 
@@ -239,6 +241,7 @@ public final class BrowserStore: ObservableObject {
             folders[index].tabIDs.removeAll { $0 == tab.id }
         }
         selectedTabID = selectedSpace?.selectedTabID
+        refreshActivePageSecurityStatus()
         persistSession()
     }
 
@@ -322,7 +325,7 @@ public final class BrowserStore: ObservableObject {
         switch urlSecurityPolicy.decision(for: url) {
         case .allowInWebView:
             _ = createTab(url: url)
-            publishStatusMessage(urlSecurityPolicy.securityMessage(forAllowedWebURL: url))
+            updatePageSecurityStatus(for: url)
         case .requireExternalApplicationConfirmation:
             requestURLConfirmation(kind: .externalApplication, url: url)
         case .requireLocalFileConfirmation:
@@ -612,7 +615,9 @@ public final class BrowserStore: ObservableObject {
         if let securityMessage {
             publishStatusMessage(securityMessage)
         } else if let statusURL = url ?? visitURL {
-            publishStatusMessage(urlSecurityPolicy.securityMessage(forAllowedWebURL: statusURL))
+            updatePageSecurityStatus(for: statusURL)
+        } else {
+            clearCurrentPageSecurityStatus()
         }
         persistSession()
     }
@@ -637,6 +642,29 @@ public final class BrowserStore: ObservableObject {
             selectSpace(space.id)
         } else {
             _ = createSpace(name: profiles.first(where: { $0.id == id })?.name ?? "Profile", profileID: id)
+        }
+    }
+
+    private func refreshActivePageSecurityStatus() {
+        updatePageSecurityStatus(for: activeTab?.url)
+    }
+
+    private func updatePageSecurityStatus(for url: URL?) {
+        guard let url else {
+            clearCurrentPageSecurityStatus()
+            return
+        }
+
+        if let message = urlSecurityPolicy.securityMessage(forAllowedWebURL: url) {
+            lastUserMessage = message
+        } else {
+            clearCurrentPageSecurityStatus()
+        }
+    }
+
+    private func clearCurrentPageSecurityStatus() {
+        if lastUserMessage == URLSecurityPolicy.insecureTransportMessage {
+            lastUserMessage = nil
         }
     }
 

@@ -164,6 +164,49 @@ final class BrowserStoreTests: XCTestCase {
         }
     }
 
+    func testWebViewHTTPSUpdateClearsStaleInsecureStatusMessage() {
+        let store = BrowserStore()
+
+        store.open(URL(string: "http://example.com")!)
+        XCTAssertEqual(store.lastUserMessage, URLSecurityPolicy.insecureTransportMessage)
+
+        store.updateActiveTabFromWebView(
+            title: "Secure Page",
+            url: URL(string: "https://example.com")!,
+            isLoading: false
+        )
+
+        XCTAssertNil(store.lastUserMessage)
+    }
+
+    func testSelectingSecureTabClearsStaleInsecureStatusMessage() throws {
+        let store = BrowserStore()
+        let secureTab = try XCTUnwrap(store.createTab(title: "Secure", url: URL(string: "https://example.com")!))
+
+        store.open(URL(string: "http://example.com")!)
+        let insecureTabID = try XCTUnwrap(store.selectedTabID)
+        XCTAssertEqual(store.lastUserMessage, URLSecurityPolicy.insecureTransportMessage)
+
+        store.selectTab(secureTab.id)
+        XCTAssertNil(store.lastUserMessage)
+
+        store.selectTab(insecureTabID)
+        XCTAssertEqual(store.lastUserMessage, URLSecurityPolicy.insecureTransportMessage)
+    }
+
+    func testSecurePageStatusRefreshPreservesUnrelatedUserMessage() {
+        let store = BrowserStore()
+
+        store.publishStatusMessage("Download failed.")
+        store.updateActiveTabFromWebView(
+            title: "Secure Page",
+            url: URL(string: "https://example.com")!,
+            isLoading: false
+        )
+
+        XCTAssertEqual(store.lastUserMessage, "Download failed.")
+    }
+
     func testExplicitStatusMessagesCanBeDismissed() {
         let store = BrowserStore()
 
