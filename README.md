@@ -22,6 +22,9 @@ The app restores public session state from a local SQLite store under Applicatio
 Support. Private browsing profiles and dependent tab metadata are filtered before
 any session snapshot is written to disk.
 
+Local history is currently in-memory and scoped to the active persistent profile
+for command-bar search. Private browsing profile visits are not recorded.
+
 ## Requirements
 
 - macOS Tahoe 26.x or later

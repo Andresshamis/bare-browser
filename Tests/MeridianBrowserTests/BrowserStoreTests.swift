@@ -40,6 +40,91 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(decoded.selectedTabID, snapshot.selectedTabID)
     }
 
+    func testWebViewUpdateRecordsPublicHistoryEntry() throws {
+        let store = BrowserStore()
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let url = URL(string: "https://example.com/article")!
+
+        store.updateActiveTabFromWebView(title: "Example Article", url: url, isLoading: false)
+
+        let entry = try XCTUnwrap(store.historyEntries.first)
+        XCTAssertEqual(entry.profileID, profileID)
+        XCTAssertEqual(entry.url, url)
+        XCTAssertEqual(entry.title, "Example Article")
+        XCTAssertEqual(entry.visitCount, 1)
+    }
+
+    func testPrivateProfileWebViewUpdateDoesNotRecordHistory() {
+        let store = BrowserStore()
+        let privateProfile = store.createProfile(name: "Private", ephemeral: true)
+        let privateSpace = store.createSpace(name: "Private", profileID: privateProfile.id)
+        _ = store.createTab(
+            title: "Private",
+            url: URL(string: "https://private.example/secret?token=fixture"),
+            in: privateSpace.id
+        )
+
+        store.updateActiveTabFromWebView(
+            title: "Private Secret",
+            url: URL(string: "https://private.example/secret?token=fixture"),
+            isLoading: false
+        )
+
+        XCTAssertTrue(store.historyEntries.isEmpty)
+        XCTAssertTrue(store.historyResults(for: "private").isEmpty)
+    }
+
+    func testHistoryQueriesAreScopedToActiveProfile() throws {
+        let store = BrowserStore()
+        let personalProfileID = try XCTUnwrap(store.activeProfile?.id)
+        let personalSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let workProfile = store.createProfile(name: "Work")
+        _ = store.createSpace(name: "Work", profileID: workProfile.id)
+
+        store.recordHistoryVisit(
+            title: "Personal Portal",
+            url: URL(string: "https://personal.example/portal")!,
+            profileID: personalProfileID,
+            date: Date(timeIntervalSince1970: 10)
+        )
+        store.recordHistoryVisit(
+            title: "Work Portal",
+            url: URL(string: "https://work.example/portal")!,
+            profileID: workProfile.id,
+            date: Date(timeIntervalSince1970: 20)
+        )
+
+        store.selectSpace(personalSpaceID)
+
+        XCTAssertEqual(store.historyResults(for: "portal").map(\.title), ["Personal Portal"])
+        XCTAssertEqual(store.historyResults(for: "portal", profileID: workProfile.id).map(\.title), ["Work Portal"])
+    }
+
+    func testCommandBarHistoryResultOpensThroughStoreOpenPath() throws {
+        let store = BrowserStore()
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let url = URL(string: "https://docs.example.com/guide")!
+        store.recordHistoryVisit(
+            title: "Docs Guide",
+            url: url,
+            profileID: profileID,
+            date: Date(timeIntervalSince1970: 10)
+        )
+        store.showCommandBar()
+
+        let result = try XCTUnwrap(store.commandBarResults(for: "guide", openTabLimit: 0).first)
+        guard case .history(let entry) = result else {
+            return XCTFail("Expected a history command bar result.")
+        }
+        let tabCount = store.tabs.count
+
+        store.activateCommandBarResult(.history(entry))
+
+        XCTAssertEqual(store.tabs.count, tabCount + 1)
+        XCTAssertEqual(store.activeTab?.url, url)
+        XCTAssertFalse(store.isCommandBarPresented)
+    }
+
     func testSitePermissionRequestPublishesSanitizedPendingState() {
         let store = BrowserStore()
         let profileID = store.activeProfile!.id

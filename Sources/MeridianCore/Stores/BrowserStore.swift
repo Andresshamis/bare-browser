@@ -18,12 +18,14 @@ public final class BrowserStore: ObservableObject {
     @Published public var lastUserMessage: String?
     @Published public private(set) var pendingSitePermissionRequest: SitePermissionRequest?
     @Published public private(set) var sitePermissionSettings: [SitePermissionSetting]
+    @Published public private(set) var historyEntries: [BrowserHistoryEntry]
 
     public let commandRouter: CommandRouter
     public let urlSecurityPolicy: URLSecurityPolicy
     public let downloadSafetyPolicy: DownloadSafetyPolicy
     public let sitePermissionPolicy: SitePermissionPolicy
     private let sessionPersistence: SessionSnapshotPersisting?
+    private var localHistoryStore: LocalHistoryStore
     private var pendingDownloadCompletion: (@MainActor (URL?) -> Void)?
 
     public init(
@@ -33,6 +35,7 @@ public final class BrowserStore: ObservableObject {
         downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy(),
         sitePermissionPolicy: SitePermissionPolicy = SitePermissionPolicy(),
         sitePermissionSettings: [SitePermissionSetting] = [],
+        localHistoryStore: LocalHistoryStore = LocalHistoryStore(),
         lastUserMessage: String? = nil,
         sessionPersistence: SessionSnapshotPersisting? = nil
     ) {
@@ -51,11 +54,13 @@ public final class BrowserStore: ObservableObject {
         self.lastUserMessage = lastUserMessage
         self.pendingSitePermissionRequest = nil
         self.sitePermissionSettings = sitePermissionSettings
+        self.historyEntries = localHistoryStore.entries
         self.commandRouter = commandRouter
         self.urlSecurityPolicy = urlSecurityPolicy
         self.downloadSafetyPolicy = downloadSafetyPolicy
         self.sitePermissionPolicy = sitePermissionPolicy
         self.sessionPersistence = sessionPersistence
+        self.localHistoryStore = localHistoryStore
         self.pendingDownloadCompletion = nil
     }
 
@@ -253,6 +258,40 @@ public final class BrowserStore: ObservableObject {
         perform(commandRouter.route(input: input))
     }
 
+    public func commandBarResults(
+        for query: String,
+        openTabLimit: Int = 5,
+        historyLimit: Int = 5
+    ) -> [CommandBarResult] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return []
+        }
+
+        let tabResults = matchingOpenTabs(for: trimmed, limit: openTabLimit)
+            .map(CommandBarResult.openTab)
+        let matchedHistory = historyResults(for: trimmed, limit: historyLimit)
+            .map(CommandBarResult.history)
+
+        return tabResults + matchedHistory
+    }
+
+    public func activateCommandBarResult(_ result: CommandBarResult) {
+        switch result {
+        case .openTab(let tab):
+            selectTab(tab.id)
+        case .history(let entry):
+            guard entry.profileID == activeProfile?.id else {
+                lastUserMessage = "History result is unavailable for this profile."
+                hideCommandBar()
+                return
+            }
+            open(entry.url)
+        }
+
+        hideCommandBar()
+    }
+
     public func perform(_ command: CommandRouter.Command) {
         switch command {
         case .openURL(let url):
@@ -293,6 +332,40 @@ public final class BrowserStore: ObservableObject {
         case .block(let reason):
             lastUserMessage = reason
         }
+    }
+
+    public func historyResults(
+        for query: String,
+        profileID: ProfileID? = nil,
+        limit: Int = 5
+    ) -> [BrowserHistoryEntry] {
+        guard let resolvedProfileID = profileID ?? activeProfile?.id else {
+            return []
+        }
+        return localHistoryStore.query(query, profileID: resolvedProfileID, limit: limit)
+    }
+
+    @discardableResult
+    public func recordHistoryVisit(
+        title: String?,
+        url: URL?,
+        profileID: ProfileID? = nil,
+        date: Date = Date()
+    ) -> BrowserHistoryEntry? {
+        guard let url,
+              let resolvedProfileID = profileID ?? activeProfile?.id,
+              let profile = profiles.first(where: { $0.id == resolvedProfileID }) else {
+            return nil
+        }
+
+        let entry = localHistoryStore.recordVisit(
+            url: url,
+            title: title,
+            profile: profile,
+            visitedAt: date
+        )
+        historyEntries = localHistoryStore.entries
+        return entry
     }
 
     @discardableResult
@@ -516,6 +589,9 @@ public final class BrowserStore: ObservableObject {
         guard let selectedTabID else {
             return
         }
+        var visitProfileID: ProfileID?
+        var visitURL: URL?
+        var visitTitle: String?
         updateTab(selectedTabID) { tab in
             if let title, !title.isEmpty {
                 tab.title = title
@@ -523,6 +599,12 @@ public final class BrowserStore: ObservableObject {
             tab.url = url ?? tab.url
             tab.isLoading = isLoading
             tab.restorationMetadata.lastCommittedURL = url ?? tab.restorationMetadata.lastCommittedURL
+            visitProfileID = tab.profileID
+            visitURL = tab.url
+            visitTitle = tab.title
+        }
+        if !isLoading {
+            recordHistoryVisit(title: visitTitle, url: visitURL, profileID: visitProfileID)
         }
         persistSession()
     }
@@ -557,6 +639,20 @@ public final class BrowserStore: ObservableObject {
             return
         }
         mutate(&tabs[index])
+    }
+
+    private func matchingOpenTabs(for query: String, limit: Int) -> [BrowserTab] {
+        guard limit > 0 else {
+            return []
+        }
+        return Array(
+            tabs
+                .filter { tab in
+                    tab.title.localizedCaseInsensitiveContains(query)
+                        || (tab.url?.absoluteString.localizedCaseInsensitiveContains(query) ?? false)
+                }
+                .prefix(limit)
+        )
     }
 
     private func upsertSitePermissionSetting(_ setting: SitePermissionSetting) {
