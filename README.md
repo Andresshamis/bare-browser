@@ -39,7 +39,18 @@ swift test
 `script/build_and_run.sh` stages the SwiftPM GUI executable into
 `dist/Meridian Browser.app` before launching it, which gives the app foreground
 macOS bundle behavior that `swift run MeridianBrowser` does not reliably provide.
-It also supports `--debug`, `--logs`, `--telemetry`, and `--verify`.
+It also supports `--debug`, `--logs`, `--subsystem-logs`, and `--verify`.
+
+## Privacy And Diagnostics
+
+Meridian does not collect product analytics, browsing telemetry, page contents,
+URLs, credentials, cookies, tokens, or private browsing data. The current app has
+no analytics SDK, tracking endpoint, or network reporting path.
+
+Developer diagnostics are local only. `script/build_and_run.sh --logs` streams
+local OS log entries for the Meridian process, and `--subsystem-logs` streams
+local OS log entries for Meridian's bundle subsystem. These modes do not send
+diagnostic data off the machine.
 
 ## Documentation
 
