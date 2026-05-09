@@ -23,7 +23,7 @@
 - URL navigation is centralized in `URLSecurityPolicy`.
 - Unsafe script/data schemes are blocked.
 - External app and `file://` links create a pending native confirmation before any external handoff, retaining the target URL for approval while reducing source page context to a sanitized host or scheme label.
-- Non-local HTTP pages are flagged as insecure transport.
+- Non-local HTTP pages are flagged as insecure transport through the visible browser status message path for explicit opens and WebKit-driven navigations.
 - WebKit downloads are routed through a native save-location confirmation before bytes are written.
 - The download policy sanitizes candidate filenames, avoids existing destination paths, blocks installer-like packages, and requires explicit confirmation for executable-like extensions.
 - Download source metadata published to UI/store state is reduced to a display host plus optional quarantine origin; full source URLs are not retained after WebKit callbacks.

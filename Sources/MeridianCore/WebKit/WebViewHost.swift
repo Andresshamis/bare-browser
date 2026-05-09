@@ -11,6 +11,7 @@ public struct WebViewHost: NSViewRepresentable {
     private let downloadSafetyPolicy: DownloadSafetyPolicy
     private let sitePermissionPolicy: SitePermissionPolicy
     private let onStateChange: @MainActor (String?, URL?, Bool) -> Void
+    private let onSecurityMessage: @MainActor (String) -> Void
     private let onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
     private let onDownloadConfirmationRequired: @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
     private let onSitePermissionRequest: @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
@@ -23,6 +24,7 @@ public struct WebViewHost: NSViewRepresentable {
         downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy(),
         sitePermissionPolicy: SitePermissionPolicy = SitePermissionPolicy(),
         onStateChange: @escaping @MainActor (String?, URL?, Bool) -> Void,
+        onSecurityMessage: @escaping @MainActor (String) -> Void = { _ in },
         onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void = { _, _, _ in },
         onDownloadConfirmationRequired: @escaping @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void = { _, completion in completion(nil) },
         onSitePermissionRequest: @escaping @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation = { _, _ in
@@ -36,6 +38,7 @@ public struct WebViewHost: NSViewRepresentable {
         self.downloadSafetyPolicy = downloadSafetyPolicy
         self.sitePermissionPolicy = sitePermissionPolicy
         self.onStateChange = onStateChange
+        self.onSecurityMessage = onSecurityMessage
         self.onURLConfirmationRequired = onURLConfirmationRequired
         self.onDownloadConfirmationRequired = onDownloadConfirmationRequired
         self.onSitePermissionRequest = onSitePermissionRequest
@@ -47,6 +50,7 @@ public struct WebViewHost: NSViewRepresentable {
             securityPolicy: securityPolicy,
             downloadSafetyPolicy: downloadSafetyPolicy,
             onStateChange: onStateChange,
+            onSecurityMessage: onSecurityMessage,
             onURLConfirmationRequired: onURLConfirmationRequired,
             onDownloadConfirmationRequired: onDownloadConfirmationRequired,
             onSitePermissionRequest: onSitePermissionRequest
@@ -78,6 +82,7 @@ public struct WebViewHost: NSViewRepresentable {
     public func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.state = state
         context.coordinator.onStateChange = onStateChange
+        context.coordinator.onSecurityMessage = onSecurityMessage
         context.coordinator.onURLConfirmationRequired = onURLConfirmationRequired
         context.coordinator.onDownloadConfirmationRequired = onDownloadConfirmationRequired
         context.coordinator.onSitePermissionRequest = onSitePermissionRequest
@@ -114,6 +119,7 @@ public struct WebViewHost: NSViewRepresentable {
         fileprivate let securityPolicy: URLSecurityPolicy
         fileprivate let downloadSafetyPolicy: DownloadSafetyPolicy
         fileprivate var onStateChange: @MainActor (String?, URL?, Bool) -> Void
+        fileprivate var onSecurityMessage: @MainActor (String) -> Void
         fileprivate var onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
         fileprivate var onDownloadConfirmationRequired: @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
         fileprivate var onSitePermissionRequest: @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
@@ -126,6 +132,7 @@ public struct WebViewHost: NSViewRepresentable {
             securityPolicy: URLSecurityPolicy,
             downloadSafetyPolicy: DownloadSafetyPolicy,
             onStateChange: @escaping @MainActor (String?, URL?, Bool) -> Void,
+            onSecurityMessage: @escaping @MainActor (String) -> Void,
             onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void,
             onDownloadConfirmationRequired: @escaping @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void,
             onSitePermissionRequest: @escaping @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
@@ -134,6 +141,7 @@ public struct WebViewHost: NSViewRepresentable {
             self.securityPolicy = securityPolicy
             self.downloadSafetyPolicy = downloadSafetyPolicy
             self.onStateChange = onStateChange
+            self.onSecurityMessage = onSecurityMessage
             self.onURLConfirmationRequired = onURLConfirmationRequired
             self.onDownloadConfirmationRequired = onDownloadConfirmationRequired
             self.onSitePermissionRequest = onSitePermissionRequest
@@ -152,11 +160,11 @@ public struct WebViewHost: NSViewRepresentable {
         }
 
         public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            publish(webView, isLoading: false, message: error.localizedDescription)
+            publish(webView, isLoading: false, message: "Navigation failed.")
         }
 
         public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            publish(webView, isLoading: false, message: error.localizedDescription)
+            publish(webView, isLoading: false, message: "Navigation failed.")
         }
 
         public func webView(
@@ -171,6 +179,7 @@ public struct WebViewHost: NSViewRepresentable {
 
             switch securityPolicy.decision(for: url) {
             case .allowInWebView:
+                publishSecurityMessage(securityPolicy.securityMessage(forAllowedWebURL: url))
                 decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
             case .requireExternalApplicationConfirmation:
                 requestConfirmation(.externalApplication, url: url, sourceURL: webView.url)
@@ -179,9 +188,7 @@ public struct WebViewHost: NSViewRepresentable {
                 requestConfirmation(.localFile, url: url, sourceURL: webView.url)
                 decisionHandler(.cancel)
             case .block(let reason):
-                Task { @MainActor in
-                    state.securityMessage = reason
-                }
+                publishSecurityMessage(reason)
                 decisionHandler(.cancel)
             }
         }
@@ -223,7 +230,7 @@ public struct WebViewHost: NSViewRepresentable {
                 sourceMetadata: sourceMetadata
             )
 
-            state.securityMessage = request.pendingMessage
+            publishSecurityMessage(request.pendingMessage)
             onDownloadConfirmationRequired(request) { [weak self] destinationURL in
                 guard let self else {
                     completionHandler(nil)
@@ -251,11 +258,13 @@ public struct WebViewHost: NSViewRepresentable {
                     to: destinationURL,
                     sourceMetadata: sourceMetadata
                 )
-                state.securityMessage = didApplyQuarantine
-                    ? "Download finished: \(destinationURL.lastPathComponent)"
-                    : "Download finished, but quarantine metadata could not be applied."
+                publishSecurityMessage(
+                    didApplyQuarantine
+                        ? "Download finished: \(destinationURL.lastPathComponent)"
+                        : "Download finished, but quarantine metadata could not be applied."
+                )
             } else {
-                state.securityMessage = "Download finished."
+                publishSecurityMessage("Download finished.")
             }
 
             cleanup(download)
@@ -266,7 +275,7 @@ public struct WebViewHost: NSViewRepresentable {
             didFailWithError error: Error,
             resumeData: Data?
         ) {
-            state.securityMessage = error.localizedDescription
+            publishSecurityMessage("Download failed.")
             cleanup(download)
         }
 
@@ -277,20 +286,21 @@ public struct WebViewHost: NSViewRepresentable {
             decisionHandler: @escaping @MainActor @Sendable (WKDownload.RedirectPolicy) -> Void
         ) {
             guard let url = request.url else {
-                state.securityMessage = "Download redirect was blocked because it did not include a URL."
+                publishSecurityMessage("Download redirect was blocked because it did not include a URL.")
                 decisionHandler(.cancel)
                 return
             }
 
             switch securityPolicy.decision(for: url) {
             case .allowInWebView:
+                publishSecurityMessage(securityPolicy.securityMessage(forAllowedWebURL: url))
                 downloadSourceMetadata[ObjectIdentifier(download)] = downloadSafetyPolicy.sourceMetadata(from: url)
                 decisionHandler(.allow)
             case .requireExternalApplicationConfirmation, .requireLocalFileConfirmation:
-                state.securityMessage = "Download redirect was blocked because it left the web download flow."
+                publishSecurityMessage("Download redirect was blocked because it left the web download flow.")
                 decisionHandler(.cancel)
             case .block(let reason):
-                state.securityMessage = reason
+                publishSecurityMessage(reason)
                 decisionHandler(.cancel)
             }
         }
@@ -316,9 +326,9 @@ public struct WebViewHost: NSViewRepresentable {
                 case .allow:
                     webView.load(URLRequest(url: url))
                 case .ask:
-                    state.securityMessage = "Pop-up windows require permission for this site."
+                    publishSecurityMessage("Pop-up windows require permission for this site.")
                 case .deny(let reason):
-                    state.securityMessage = reason
+                    publishSecurityMessage(reason)
                 }
             }
             return nil
@@ -342,7 +352,7 @@ public struct WebViewHost: NSViewRepresentable {
             url: URL,
             sourceURL: URL?
         ) {
-            state.securityMessage = kind.pendingMessage
+            publishSecurityMessage(kind.pendingMessage)
             onURLConfirmationRequired(kind, url, URLConfirmationSourceContext(sourceURL: sourceURL))
         }
 
@@ -362,12 +372,24 @@ public struct WebViewHost: NSViewRepresentable {
             downloadDestinations.removeValue(forKey: identifier)
         }
 
+        private func publishSecurityMessage(_ message: String?) {
+            guard let message = message?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !message.isEmpty else {
+                return
+            }
+            state.securityMessage = message
+            onSecurityMessage(message)
+        }
+
         private func publish(_ webView: WKWebView, isLoading: Bool, message: String? = nil) {
             let title = webView.title
             let url = webView.url
             let progress = webView.estimatedProgress
             let canGoBack = webView.canGoBack
             let canGoForward = webView.canGoForward
+            let securityMessage = message ?? url.flatMap {
+                securityPolicy.securityMessage(forAllowedWebURL: $0)
+            }
 
             Task { @MainActor in
                 state.title = title ?? state.title
@@ -376,7 +398,10 @@ public struct WebViewHost: NSViewRepresentable {
                 state.estimatedProgress = progress
                 state.canGoBack = canGoBack
                 state.canGoForward = canGoForward
-                state.securityMessage = message
+                state.securityMessage = securityMessage
+                if let securityMessage {
+                    onSecurityMessage(securityMessage)
+                }
                 onStateChange(title, url, isLoading)
             }
         }

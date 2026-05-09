@@ -16,7 +16,7 @@ Current coverage:
 - Profile-scoped local history recording, private-profile exclusion, URL normalization before retention/restore, restored duplicate collapse, scoped querying, command-bar history result activation, active-profile clear, and individual history delete.
 - URL scheme security decisions.
 - Pending confirmation state for external app and local file URLs.
-- Insecure HTTP detection.
+- Insecure HTTP detection and visible browser status message publication for explicit opens and WebKit-published URLs.
 - Download filename sanitization, risk classification, safe destination selection, and pending confirmation state.
 - Site permission origin sanitization, supported/unsupported defaults, stored allow/deny decisions, and pending store state.
 - Profile metadata for persistent and private browsing.
@@ -44,4 +44,5 @@ Current coverage:
 - Private browsing persistence tests proving website data does not survive window/session close.
 - Broader history management UI tests once the signed app/UI test host can cover menus and command-bar context actions.
 - End-to-end WebKit download fixture tests for delegate callbacks, save panel behavior, destination handling, quarantine metadata, and risky extension confirmation.
+- SwiftUI/UI coverage proving the browser status row remains visible, dismissible, and VoiceOver reachable.
 - UI or WebKit fixture tests for camera/microphone and pop-up prompts once the app test host exists.
