@@ -13,6 +13,7 @@ Current coverage:
 - Address parsing and HTTPS-first host resolution.
 - Search query routing.
 - Command routing for URLs, search, spaces, and folders.
+- Profile-scoped local history recording, private-profile exclusion, scoped querying, and command-bar history result activation.
 - URL scheme security decisions.
 - Pending confirmation state for external app and local file URLs.
 - Insecure HTTP detection.
@@ -40,5 +41,6 @@ Current coverage:
 - UI tests for creating spaces, folders, profiles, opening tabs, switching tabs, restoring sessions, and split view.
 - Local web fixture tests proving cookies/localStorage do not leak between profiles.
 - Private browsing persistence tests proving website data does not survive window/session close.
+- Durable local history persistence tests once history storage is added.
 - End-to-end WebKit download fixture tests for delegate callbacks, save panel behavior, destination handling, quarantine metadata, and risky extension confirmation.
 - UI or WebKit fixture tests for camera/microphone and pop-up prompts once the app test host exists.
