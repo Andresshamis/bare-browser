@@ -43,15 +43,19 @@ final class BrowserStoreTests: XCTestCase {
     func testWebViewUpdateRecordsPublicHistoryEntry() throws {
         let store = BrowserStore()
         let profileID = try XCTUnwrap(store.activeProfile?.id)
-        let url = URL(string: "https://example.com/article")!
+        let url = URL(string: "https://user:pass@example.com/article?view=full&token=fixture#section")!
+        let normalizedURL = URL(string: "https://example.com/article?view=full")!
 
         store.updateActiveTabFromWebView(title: "Example Article", url: url, isLoading: false)
 
         let entry = try XCTUnwrap(store.historyEntries.first)
         XCTAssertEqual(entry.profileID, profileID)
-        XCTAssertEqual(entry.url, url)
+        XCTAssertEqual(entry.url, normalizedURL)
         XCTAssertEqual(entry.title, "Example Article")
         XCTAssertEqual(entry.visitCount, 1)
+        for sensitiveComponent in ["user", "pass", "token", "fixture", "section"] {
+            XCTAssertFalse(entry.url.absoluteString.contains(sensitiveComponent))
+        }
     }
 
     func testPrivateProfileWebViewUpdateDoesNotRecordHistory() {
@@ -103,7 +107,8 @@ final class BrowserStoreTests: XCTestCase {
     func testCommandBarHistoryResultOpensThroughStoreOpenPath() throws {
         let store = BrowserStore()
         let profileID = try XCTUnwrap(store.activeProfile?.id)
-        let url = URL(string: "https://docs.example.com/guide")!
+        let url = URL(string: "https://user:pass@docs.example.com/guide?view=reader&token=fixture#notes")!
+        let normalizedURL = URL(string: "https://docs.example.com/guide?view=reader")!
         store.recordHistoryVisit(
             title: "Docs Guide",
             url: url,
@@ -121,7 +126,7 @@ final class BrowserStoreTests: XCTestCase {
         store.activateCommandBarResult(.history(entry))
 
         XCTAssertEqual(store.tabs.count, tabCount + 1)
-        XCTAssertEqual(store.activeTab?.url, url)
+        XCTAssertEqual(store.activeTab?.url, normalizedURL)
         XCTAssertFalse(store.isCommandBarPresented)
     }
 

@@ -23,7 +23,9 @@ Support. Private browsing profiles and dependent tab metadata are filtered befor
 any session snapshot is written to disk.
 
 Local history is currently in-memory and scoped to the active persistent profile
-for command-bar search. Private browsing profile visits are not recorded.
+for command-bar search. Private browsing profile visits are not recorded, and
+recorded history URLs strip userinfo, fragments, and known sensitive query
+parameters before retention.
 
 ## Requirements
 

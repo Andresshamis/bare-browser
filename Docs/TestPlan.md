@@ -13,7 +13,7 @@ Current coverage:
 - Address parsing and HTTPS-first host resolution.
 - Search query routing.
 - Command routing for URLs, search, spaces, and folders.
-- Profile-scoped local history recording, private-profile exclusion, scoped querying, and command-bar history result activation.
+- Profile-scoped local history recording, private-profile exclusion, URL normalization before retention, scoped querying, and command-bar history result activation.
 - URL scheme security decisions.
 - Pending confirmation state for external app and local file URLs.
 - Insecure HTTP detection.
