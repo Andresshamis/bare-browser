@@ -102,7 +102,8 @@ public struct SidebarView: View {
                     tab: tab,
                     isSelected: tab.id == store.selectedTabID,
                     select: { store.selectTab(tab.id) },
-                    close: { close(tab) }
+                    close: { close(tab) },
+                    setPlacement: { placement in store.setTabPlacement(placement, for: tab.id) }
                 )
             }
         }
@@ -119,7 +120,8 @@ public struct SidebarView: View {
                     tabs: tabs(for: folder.tabIDs),
                     selectedTabID: store.selectedTabID,
                     selectTab: { store.selectTab($0) },
-                    closeTab: { tab in close(tab) }
+                    closeTab: { tab in close(tab) },
+                    setTabPlacement: { tabID, placement in store.setTabPlacement(placement, for: tabID) }
                 )
             }
         }

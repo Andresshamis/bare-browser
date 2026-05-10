@@ -5,17 +5,20 @@ public struct SidebarTabRow: View {
     private let isSelected: Bool
     private let select: () -> Void
     private let close: () -> Void
+    private let setPlacement: (BrowserTabPlacement) -> Void
 
     public init(
         tab: BrowserTab,
         isSelected: Bool,
         select: @escaping () -> Void,
-        close: @escaping () -> Void
+        close: @escaping () -> Void,
+        setPlacement: @escaping (BrowserTabPlacement) -> Void
     ) {
         self.tab = tab
         self.isSelected = isSelected
         self.select = select
         self.close = close
+        self.setPlacement = setPlacement
     }
 
     public var body: some View {
@@ -47,7 +50,24 @@ public struct SidebarTabRow: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button("Close Tab", action: close)
+            Button("Add to Essentials") {
+                setPlacement(.favorite)
+            }
+            .disabled(tab.isFavorite && tab.parentFolderID == nil)
+
+            Button("Pin Tab") {
+                setPlacement(.pinned)
+            }
+            .disabled(tab.isPinned && tab.parentFolderID == nil)
+
+            Button("Move to Tabs") {
+                setPlacement(.regular)
+            }
+            .disabled(!tab.isPinned && !tab.isFavorite && tab.parentFolderID == nil)
+
+            Divider()
+
+            Button("Close Tab", role: .destructive, action: close)
         }
         .accessibilityLabel(tab.title)
     }

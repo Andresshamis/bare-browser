@@ -19,6 +19,9 @@ public struct CommandRouter: Sendable {
         case goBack
         case goForward
         case closeTab
+        case pinTab
+        case addTabToEssentials
+        case moveTabToRegular
         case splitActiveTab
     }
 
@@ -27,6 +30,9 @@ public struct CommandRouter: Sendable {
         public var canGoForward: Bool
         public var canReload: Bool
         public var canCloseTab: Bool
+        public var canPinTab: Bool
+        public var canAddTabToEssentials: Bool
+        public var canMoveTabToRegular: Bool
         public var isLoading: Bool
 
         public init(
@@ -34,12 +40,18 @@ public struct CommandRouter: Sendable {
             canGoForward: Bool = false,
             canReload: Bool = false,
             canCloseTab: Bool = false,
+            canPinTab: Bool = false,
+            canAddTabToEssentials: Bool = false,
+            canMoveTabToRegular: Bool = false,
             isLoading: Bool = false
         ) {
             self.canGoBack = canGoBack
             self.canGoForward = canGoForward
             self.canReload = canReload
             self.canCloseTab = canCloseTab
+            self.canPinTab = canPinTab
+            self.canAddTabToEssentials = canAddTabToEssentials
+            self.canMoveTabToRegular = canMoveTabToRegular
             self.isLoading = isLoading
         }
     }
@@ -140,6 +152,12 @@ public struct CommandRouter: Sendable {
                 return availability.canGoForward
             case .closeTab:
                 return availability.canCloseTab
+            case .pinTab:
+                return availability.canPinTab
+            case .addTabToEssentials:
+                return availability.canAddTabToEssentials
+            case .moveTabToRegular:
+                return availability.canMoveTabToRegular
             case .splitActiveTab:
                 return false
             }
@@ -181,6 +199,27 @@ public struct CommandRouter: Sendable {
             subtitle: "Selected tab",
             symbolName: "xmark",
             aliases: ["close", "close tab", "close current tab"]
+        ),
+        BrowserActionSuggestion(
+            action: .pinTab,
+            title: "Pin Tab",
+            subtitle: "Move selected tab to Pinned",
+            symbolName: "pin",
+            aliases: ["pin", "pin tab", "pin current tab", "move to pinned"]
+        ),
+        BrowserActionSuggestion(
+            action: .addTabToEssentials,
+            title: "Add to Essentials",
+            subtitle: "Move selected tab to Essentials",
+            symbolName: "sparkle",
+            aliases: ["essential", "essentials", "add to essentials", "favorite tab", "move to essentials"]
+        ),
+        BrowserActionSuggestion(
+            action: .moveTabToRegular,
+            title: "Move to Tabs",
+            subtitle: "Return selected tab to regular Tabs",
+            symbolName: "rectangle.stack",
+            aliases: ["move to tabs", "regular tab", "unpin tab", "remove from essentials"]
         )
     ]
 
