@@ -27,6 +27,95 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.folders.first(where: { $0.id == folder?.id })?.tabIDs, [tab?.id].compactMap { $0 })
     }
 
+    func testTabPlacementMovesBetweenSectionsAndPreservesSelection() throws {
+        let store = BrowserStore()
+        let tab = try XCTUnwrap(store.createTab(title: "Docs", url: URL(string: "https://docs.example.com")!))
+        let spaceID = try XCTUnwrap(store.selectedSpaceID)
+
+        XCTAssertTrue(store.setTabPlacement(.pinned, for: tab.id))
+        XCTAssertEqual(store.selectedTabID, tab.id)
+        XCTAssertEqual(store.spaces.first(where: { $0.id == spaceID })?.pinnedTabIDs, [tab.id])
+        XCTAssertFalse(store.spaces.first(where: { $0.id == spaceID })?.regularTabIDs.contains(tab.id) ?? true)
+        XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isPinned, true)
+        XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isFavorite, false)
+
+        XCTAssertTrue(store.setTabPlacement(.favorite, for: tab.id))
+        XCTAssertEqual(store.selectedTabID, tab.id)
+        XCTAssertEqual(store.spaces.first(where: { $0.id == spaceID })?.favoriteTabIDs.last, tab.id)
+        XCTAssertEqual(store.spaces.first(where: { $0.id == spaceID })?.favoriteTabIDs.filter { $0 == tab.id }.count, 1)
+        XCTAssertFalse(store.spaces.first(where: { $0.id == spaceID })?.pinnedTabIDs.contains(tab.id) ?? true)
+        XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isPinned, false)
+        XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isFavorite, true)
+
+        XCTAssertTrue(store.setTabPlacement(.regular, for: tab.id))
+        XCTAssertEqual(store.selectedTabID, tab.id)
+        XCTAssertEqual(store.spaces.first(where: { $0.id == spaceID })?.regularTabIDs.last, tab.id)
+        XCTAssertFalse(store.spaces.first(where: { $0.id == spaceID })?.favoriteTabIDs.contains(tab.id) ?? true)
+        XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isPinned, false)
+        XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isFavorite, false)
+    }
+
+    func testPromotingFolderTabRemovesFolderMembership() throws {
+        let store = BrowserStore()
+        let spaceID = try XCTUnwrap(store.selectedSpaceID)
+        let folder = try XCTUnwrap(store.createFolder(name: "Research", in: spaceID))
+        let tab = try XCTUnwrap(store.createTab(
+            title: "Foldered",
+            url: URL(string: "https://folder.example.com")!,
+            in: spaceID,
+            folderID: folder.id
+        ))
+
+        XCTAssertTrue(store.setTabPlacement(.favorite, for: tab.id))
+
+        let updatedTab = try XCTUnwrap(store.tabs.first { $0.id == tab.id })
+        let updatedSpace = try XCTUnwrap(store.spaces.first { $0.id == spaceID })
+        XCTAssertNil(updatedTab.parentFolderID)
+        XCTAssertTrue(updatedTab.isFavorite)
+        XCTAssertFalse(updatedTab.isPinned)
+        XCTAssertEqual(updatedSpace.favoriteTabIDs.last, tab.id)
+        XCTAssertEqual(updatedSpace.favoriteTabIDs.filter { $0 == tab.id }.count, 1)
+        XCTAssertFalse(updatedSpace.pinnedTabIDs.contains(tab.id))
+        XCTAssertFalse(updatedSpace.regularTabIDs.contains(tab.id))
+        XCTAssertFalse(store.folders.first(where: { $0.id == folder.id })?.tabIDs.contains(tab.id) ?? true)
+    }
+
+    func testTabPlacementRoundTripsThroughSnapshotPersistenceShape() throws {
+        let store = BrowserStore()
+        let tab = try XCTUnwrap(store.createTab(title: "Pinned", url: URL(string: "https://pinned.example.com")!))
+        XCTAssertTrue(store.setTabPlacement(.pinned, for: tab.id))
+
+        let data = try JSONEncoder().encode(store.persistentSnapshot(date: Date(timeIntervalSince1970: 12)))
+        let decoded = try JSONDecoder().decode(BrowserSessionSnapshot.self, from: data)
+        let restored = BrowserStore(snapshot: decoded)
+
+        let restoredTab = try XCTUnwrap(restored.tabs.first { $0.id == tab.id })
+        let restoredSpace = try XCTUnwrap(restored.spaces.first { $0.id == restoredTab.parentSpaceID })
+        XCTAssertTrue(restoredTab.isPinned)
+        XCTAssertFalse(restoredTab.isFavorite)
+        XCTAssertEqual(restoredSpace.pinnedTabIDs, [tab.id])
+        XCTAssertFalse(restoredSpace.regularTabIDs.contains(tab.id))
+    }
+
+    func testCommandBarPlacementActionsMoveSelectedTab() throws {
+        let store = BrowserStore()
+        let tab = try XCTUnwrap(store.createTab(title: "Actions", url: URL(string: "https://actions.example.com")!))
+        let spaceID = try XCTUnwrap(store.selectedSpaceID)
+
+        store.submitCommandInput("pin tab")
+        XCTAssertEqual(store.spaces.first(where: { $0.id == spaceID })?.pinnedTabIDs, [tab.id])
+        XCTAssertEqual(store.activeTab?.isPinned, true)
+
+        store.submitCommandInput("add to essentials")
+        XCTAssertEqual(store.spaces.first(where: { $0.id == spaceID })?.favoriteTabIDs.last, tab.id)
+        XCTAssertEqual(store.activeTab?.isFavorite, true)
+
+        store.submitCommandInput("move to tabs")
+        XCTAssertEqual(store.spaces.first(where: { $0.id == spaceID })?.regularTabIDs.last, tab.id)
+        XCTAssertEqual(store.activeTab?.isPinned, false)
+        XCTAssertEqual(store.activeTab?.isFavorite, false)
+    }
+
     func testSnapshotRoundTripsThroughJSON() throws {
         let store = BrowserStore()
         _ = store.createTab(url: URL(string: "https://example.com"))

@@ -101,11 +101,15 @@ public struct CommandBarView: View {
     }
 
     private var browserActionAvailability: CommandRouter.BrowserActionAvailability {
-        CommandRouter.BrowserActionAvailability(
+        let activeTab = store.activeTab
+        return CommandRouter.BrowserActionAvailability(
             canGoBack: webViewState.canGoBack,
             canGoForward: webViewState.canGoForward,
-            canReload: store.activeTab?.url != nil,
-            canCloseTab: store.activeTab != nil,
+            canReload: activeTab?.url != nil,
+            canCloseTab: activeTab != nil,
+            canPinTab: activeTab.map { !$0.isPinned || $0.isFavorite || $0.parentFolderID != nil } ?? false,
+            canAddTabToEssentials: activeTab.map { !$0.isFavorite || $0.isPinned || $0.parentFolderID != nil } ?? false,
+            canMoveTabToRegular: activeTab.map { $0.isPinned || $0.isFavorite || $0.parentFolderID != nil } ?? false,
             isLoading: webViewState.isLoading
         )
     }
@@ -136,7 +140,7 @@ public struct CommandBarView: View {
             }
             webViewState.dispatch(.goForward)
             return true
-        case .closeTab, .splitActiveTab:
+        case .closeTab, .pinTab, .addTabToEssentials, .moveTabToRegular, .splitActiveTab:
             return false
         }
     }

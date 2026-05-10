@@ -20,7 +20,7 @@ Current coverage:
 - Download filename sanitization, risk classification, safe destination selection, and pending confirmation state.
 - Site permission origin sanitization, supported/unsupported defaults, stored allow/deny decisions, pending store state, restored public decisions, and private-profile persistence exclusion.
 - Profile metadata for persistent and private browsing.
-- Browser store relationships for spaces, folders, tabs, and session snapshots.
+- Browser store relationships for spaces, folders, tabs, tab placement across Essentials/Pinned/Tabs, and session snapshots.
 - Session persistence boundary filtering for private profiles, private site permission decisions, dependent browser state, encoded payloads, and all-private fallback.
 - SQLite session persistence save/load, missing-store fallback, unsupported/corrupt/unreadable store recovery with stale file removal, private session and private permission exclusion from the on-disk payload, and repair-time disk scrubbing.
 - SQLite local history persistence save/load, private history exclusion from the on-disk payload, repair-time normalization/scrubbing, unsupported/corrupt recovery with stale file removal, and generic recovery messaging.
