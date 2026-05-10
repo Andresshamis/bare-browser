@@ -30,6 +30,11 @@ final class BrowserStoreTests: XCTestCase {
     func testSnapshotRoundTripsThroughJSON() throws {
         let store = BrowserStore()
         _ = store.createTab(url: URL(string: "https://example.com"))
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let origin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://camera.example")!))
+        _ = store.requestSitePermission(kind: .camera, origin: origin, profileID: profileID)
+        let requestID = try XCTUnwrap(store.pendingSitePermissionRequest?.id)
+        _ = store.resolvePendingSitePermission(.allow, requestID: requestID)
 
         let snapshot = store.snapshot(date: Date(timeIntervalSince1970: 10))
         let data = try JSONEncoder().encode(snapshot)
@@ -38,6 +43,14 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(decoded.schemaVersion, 1)
         XCTAssertEqual(decoded.tabs.count, snapshot.tabs.count)
         XCTAssertEqual(decoded.selectedTabID, snapshot.selectedTabID)
+        XCTAssertEqual(decoded.sitePermissionSettings.count, 1)
+        XCTAssertEqual(decoded.sitePermissionSettings.first?.origin.serializedOrigin, "https://camera.example")
+
+        var legacyObject = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        legacyObject.removeValue(forKey: "sitePermissionSettings")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacyObject)
+        let legacyDecoded = try JSONDecoder().decode(BrowserSessionSnapshot.self, from: legacyData)
+        XCTAssertTrue(legacyDecoded.sitePermissionSettings.isEmpty)
     }
 
     func testWebViewUpdateRecordsPublicHistoryEntry() throws {
@@ -328,6 +341,46 @@ final class BrowserStoreTests: XCTestCase {
             store.requestSitePermission(kind: .popupWindow, origin: origin, profileID: profileID),
             .allow
         )
+    }
+
+    func testRestoredSitePermissionSettingsAreLoadedFromSnapshot() throws {
+        var snapshot = SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 11))
+        let profileID = try XCTUnwrap(snapshot.profiles.first?.id)
+        let origin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://blocked.example")!))
+        snapshot.sitePermissionSettings = [
+            SitePermissionSetting(
+                kind: .camera,
+                origin: origin,
+                profileID: profileID,
+                decision: .deny,
+                persistsBeyondSession: true,
+                updatedAt: Date(timeIntervalSince1970: 12)
+            )
+        ]
+        let store = BrowserStore(snapshot: snapshot)
+
+        let result = store.requestSitePermission(kind: .camera, origin: origin, profileID: profileID)
+
+        XCTAssertEqual(result, .deny(reason: "Camera is blocked for this site."))
+        XCTAssertNil(store.pendingSitePermissionRequest)
+        XCTAssertEqual(store.sitePermissionSettings, snapshot.sitePermissionSettings)
+    }
+
+    func testResolvingSitePermissionPersistsThroughConfiguredWriter() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let origin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://persisted.example")!))
+        _ = store.requestSitePermission(kind: .popupWindow, origin: origin, profileID: profileID)
+        let requestID = try XCTUnwrap(store.pendingSitePermissionRequest?.id)
+
+        _ = store.resolvePendingSitePermission(.allow, requestID: requestID)
+
+        let savedSettings = try XCTUnwrap(spy.savedSnapshots.last?.sitePermissionSettings)
+        XCTAssertEqual(savedSettings.count, 1)
+        XCTAssertEqual(savedSettings.first?.origin.serializedOrigin, "https://persisted.example")
+        XCTAssertEqual(savedSettings.first?.decision, .allow)
+        XCTAssertEqual(spy.fallbacks.count, spy.savedSnapshots.count)
     }
 
     func testUnsupportedPermissionIsDeniedWithoutPendingState() {
@@ -625,5 +678,15 @@ private final class LocalHistoryPersistenceSpy: LocalHistoryPersisting {
     func saveHistory(_ entries: [BrowserHistoryEntry], profiles: [BrowserProfile]) throws {
         savedEntries.append(entries)
         savedProfiles.append(profiles)
+    }
+}
+
+private final class BrowserStoreSessionPersistenceSpy: SessionSnapshotPersisting {
+    var savedSnapshots: [BrowserSessionSnapshot] = []
+    var fallbacks: [BrowserSessionSnapshot] = []
+
+    func saveSnapshot(_ snapshot: BrowserSessionSnapshot, fallback: BrowserSessionSnapshot) throws {
+        savedSnapshots.append(snapshot)
+        fallbacks.append(fallback)
     }
 }

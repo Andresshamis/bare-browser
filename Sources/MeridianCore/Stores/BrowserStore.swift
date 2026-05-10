@@ -35,7 +35,7 @@ public final class BrowserStore: ObservableObject {
         urlSecurityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
         downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy(),
         sitePermissionPolicy: SitePermissionPolicy = SitePermissionPolicy(),
-        sitePermissionSettings: [SitePermissionSetting] = [],
+        sitePermissionSettings: [SitePermissionSetting]? = nil,
         localHistoryStore: LocalHistoryStore = LocalHistoryStore(),
         lastUserMessage: String? = nil,
         sessionPersistence: SessionSnapshotPersisting? = nil,
@@ -55,7 +55,7 @@ public final class BrowserStore: ObservableObject {
         self.isChoosingDownloadDestination = false
         self.lastUserMessage = lastUserMessage
         self.pendingSitePermissionRequest = nil
-        self.sitePermissionSettings = sitePermissionSettings
+        self.sitePermissionSettings = sitePermissionSettings ?? snapshot.sitePermissionSettings
         self.historyEntries = localHistoryStore.entries
         self.commandRouter = commandRouter
         self.urlSecurityPolicy = urlSecurityPolicy
@@ -97,7 +97,8 @@ public final class BrowserStore: ObservableObject {
             splitViews: splitViews,
             selectedSpaceID: selectedSpaceID,
             selectedTabID: selectedTabID,
-            capturedAt: date
+            capturedAt: date,
+            sitePermissionSettings: sitePermissionSettings
         )
     }
 
@@ -462,8 +463,12 @@ public final class BrowserStore: ObservableObject {
             return nil
         }
 
+        let shouldPersist: Bool
         if let setting = sitePermissionPolicy.setting(for: request, decision: decision, date: date) {
             upsertSitePermissionSetting(setting)
+            shouldPersist = true
+        } else {
+            shouldPersist = false
         }
 
         pendingSitePermissionRequest = nil
@@ -475,6 +480,9 @@ public final class BrowserStore: ObservableObject {
             lastUserMessage = request.promptMessage
         case .deny(let reason):
             lastUserMessage = reason
+        }
+        if shouldPersist {
+            persistSession(date: date)
         }
         return evaluation
     }
