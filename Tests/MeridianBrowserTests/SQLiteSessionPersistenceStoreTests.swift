@@ -25,12 +25,22 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
         let databaseURL = directory.appendingPathComponent("Session.sqlite3")
         let fallback = SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 2))
         let store = BrowserStore(snapshot: fallback)
+        let publicProfileID = try XCTUnwrap(store.activeProfile?.id)
         let publicSpaceID = try XCTUnwrap(store.selectedSpaceID)
         let publicTab = try XCTUnwrap(store.createTab(
             title: "Public Research",
             url: URL(string: "https://public.example/articles"),
             in: publicSpaceID
         ))
+        let publicPermissionOrigin = try XCTUnwrap(
+            SitePermissionOrigin(url: URL(string: "https://camera.example")!)
+        )
+        _ = store.requestSitePermission(kind: .camera, origin: publicPermissionOrigin, profileID: publicProfileID)
+        _ = store.resolvePendingSitePermission(
+            .allow,
+            requestID: try XCTUnwrap(store.pendingSitePermissionRequest?.id),
+            date: Date(timeIntervalSince1970: 2.5)
+        )
         let privateProfile = store.createProfile(name: "Private Session", ephemeral: true)
         let privateSpace = store.createSpace(name: "Private", profileID: privateProfile.id)
         let privateTab = try XCTUnwrap(store.createTab(
@@ -38,6 +48,19 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
             url: URL(string: "https://private.example/secret?token=fixture"),
             in: privateSpace.id
         ))
+        let privatePermissionOrigin = try XCTUnwrap(
+            SitePermissionOrigin(url: URL(string: "https://private-permission.example")!)
+        )
+        _ = store.requestSitePermission(
+            kind: .microphone,
+            origin: privatePermissionOrigin,
+            profileID: privateProfile.id
+        )
+        _ = store.resolvePendingSitePermission(
+            .allow,
+            requestID: try XCTUnwrap(store.pendingSitePermissionRequest?.id),
+            date: Date(timeIntervalSince1970: 2.75)
+        )
         let persistence = SQLiteSessionPersistenceStore(databaseURL: databaseURL)
 
         try persistence.saveSnapshot(
@@ -51,11 +74,15 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
         XCTAssertFalse(result.snapshot.profiles.contains { $0.id == privateProfile.id })
         XCTAssertFalse(result.snapshot.spaces.contains { $0.id == privateSpace.id })
         XCTAssertFalse(result.snapshot.tabs.contains { $0.id == privateTab.id })
+        XCTAssertEqual(result.snapshot.sitePermissionSettings.count, 1)
+        XCTAssertEqual(result.snapshot.sitePermissionSettings.first?.origin.serializedOrigin, "https://camera.example")
         XCTAssertEqual(result.snapshot.selectedSpaceID, publicSpaceID)
         XCTAssertEqual(result.snapshot.selectedTabID, publicTab.id)
 
         let rawDatabase = String(decoding: try Data(contentsOf: databaseURL), as: UTF8.self)
+        XCTAssertTrue(rawDatabase.contains("camera.example"))
         XCTAssertFalse(rawDatabase.contains("private.example"))
+        XCTAssertFalse(rawDatabase.contains("private-permission.example"))
         XCTAssertFalse(rawDatabase.contains("secret"))
         XCTAssertFalse(rawDatabase.contains("token"))
         XCTAssertFalse(rawDatabase.contains(privateProfile.id.uuidString))
@@ -67,12 +94,22 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
         let databaseURL = directory.appendingPathComponent("Session.sqlite3")
         let fallback = SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 4))
         let store = BrowserStore(snapshot: fallback)
+        let publicProfileID = try XCTUnwrap(store.activeProfile?.id)
         let publicSpaceID = try XCTUnwrap(store.selectedSpaceID)
         let publicTab = try XCTUnwrap(store.createTab(
             title: "Public Research",
             url: URL(string: "https://public.example/articles"),
             in: publicSpaceID
         ))
+        let publicPermissionOrigin = try XCTUnwrap(
+            SitePermissionOrigin(url: URL(string: "https://camera.example")!)
+        )
+        _ = store.requestSitePermission(kind: .camera, origin: publicPermissionOrigin, profileID: publicProfileID)
+        _ = store.resolvePendingSitePermission(
+            .allow,
+            requestID: try XCTUnwrap(store.pendingSitePermissionRequest?.id),
+            date: Date(timeIntervalSince1970: 4.5)
+        )
         let privateProfile = store.createProfile(name: "Private Session", ephemeral: true)
         let privateSpace = store.createSpace(name: "Private", profileID: privateProfile.id)
         let privateTab = try XCTUnwrap(store.createTab(
@@ -80,6 +117,19 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
             url: URL(string: "https://private.example/secret?token=fixture"),
             in: privateSpace.id
         ))
+        let privatePermissionOrigin = try XCTUnwrap(
+            SitePermissionOrigin(url: URL(string: "https://private-permission.example")!)
+        )
+        _ = store.requestSitePermission(
+            kind: .microphone,
+            origin: privatePermissionOrigin,
+            profileID: privateProfile.id
+        )
+        _ = store.resolvePendingSitePermission(
+            .allow,
+            requestID: try XCTUnwrap(store.pendingSitePermissionRequest?.id),
+            date: Date(timeIntervalSince1970: 4.75)
+        )
         let invalidSnapshot = store.snapshot(date: Date(timeIntervalSince1970: 5))
         let persistence = SQLiteSessionPersistenceStore(databaseURL: databaseURL)
 
@@ -90,6 +140,7 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
         )
         let originalDatabase = try rawDatabaseText(at: databaseURL)
         XCTAssertTrue(originalDatabase.contains("private.example"))
+        XCTAssertTrue(originalDatabase.contains("private-permission.example"))
         XCTAssertTrue(originalDatabase.contains(privateProfile.id.uuidString))
 
         let result = persistence.loadSnapshot(fallback: fallback)
@@ -99,12 +150,16 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
         XCTAssertFalse(result.snapshot.profiles.contains { $0.id == privateProfile.id })
         XCTAssertFalse(result.snapshot.spaces.contains { $0.id == privateSpace.id })
         XCTAssertFalse(result.snapshot.tabs.contains { $0.id == privateTab.id })
+        XCTAssertEqual(result.snapshot.sitePermissionSettings.count, 1)
+        XCTAssertEqual(result.snapshot.sitePermissionSettings.first?.origin.serializedOrigin, "https://camera.example")
         XCTAssertEqual(result.snapshot.selectedSpaceID, publicSpaceID)
         XCTAssertEqual(result.snapshot.selectedTabID, publicTab.id)
 
         let repairedDatabase = try rawDatabaseText(at: databaseURL)
         XCTAssertTrue(repairedDatabase.contains("public.example"))
+        XCTAssertTrue(repairedDatabase.contains("camera.example"))
         XCTAssertFalse(repairedDatabase.contains("private.example"))
+        XCTAssertFalse(repairedDatabase.contains("private-permission.example"))
         XCTAssertFalse(repairedDatabase.contains("secret"))
         XCTAssertFalse(repairedDatabase.contains("token"))
         XCTAssertFalse(repairedDatabase.contains("fixture"))

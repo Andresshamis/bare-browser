@@ -32,6 +32,7 @@
 - SQLite-backed session persistence saves only snapshots that pass through the private-state filtering boundary. Missing, unreadable, unsupported, or privacy-invalid saved state falls back to a seeded public session without logging saved URLs or private metadata.
 - SQLite-backed local history records only HTTP(S) visits for non-ephemeral profiles. Private browsing profile visits are ignored before entering history state and filtered again before disk writes. Retained and restored history URLs strip userinfo, fragments, and known sensitive query parameters while preserving ordinary query items for page fidelity. Corrupt, unsupported, or privacy-invalid history stores recover with generic non-URL-bearing messages.
 - Site permission decisions now pass through `SitePermissionPolicy`, which models camera, microphone, geolocation, notifications, autoplay, and pop-up/new-window behavior with conservative defaults.
+- Public-profile allow/deny site permission decisions are included in session snapshots only after the persistence boundary verifies they are marked safe beyond the current session. Private-profile permission decisions remain session-only and are filtered from SQLite session payloads and repair-time scrubs.
 - Pop-up/new-window requests and WebKit media-capture permission callbacks are routed through store state before any grant; unsupported permission kinds are denied with an explicit message.
 - Autoplay is configured to require a user gesture by default.
 - App Sandbox entitlement file includes only sandbox and outbound network client entitlement.
@@ -41,7 +42,7 @@
 ## Required Follow-Up
 
 - Add end-to-end local WebKit download fixture tests once the Xcode UI test host exists.
-- Extend site permission UI and persistence beyond the first in-memory camera, microphone, pop-up, and autoplay policy slice.
+- Extend site permission UI beyond the first camera, microphone, pop-up, and autoplay policy slice.
 - Expand history management UI beyond active-profile clearing and command-bar result deletion without weakening private-profile filtering.
 - Revisit geolocation and notification permissions if future macOS WebKit SDKs expose safe delegate callbacks.
 - Add automated profile isolation tests using local web fixtures.

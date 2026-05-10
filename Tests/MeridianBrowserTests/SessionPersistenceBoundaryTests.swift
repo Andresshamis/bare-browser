@@ -12,6 +12,16 @@ final class SessionPersistenceBoundaryTests: XCTestCase {
             url: URL(string: "https://public.example"),
             in: publicSpaceID
         ))
+        let publicProfileID = try XCTUnwrap(store.activeProfile?.id)
+        let publicPermissionOrigin = try XCTUnwrap(
+            SitePermissionOrigin(url: URL(string: "https://camera.example")!)
+        )
+        _ = store.requestSitePermission(kind: .camera, origin: publicPermissionOrigin, profileID: publicProfileID)
+        _ = store.resolvePendingSitePermission(
+            .allow,
+            requestID: try XCTUnwrap(store.pendingSitePermissionRequest?.id),
+            date: Date(timeIntervalSince1970: 1)
+        )
         let privateProfile = store.createProfile(name: "Private Session", ephemeral: true)
         let privateSpace = store.createSpace(name: "Private Space", profileID: privateProfile.id)
         let privateFolder = try XCTUnwrap(store.createFolder(name: "Private Folder", in: privateSpace.id))
@@ -21,6 +31,19 @@ final class SessionPersistenceBoundaryTests: XCTestCase {
             in: privateSpace.id,
             folderID: privateFolder.id
         ))
+        let privatePermissionOrigin = try XCTUnwrap(
+            SitePermissionOrigin(url: URL(string: "https://private-permission.example")!)
+        )
+        _ = store.requestSitePermission(
+            kind: .microphone,
+            origin: privatePermissionOrigin,
+            profileID: privateProfile.id
+        )
+        _ = store.resolvePendingSitePermission(
+            .allow,
+            requestID: try XCTUnwrap(store.pendingSitePermissionRequest?.id),
+            date: Date(timeIntervalSince1970: 2)
+        )
         let splitViewID = SplitViewID()
 
         store.splitViews.append(SplitViewLayout(
@@ -42,6 +65,9 @@ final class SessionPersistenceBoundaryTests: XCTestCase {
         XCTAssertFalse(persisted.folders.contains { $0.id == privateFolder.id })
         XCTAssertFalse(persisted.tabs.contains { $0.id == privateTab.id })
         XCTAssertFalse(persisted.splitViews.contains { $0.id == splitViewID })
+        XCTAssertEqual(persisted.sitePermissionSettings.count, 1)
+        XCTAssertEqual(persisted.sitePermissionSettings.first?.origin.serializedOrigin, "https://camera.example")
+        XCTAssertEqual(persisted.sitePermissionSettings.first?.profileID, publicProfileID)
         XCTAssertNotEqual(persisted.selectedSpaceID, privateSpace.id)
         XCTAssertNotEqual(persisted.selectedTabID, privateTab.id)
         XCTAssertEqual(persisted.selectedSpaceID, publicSpaceID)
@@ -54,6 +80,7 @@ final class SessionPersistenceBoundaryTests: XCTestCase {
         XCTAssertFalse(lowercasedPayload.contains(privateProfile.id.uuidString.lowercased()))
         XCTAssertFalse(lowercasedPayload.contains(privateSpace.id.uuidString.lowercased()))
         XCTAssertFalse(lowercasedPayload.contains(privateTab.id.uuidString.lowercased()))
+        XCTAssertFalse(payload.contains("private-permission.example"))
     }
 
     func testPersistentSnapshotFallsBackWhenOnlyPrivateStateRemains() {
