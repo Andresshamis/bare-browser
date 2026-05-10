@@ -20,12 +20,13 @@ Meridian Browser is a native macOS, SwiftUI-first, WebKit-based browser. The ear
 ## Current Design Decisions
 
 - Profiles carry stable `websiteDataStoreID` values. Persistent profiles use `WKWebsiteDataStore.dataStore(forIdentifier:)`; private profiles use `.nonPersistent()`. If imported persistent metadata is missing a store identifier, the model repairs it from the stable profile ID rather than using WebKit's shared default store.
+- Persistent profile creation goes through `BrowserStore.createPersistentProfile(name:)`, which creates a stable public profile and selects or seeds a default space/tab context. Sidebar, native menu, and command-bar profile switching all route through `BrowserStore.switchProfile(_:)`. Private profile creation remains separate and session-only.
 - `BrowserStore.snapshot(...)` is the live runtime state shape. Disk persistence uses `SQLiteSessionPersistenceStore`, which stores one encoded snapshot only after routing through `SessionPersistenceBoundary` to filter private profiles and dependent spaces, folders, tabs, split views, selected IDs, and restoration metadata before encoding.
 - App startup loads the SQLite session snapshot from Application Support. Missing, unreadable, unsupported, or privacy-invalid saved state falls back to `SessionSnapshotFactory.initial(...)` with a generic in-app message and no URL-bearing diagnostics.
 - Favorites/essentials are currently space-scoped. They are stored on `BrowserSpace.favoriteTabIDs` so each space can have its own persistent anchors.
 - Local history uses `LocalHistoryStore` plus `SQLiteLocalHistoryPersistenceStore`. It records only HTTP(S) visits for non-ephemeral profiles, normalizes retained URLs by stripping userinfo, fragments, and known sensitive query parameters, collapses restored duplicate profile/URL entries deterministically, and scopes command-bar history queries to the active profile. Private profile visits are ignored at the service/store boundary and filtered again before disk writes.
 - The app lazily creates a `WKWebView` for the selected tab only. A later web view pool can keep recent tabs warm without instantiating all saved tabs.
-- The command bar is native SwiftUI. It routes direct URLs, search queries, open-tab results, active-profile history results, and initial creation commands.
+- The command bar is native SwiftUI. It routes direct URLs, search queries, persistent profile creation/switching, active-profile open-tab results, active-profile history results, and initial creation commands.
 
 ## Near-Term Gaps
 

@@ -88,6 +88,14 @@ public final class BrowserStore: ObservableObject {
         return profiles.first { $0.id == profileID }
     }
 
+    public var persistentProfiles: [BrowserProfile] {
+        profiles.filter { !$0.isEphemeral }
+    }
+
+    public var suggestedPersistentProfileName: String {
+        "Profile \(persistentProfiles.count + 1)"
+    }
+
     public func snapshot(date: Date = Date()) -> BrowserSessionSnapshot {
         BrowserSessionSnapshot(
             profiles: profiles,
@@ -146,6 +154,16 @@ public final class BrowserStore: ObservableObject {
             ? BrowserProfile.privateBrowsing()
             : BrowserProfile(name: cleanedName.isEmpty ? "Profile \(profiles.count + 1)" : cleanedName)
         profiles.append(profile)
+        persistSession()
+        return profile
+    }
+
+    @discardableResult
+    public func createPersistentProfile(name: String) -> BrowserProfile {
+        let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let profile = BrowserProfile(name: cleanedName.isEmpty ? suggestedPersistentProfileName : cleanedName)
+        profiles.append(profile)
+        selectProfileContext(profile, date: Date())
         persistSession()
         return profile
     }
@@ -271,6 +289,7 @@ public final class BrowserStore: ObservableObject {
     public func commandBarResults(
         for query: String,
         openTabLimit: Int = 5,
+        profileLimit: Int = 5,
         historyLimit: Int = 5,
         browserActionAvailability: CommandRouter.BrowserActionAvailability? = nil
     ) -> [CommandBarResult] {
@@ -283,12 +302,14 @@ public final class BrowserStore: ObservableObject {
             commandRouter.browserActionSuggestions(for: trimmed, availability: availability)
                 .map(CommandBarResult.browserAction)
         } ?? []
+        let profileResults = matchingProfiles(for: trimmed, limit: profileLimit)
+            .map(CommandBarResult.profile)
         let tabResults = matchingOpenTabs(for: trimmed, limit: openTabLimit)
             .map(CommandBarResult.openTab)
         let matchedHistory = historyResults(for: trimmed, limit: historyLimit)
             .map(CommandBarResult.history)
 
-        return actionResults + tabResults + matchedHistory
+        return actionResults + profileResults + tabResults + matchedHistory
     }
 
     public func activateCommandBarResult(
@@ -299,6 +320,8 @@ public final class BrowserStore: ObservableObject {
         case .browserAction(let action):
             perform(.browserAction(action.action), browserActionHandler: browserActionHandler)
             return
+        case .profile(let profile):
+            _ = switchProfile(profile.id)
         case .openTab(let tab):
             selectTab(tab.id)
         case .history(let entry):
@@ -328,10 +351,12 @@ public final class BrowserStore: ObservableObject {
             _ = createSpace(name: name)
         case .createFolder(let name):
             _ = createFolder(name: name)
+        case .createProfile(let name):
+            _ = createPersistentProfile(name: name)
         case .switchSpace(let id):
             selectSpace(id)
         case .switchProfile(let id):
-            switchToProfile(id)
+            _ = switchProfile(id)
         case .browserAction(let action):
             if !performBrowserAction(action, handler: browserActionHandler) {
                 lastUserMessage = Self.unavailableMessage(for: action)
@@ -695,14 +720,89 @@ public final class BrowserStore: ObservableObject {
         lastUserMessage = nil
     }
 
-    private func switchToProfile(_ id: ProfileID) {
-        guard profiles.contains(where: { $0.id == id }) else {
-            return
+    @discardableResult
+    public func switchProfile(_ id: ProfileID) -> Bool {
+        guard let profile = profiles.first(where: { $0.id == id }) else {
+            return false
         }
-        if let space = spaces.first(where: { $0.profileID == id }) {
-            selectSpace(space.id)
+
+        selectProfileContext(profile, date: Date())
+        persistSession()
+        return true
+    }
+
+    private func selectProfileContext(_ profile: BrowserProfile, date: Date) {
+        if let existingSpace = spaces
+            .filter({ $0.profileID == profile.id })
+            .max(by: { $0.lastActiveDate < $1.lastActiveDate }) {
+            selectedSpaceID = existingSpace.id
+            if let tabID = selectedTabID(in: existingSpace) {
+                selectedTabID = tabID
+                updateSpace(existingSpace.id) { space in
+                    space.selectedTabID = tabID
+                    space.lastActiveDate = date
+                }
+                updateTab(tabID) { tab in
+                    tab.lastActiveDate = date
+                }
+            } else {
+                createStartTab(in: existingSpace.id, profileID: profile.id, date: date)
+            }
         } else {
-            _ = createSpace(name: profiles.first(where: { $0.id == id })?.name ?? "Profile", profileID: id)
+            createDefaultSpaceAndTab(for: profile, date: date)
+        }
+        refreshActivePageSecurityStatus()
+    }
+
+    private func selectedTabID(in space: BrowserSpace) -> TabID? {
+        let candidateIDs = ([space.selectedTabID].compactMap { $0 })
+            + space.favoriteTabIDs
+            + space.pinnedTabIDs
+            + space.regularTabIDs
+
+        return candidateIDs.first { candidateID in
+            tabs.contains { tab in
+                tab.id == candidateID
+                    && tab.parentSpaceID == space.id
+                    && tab.profileID == space.profileID
+            }
+        }
+    }
+
+    private func createDefaultSpaceAndTab(for profile: BrowserProfile, date: Date) {
+        var space = BrowserSpace(
+            name: profile.isEphemeral ? "Private" : profile.name,
+            profileID: profile.id,
+            lastActiveDate: date
+        )
+        let tab = BrowserTab(
+            title: "Start Page",
+            parentSpaceID: space.id,
+            profileID: profile.id,
+            lastActiveDate: date
+        )
+        space.regularTabIDs = [tab.id]
+        space.selectedTabID = tab.id
+
+        spaces.append(space)
+        tabs.append(tab)
+        selectedSpaceID = space.id
+        selectedTabID = tab.id
+    }
+
+    private func createStartTab(in spaceID: SpaceID, profileID: ProfileID, date: Date) {
+        let tab = BrowserTab(
+            title: "Start Page",
+            parentSpaceID: spaceID,
+            profileID: profileID,
+            lastActiveDate: date
+        )
+        tabs.append(tab)
+        selectedTabID = tab.id
+        updateSpace(spaceID) { space in
+            space.regularTabIDs.append(tab.id)
+            space.selectedTabID = tab.id
+            space.lastActiveDate = date
         }
     }
 
@@ -786,14 +886,31 @@ public final class BrowserStore: ObservableObject {
     }
 
     private func matchingOpenTabs(for query: String, limit: Int) -> [BrowserTab] {
-        guard limit > 0 else {
+        guard limit > 0,
+              let activeProfileID = activeProfile?.id else {
             return []
         }
         return Array(
             tabs
                 .filter { tab in
-                    tab.title.localizedCaseInsensitiveContains(query)
-                        || (tab.url?.absoluteString.localizedCaseInsensitiveContains(query) ?? false)
+                    tab.profileID == activeProfileID
+                        && (
+                            tab.title.localizedCaseInsensitiveContains(query)
+                                || (tab.url?.absoluteString.localizedCaseInsensitiveContains(query) ?? false)
+                        )
+                }
+                .prefix(limit)
+        )
+    }
+
+    private func matchingProfiles(for query: String, limit: Int) -> [BrowserProfile] {
+        guard limit > 0 else {
+            return []
+        }
+        return Array(
+            persistentProfiles
+                .filter { profile in
+                    profile.name.localizedCaseInsensitiveContains(query)
                 }
                 .prefix(limit)
         )

@@ -58,7 +58,7 @@ public struct CommandBarView: View {
                                 Text(result.kindLabel)
                                     .foregroundStyle(.tertiary)
                                     .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 42, alignment: .trailing)
+                                    .frame(width: 54, alignment: .trailing)
                             }
                             .font(.system(size: 13))
                             .padding(.horizontal, 12)

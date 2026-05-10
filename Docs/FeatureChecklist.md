@@ -10,6 +10,7 @@
 - SQLite-backed profile-scoped local history model, service, command-bar history results, active-profile clear, and command-bar result deletion.
 - Minimal `WKWebView` host boundary.
 - Persistent and private profile website data store selection.
+- Persistent profile creation and switching controls through the sidebar, native menu, and command bar.
 - Default content rule list wiring.
 - URL and download safety helpers.
 - Native pending confirmation for external app and local file URL handoff.
@@ -23,6 +24,7 @@
 
 - Full native menu set.
 - Drag-and-drop sidebar reordering and moves.
+- Profile rename/delete/import/export controls.
 - Multi-tab web view lifecycle/pool and tab unloading.
 - Split view UI.
 - End-to-end WebKit download UI tests.
