@@ -15,10 +15,56 @@ public struct CommandRouter: Sendable {
 
     public enum BrowserAction: String, Equatable, Sendable {
         case reload
+        case stopLoading
         case goBack
         case goForward
         case closeTab
         case splitActiveTab
+    }
+
+    public struct BrowserActionAvailability: Equatable, Sendable {
+        public var canGoBack: Bool
+        public var canGoForward: Bool
+        public var canReload: Bool
+        public var canCloseTab: Bool
+        public var isLoading: Bool
+
+        public init(
+            canGoBack: Bool = false,
+            canGoForward: Bool = false,
+            canReload: Bool = false,
+            canCloseTab: Bool = false,
+            isLoading: Bool = false
+        ) {
+            self.canGoBack = canGoBack
+            self.canGoForward = canGoForward
+            self.canReload = canReload
+            self.canCloseTab = canCloseTab
+            self.isLoading = isLoading
+        }
+    }
+
+    public struct BrowserActionSuggestion: Identifiable, Equatable, Sendable {
+        public var id: String { action.rawValue }
+        public var action: BrowserAction
+        public var title: String
+        public var subtitle: String
+        public var symbolName: String
+        public var aliases: [String]
+
+        public init(
+            action: BrowserAction,
+            title: String,
+            subtitle: String,
+            symbolName: String,
+            aliases: [String]
+        ) {
+            self.action = action
+            self.title = title
+            self.subtitle = subtitle
+            self.symbolName = symbolName
+            self.aliases = aliases
+        }
     }
 
     private let addressResolver: AddressResolver
@@ -41,6 +87,10 @@ public struct CommandRouter: Sendable {
             return .createFolder(String(trimmed.dropFirst("folder ".count)).trimmingCharacters(in: .whitespacesAndNewlines))
         }
 
+        if let action = Self.browserAction(forAlias: trimmed) {
+            return .browserAction(action)
+        }
+
         switch addressResolver.resolve(trimmed) {
         case .url(let url):
             return .openURL(url)
@@ -49,5 +99,97 @@ public struct CommandRouter: Sendable {
         case .empty:
             return .noOp
         }
+    }
+
+    public func browserActionSuggestions(
+        for input: String,
+        availability: BrowserActionAvailability
+    ) -> [BrowserActionSuggestion] {
+        let query = Self.normalizedActionInput(input)
+        guard !query.isEmpty else {
+            return []
+        }
+
+        return Self.availableActionSuggestions(availability: availability).filter { suggestion in
+            let searchableValues = [suggestion.title, suggestion.subtitle] + suggestion.aliases
+            return searchableValues.contains { value in
+                Self.normalizedActionInput(value).contains(query)
+            }
+        }
+    }
+
+    private static func browserAction(forAlias input: String) -> BrowserAction? {
+        let normalizedInput = normalizedActionInput(input)
+        return allActionSuggestions.first { suggestion in
+            suggestion.aliases.contains { normalizedActionInput($0) == normalizedInput }
+        }?.action
+    }
+
+    private static func availableActionSuggestions(
+        availability: BrowserActionAvailability
+    ) -> [BrowserActionSuggestion] {
+        return allActionSuggestions.filter { suggestion in
+            switch suggestion.action {
+            case .reload:
+                return availability.canReload
+            case .stopLoading:
+                return availability.canReload && availability.isLoading
+            case .goBack:
+                return availability.canGoBack
+            case .goForward:
+                return availability.canGoForward
+            case .closeTab:
+                return availability.canCloseTab
+            case .splitActiveTab:
+                return false
+            }
+        }
+    }
+
+    private static let allActionSuggestions: [BrowserActionSuggestion] = [
+        BrowserActionSuggestion(
+            action: .reload,
+            title: "Reload",
+            subtitle: "Current page",
+            symbolName: "arrow.clockwise",
+            aliases: ["reload", "reload page", "refresh", "refresh page"]
+        ),
+        BrowserActionSuggestion(
+            action: .stopLoading,
+            title: "Stop Loading",
+            subtitle: "Current page",
+            symbolName: "xmark",
+            aliases: ["stop", "stop loading"]
+        ),
+        BrowserActionSuggestion(
+            action: .goBack,
+            title: "Back",
+            subtitle: "Navigation history",
+            symbolName: "chevron.left",
+            aliases: ["back", "go back"]
+        ),
+        BrowserActionSuggestion(
+            action: .goForward,
+            title: "Forward",
+            subtitle: "Navigation history",
+            symbolName: "chevron.right",
+            aliases: ["forward", "go forward"]
+        ),
+        BrowserActionSuggestion(
+            action: .closeTab,
+            title: "Close Tab",
+            subtitle: "Selected tab",
+            symbolName: "xmark",
+            aliases: ["close", "close tab", "close current tab"]
+        )
+    ]
+
+    private static func normalizedActionInput(_ input: String) -> String {
+        input
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 }
