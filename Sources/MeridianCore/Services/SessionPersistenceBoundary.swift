@@ -7,6 +7,9 @@ public enum SessionPersistenceBoundary {
     ) -> BrowserSessionSnapshot {
         let persistentProfiles = snapshot.profiles.filter { !$0.isEphemeral }
         let persistentProfileIDs = Set(persistentProfiles.map(\.id))
+        let persistentSitePermissionSettings = snapshot.sitePermissionSettings.filter { setting in
+            setting.persistsBeyondSession && persistentProfileIDs.contains(setting.profileID)
+        }
 
         var persistentSpaces = snapshot.spaces.filter { persistentProfileIDs.contains($0.profileID) }
         let persistentSpaceIDs = Set(persistentSpaces.map(\.id))
@@ -90,7 +93,8 @@ public enum SessionPersistenceBoundary {
             splitViews: persistentSplitViews,
             selectedSpaceID: selectedSpaceID,
             selectedTabID: selectedTabID,
-            capturedAt: snapshot.capturedAt
+            capturedAt: snapshot.capturedAt,
+            sitePermissionSettings: persistentSitePermissionSettings
         )
     }
 
