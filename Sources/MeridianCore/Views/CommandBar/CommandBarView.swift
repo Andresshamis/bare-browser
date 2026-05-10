@@ -2,11 +2,13 @@ import SwiftUI
 
 public struct CommandBarView: View {
     @ObservedObject private var store: BrowserStore
+    @ObservedObject private var webViewState: WebViewState
     @FocusState private var isFocused: Bool
     @State private var query = ""
 
-    public init(store: BrowserStore) {
+    public init(store: BrowserStore, webViewState: WebViewState) {
         self.store = store
+        self.webViewState = webViewState
     }
 
     public var body: some View {
@@ -41,7 +43,7 @@ public struct CommandBarView: View {
                 VStack(spacing: 2) {
                     ForEach(commandBarResults) { result in
                         Button {
-                            store.activateCommandBarResult(result)
+                            store.activateCommandBarResult(result, browserActionHandler: performBrowserAction)
                         } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: result.symbolName)
@@ -91,10 +93,51 @@ public struct CommandBarView: View {
     }
 
     private var commandBarResults: [CommandBarResult] {
-        store.commandBarResults(for: query)
+        store.commandBarResults(for: query, browserActionAvailability: browserActionAvailability)
     }
 
     private func submit() {
-        store.submitCommandInput(query)
+        store.submitCommandInput(query, browserActionHandler: performBrowserAction)
+    }
+
+    private var browserActionAvailability: CommandRouter.BrowserActionAvailability {
+        CommandRouter.BrowserActionAvailability(
+            canGoBack: webViewState.canGoBack,
+            canGoForward: webViewState.canGoForward,
+            canReload: store.activeTab?.url != nil,
+            canCloseTab: store.activeTab != nil,
+            isLoading: webViewState.isLoading
+        )
+    }
+
+    private func performBrowserAction(_ action: CommandRouter.BrowserAction) -> Bool {
+        switch action {
+        case .reload:
+            guard store.activeTab?.url != nil else {
+                return false
+            }
+            webViewState.dispatch(webViewState.isLoading ? .stopLoading : .reload)
+            return true
+        case .stopLoading:
+            guard store.activeTab?.url != nil, webViewState.isLoading else {
+                return false
+            }
+            webViewState.dispatch(.stopLoading)
+            return true
+        case .goBack:
+            guard webViewState.canGoBack else {
+                return false
+            }
+            webViewState.dispatch(.goBack)
+            return true
+        case .goForward:
+            guard webViewState.canGoForward else {
+                return false
+            }
+            webViewState.dispatch(.goForward)
+            return true
+        case .closeTab, .splitActiveTab:
+            return false
+        }
     }
 }
