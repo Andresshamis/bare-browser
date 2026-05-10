@@ -6,7 +6,7 @@
 - Sidebar-first browser shell.
 - Space, folder, profile, tab, and split-view models.
 - Space-scoped essentials/favorites and pinned tab metadata.
-- Native command bar with URL/search routing and tab search.
+- Native command bar with URL/search routing, tab search, history results, and first browser actions for back, forward, reload/stop, and close tab.
 - SQLite-backed profile-scoped local history model, service, command-bar history results, active-profile clear, and command-bar result deletion.
 - Minimal `WKWebView` host boundary.
 - Persistent and private profile website data store selection.

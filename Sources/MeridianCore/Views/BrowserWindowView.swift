@@ -24,7 +24,7 @@ public struct BrowserWindowView: View {
             )
             .overlay(alignment: .top) {
                 if store.isCommandBarPresented {
-                    CommandBarView(store: store)
+                    CommandBarView(store: store, webViewState: webViewState)
                         .padding(.top, 24)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }

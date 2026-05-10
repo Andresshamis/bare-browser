@@ -143,6 +143,66 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(store.isCommandBarPresented)
     }
 
+    func testCommandBarIncludesAvailableBrowserActionResults() throws {
+        let store = BrowserStore()
+        _ = store.createTab(title: "Docs", url: URL(string: "https://docs.example.com")!)
+
+        let reloadResult = try XCTUnwrap(store.commandBarResults(
+            for: "reload",
+            openTabLimit: 0,
+            historyLimit: 0,
+            browserActionAvailability: CommandRouter.BrowserActionAvailability(
+                canReload: true,
+                canCloseTab: true
+            )
+        ).first)
+
+        XCTAssertEqual(reloadResult.title, "Reload")
+        XCTAssertEqual(reloadResult.subtitle, "Current page")
+        XCTAssertEqual(reloadResult.kindLabel, "Action")
+        guard case .browserAction(let action) = reloadResult else {
+            return XCTFail("Expected a browser action command bar result.")
+        }
+        XCTAssertEqual(action.action, .reload)
+    }
+
+    func testUnavailableBrowserActionsAreNotSuggested() {
+        let store = BrowserStore()
+
+        let results = store.commandBarResults(
+            for: "back",
+            openTabLimit: 0,
+            historyLimit: 0,
+            browserActionAvailability: CommandRouter.BrowserActionAvailability(canGoBack: false)
+        )
+
+        XCTAssertTrue(results.isEmpty)
+    }
+
+    func testCommandBarCloseTabActionClosesSelectedTab() throws {
+        let store = BrowserStore()
+        _ = store.createTab(title: "Docs", url: URL(string: "https://docs.example.com")!)
+        let selectedTabID = try XCTUnwrap(store.selectedTabID)
+        let tabCount = store.tabs.count
+        store.showCommandBar()
+
+        store.submitCommandInput("close tab")
+
+        XCTAssertEqual(store.tabs.count, tabCount - 1)
+        XCTAssertFalse(store.tabs.contains { $0.id == selectedTabID })
+        XCTAssertFalse(store.isCommandBarPresented)
+    }
+
+    func testUnavailableBrowserActionPublishesNonSensitiveMessage() {
+        let store = BrowserStore()
+        store.showCommandBar()
+
+        store.submitCommandInput("back")
+
+        XCTAssertEqual(store.lastUserMessage, "Back is unavailable for the current page.")
+        XCTAssertFalse(store.isCommandBarPresented)
+    }
+
     func testExplicitHTTPNavigationPublishesSanitizedStatusMessage() {
         let store = BrowserStore()
         let initialTabCount = store.tabs.count

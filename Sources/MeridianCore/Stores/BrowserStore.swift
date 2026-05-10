@@ -261,30 +261,44 @@ public final class BrowserStore: ObservableObject {
         isCommandBarPresented = false
     }
 
-    public func submitCommandInput(_ input: String) {
-        perform(commandRouter.route(input: input))
+    public func submitCommandInput(
+        _ input: String,
+        browserActionHandler: ((CommandRouter.BrowserAction) -> Bool)? = nil
+    ) {
+        perform(commandRouter.route(input: input), browserActionHandler: browserActionHandler)
     }
 
     public func commandBarResults(
         for query: String,
         openTabLimit: Int = 5,
-        historyLimit: Int = 5
+        historyLimit: Int = 5,
+        browserActionAvailability: CommandRouter.BrowserActionAvailability? = nil
     ) -> [CommandBarResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return []
         }
 
+        let actionResults = browserActionAvailability.map { availability in
+            commandRouter.browserActionSuggestions(for: trimmed, availability: availability)
+                .map(CommandBarResult.browserAction)
+        } ?? []
         let tabResults = matchingOpenTabs(for: trimmed, limit: openTabLimit)
             .map(CommandBarResult.openTab)
         let matchedHistory = historyResults(for: trimmed, limit: historyLimit)
             .map(CommandBarResult.history)
 
-        return tabResults + matchedHistory
+        return actionResults + tabResults + matchedHistory
     }
 
-    public func activateCommandBarResult(_ result: CommandBarResult) {
+    public func activateCommandBarResult(
+        _ result: CommandBarResult,
+        browserActionHandler: ((CommandRouter.BrowserAction) -> Bool)? = nil
+    ) {
         switch result {
+        case .browserAction(let action):
+            perform(.browserAction(action.action), browserActionHandler: browserActionHandler)
+            return
         case .openTab(let tab):
             selectTab(tab.id)
         case .history(let entry):
@@ -299,7 +313,10 @@ public final class BrowserStore: ObservableObject {
         hideCommandBar()
     }
 
-    public func perform(_ command: CommandRouter.Command) {
+    public func perform(
+        _ command: CommandRouter.Command,
+        browserActionHandler: ((CommandRouter.BrowserAction) -> Bool)? = nil
+    ) {
         switch command {
         case .openURL(let url):
             open(url)
@@ -315,10 +332,10 @@ public final class BrowserStore: ObservableObject {
             selectSpace(id)
         case .switchProfile(let id):
             switchToProfile(id)
-        case .browserAction(.closeTab):
-            closeSelectedTab()
-        case .browserAction:
-            lastUserMessage = "Action is not wired yet."
+        case .browserAction(let action):
+            if !performBrowserAction(action, handler: browserActionHandler) {
+                lastUserMessage = Self.unavailableMessage(for: action)
+            }
         case .noOp:
             break
         }
@@ -686,6 +703,41 @@ public final class BrowserStore: ObservableObject {
             selectSpace(space.id)
         } else {
             _ = createSpace(name: profiles.first(where: { $0.id == id })?.name ?? "Profile", profileID: id)
+        }
+    }
+
+    private func performBrowserAction(
+        _ action: CommandRouter.BrowserAction,
+        handler: ((CommandRouter.BrowserAction) -> Bool)?
+    ) -> Bool {
+        switch action {
+        case .closeTab:
+            guard activeTab != nil else {
+                return false
+            }
+            closeSelectedTab()
+            return true
+        case .splitActiveTab:
+            return false
+        case .reload, .stopLoading, .goBack, .goForward:
+            return handler?(action) ?? false
+        }
+    }
+
+    private static func unavailableMessage(for action: CommandRouter.BrowserAction) -> String {
+        switch action {
+        case .reload:
+            return "Reload is unavailable because no page is active."
+        case .stopLoading:
+            return "Stop is unavailable because the page is not loading."
+        case .goBack:
+            return "Back is unavailable for the current page."
+        case .goForward:
+            return "Forward is unavailable for the current page."
+        case .closeTab:
+            return "No tab is selected."
+        case .splitActiveTab:
+            return "Split view is not available yet."
         }
     }
 
