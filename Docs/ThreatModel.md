@@ -6,6 +6,7 @@
 - Private browsing website data.
 - Downloads and local files selected by the user.
 - Browser session metadata such as tabs, spaces, folders, and profile names.
+- Public-profile local history metadata.
 - User trust in external app launches and permission prompts.
 
 ## Primary Threats
@@ -22,14 +23,16 @@
 - URL navigation is centralized in `URLSecurityPolicy`.
 - Unsafe script/data schemes are blocked.
 - External app and `file://` links create a pending native confirmation before any external handoff, retaining the target URL for approval while reducing source page context to a sanitized host or scheme label.
-- Non-local HTTP pages are flagged as insecure transport.
+- Non-local HTTP pages are flagged as insecure transport through the visible browser status message path for explicit opens and WebKit-driven navigations.
 - WebKit downloads are routed through a native save-location confirmation before bytes are written.
 - The download policy sanitizes candidate filenames, avoids existing destination paths, blocks installer-like packages, and requires explicit confirmation for executable-like extensions.
 - Download source metadata published to UI/store state is reduced to a display host plus optional quarantine origin; full source URLs are not retained after WebKit callbacks.
 - Completed downloads attempt to apply macOS quarantine metadata with only a privacy-safe source origin; failure is surfaced as a browser security message.
 - Persistent profile metadata stores a WebKit data store UUID; private profiles intentionally do not.
 - SQLite-backed session persistence saves only snapshots that pass through the private-state filtering boundary. Missing, unreadable, unsupported, or privacy-invalid saved state falls back to a seeded public session without logging saved URLs or private metadata.
+- SQLite-backed local history records only HTTP(S) visits for non-ephemeral profiles. Private browsing profile visits are ignored before entering history state and filtered again before disk writes. Retained and restored history URLs strip userinfo, fragments, and known sensitive query parameters while preserving ordinary query items for page fidelity. Corrupt, unsupported, or privacy-invalid history stores recover with generic non-URL-bearing messages.
 - Site permission decisions now pass through `SitePermissionPolicy`, which models camera, microphone, geolocation, notifications, autoplay, and pop-up/new-window behavior with conservative defaults.
+- Public-profile allow/deny site permission decisions are included in session snapshots only after the persistence boundary verifies they are marked safe beyond the current session. Private-profile permission decisions remain session-only and are filtered from SQLite session payloads and repair-time scrubs.
 - Pop-up/new-window requests and WebKit media-capture permission callbacks are routed through store state before any grant; unsupported permission kinds are denied with an explicit message.
 - Autoplay is configured to require a user gesture by default.
 - App Sandbox entitlement file includes only sandbox and outbound network client entitlement.
@@ -39,7 +42,8 @@
 ## Required Follow-Up
 
 - Add end-to-end local WebKit download fixture tests once the Xcode UI test host exists.
-- Extend site permission UI and persistence beyond the first in-memory camera, microphone, pop-up, and autoplay policy slice.
+- Extend site permission UI beyond the first camera, microphone, pop-up, and autoplay policy slice.
+- Expand history management UI beyond active-profile clearing and command-bar result deletion without weakening private-profile filtering.
 - Revisit geolocation and notification permissions if future macOS WebKit SDKs expose safe delegate callbacks.
 - Add automated profile isolation tests using local web fixtures.
 - Verify private browsing data removal with WebKit data store APIs.

@@ -36,30 +36,40 @@ public struct CommandBarView: View {
             .padding(.horizontal, 12)
             .padding(.top, 10)
 
-            if !matchingTabs.isEmpty {
+            if !commandBarResults.isEmpty {
                 Divider()
                 VStack(spacing: 2) {
-                    ForEach(matchingTabs.prefix(5)) { tab in
+                    ForEach(commandBarResults) { result in
                         Button {
-                            store.selectTab(tab.id)
-                            store.hideCommandBar()
+                            store.activateCommandBarResult(result)
                         } label: {
                             HStack(spacing: 8) {
-                                Image(systemName: "globe")
+                                Image(systemName: result.symbolName)
                                     .foregroundStyle(.secondary)
                                     .frame(width: 16)
-                                Text(tab.title)
+                                Text(result.title)
                                     .lineLimit(1)
                                 Spacer()
-                                Text(tab.url?.host(percentEncoded: false) ?? "")
+                                Text(result.subtitle)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
+                                Text(result.kindLabel)
+                                    .foregroundStyle(.tertiary)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .frame(width: 42, alignment: .trailing)
                             }
                             .font(.system(size: 13))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            if case .history(let entry) = result {
+                                Button("Delete History Entry", role: .destructive) {
+                                    store.deleteHistoryEntry(entry.id, profileID: entry.profileID)
+                                }
+                            }
+                        }
                     }
                 }
                 .padding(.bottom, 6)
@@ -80,15 +90,8 @@ public struct CommandBarView: View {
         }
     }
 
-    private var matchingTabs: [BrowserTab] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return []
-        }
-        return store.tabs.filter { tab in
-            tab.title.localizedCaseInsensitiveContains(trimmed)
-                || (tab.url?.absoluteString.localizedCaseInsensitiveContains(trimmed) ?? false)
-        }
+    private var commandBarResults: [CommandBarResult] {
+        store.commandBarResults(for: query)
     }
 
     private func submit() {

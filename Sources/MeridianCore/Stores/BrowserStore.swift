@@ -18,12 +18,15 @@ public final class BrowserStore: ObservableObject {
     @Published public var lastUserMessage: String?
     @Published public private(set) var pendingSitePermissionRequest: SitePermissionRequest?
     @Published public private(set) var sitePermissionSettings: [SitePermissionSetting]
+    @Published public private(set) var historyEntries: [BrowserHistoryEntry]
 
     public let commandRouter: CommandRouter
     public let urlSecurityPolicy: URLSecurityPolicy
     public let downloadSafetyPolicy: DownloadSafetyPolicy
     public let sitePermissionPolicy: SitePermissionPolicy
     private let sessionPersistence: SessionSnapshotPersisting?
+    private let localHistoryPersistence: LocalHistoryPersisting?
+    private var localHistoryStore: LocalHistoryStore
     private var pendingDownloadCompletion: (@MainActor (URL?) -> Void)?
 
     public init(
@@ -32,9 +35,11 @@ public final class BrowserStore: ObservableObject {
         urlSecurityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
         downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy(),
         sitePermissionPolicy: SitePermissionPolicy = SitePermissionPolicy(),
-        sitePermissionSettings: [SitePermissionSetting] = [],
+        sitePermissionSettings: [SitePermissionSetting]? = nil,
+        localHistoryStore: LocalHistoryStore = LocalHistoryStore(),
         lastUserMessage: String? = nil,
-        sessionPersistence: SessionSnapshotPersisting? = nil
+        sessionPersistence: SessionSnapshotPersisting? = nil,
+        localHistoryPersistence: LocalHistoryPersisting? = nil
     ) {
         self.profiles = snapshot.profiles
         self.spaces = snapshot.spaces
@@ -50,12 +55,15 @@ public final class BrowserStore: ObservableObject {
         self.isChoosingDownloadDestination = false
         self.lastUserMessage = lastUserMessage
         self.pendingSitePermissionRequest = nil
-        self.sitePermissionSettings = sitePermissionSettings
+        self.sitePermissionSettings = sitePermissionSettings ?? snapshot.sitePermissionSettings
+        self.historyEntries = localHistoryStore.entries
         self.commandRouter = commandRouter
         self.urlSecurityPolicy = urlSecurityPolicy
         self.downloadSafetyPolicy = downloadSafetyPolicy
         self.sitePermissionPolicy = sitePermissionPolicy
         self.sessionPersistence = sessionPersistence
+        self.localHistoryPersistence = localHistoryPersistence
+        self.localHistoryStore = localHistoryStore
         self.pendingDownloadCompletion = nil
     }
 
@@ -89,7 +97,8 @@ public final class BrowserStore: ObservableObject {
             splitViews: splitViews,
             selectedSpaceID: selectedSpaceID,
             selectedTabID: selectedTabID,
-            capturedAt: date
+            capturedAt: date,
+            sitePermissionSettings: sitePermissionSettings
         )
     }
 
@@ -198,6 +207,7 @@ public final class BrowserStore: ObservableObject {
             ?? space.favoriteTabIDs.first
             ?? space.pinnedTabIDs.first
             ?? space.regularTabIDs.first
+        refreshActivePageSecurityStatus()
         persistSession()
     }
 
@@ -214,6 +224,7 @@ public final class BrowserStore: ObservableObject {
         updateTab(id) { tab in
             tab.lastActiveDate = Date()
         }
+        refreshActivePageSecurityStatus()
         persistSession()
     }
 
@@ -234,6 +245,7 @@ public final class BrowserStore: ObservableObject {
             folders[index].tabIDs.removeAll { $0 == tab.id }
         }
         selectedTabID = selectedSpace?.selectedTabID
+        refreshActivePageSecurityStatus()
         persistSession()
     }
 
@@ -251,6 +263,40 @@ public final class BrowserStore: ObservableObject {
 
     public func submitCommandInput(_ input: String) {
         perform(commandRouter.route(input: input))
+    }
+
+    public func commandBarResults(
+        for query: String,
+        openTabLimit: Int = 5,
+        historyLimit: Int = 5
+    ) -> [CommandBarResult] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return []
+        }
+
+        let tabResults = matchingOpenTabs(for: trimmed, limit: openTabLimit)
+            .map(CommandBarResult.openTab)
+        let matchedHistory = historyResults(for: trimmed, limit: historyLimit)
+            .map(CommandBarResult.history)
+
+        return tabResults + matchedHistory
+    }
+
+    public func activateCommandBarResult(_ result: CommandBarResult) {
+        switch result {
+        case .openTab(let tab):
+            selectTab(tab.id)
+        case .history(let entry):
+            guard entry.profileID == activeProfile?.id else {
+                lastUserMessage = "History result is unavailable for this profile."
+                hideCommandBar()
+                return
+            }
+            open(entry.url)
+        }
+
+        hideCommandBar()
     }
 
     public func perform(_ command: CommandRouter.Command) {
@@ -283,9 +329,7 @@ public final class BrowserStore: ObservableObject {
         switch urlSecurityPolicy.decision(for: url) {
         case .allowInWebView:
             _ = createTab(url: url)
-            if urlSecurityPolicy.isInsecureTransport(url) {
-                lastUserMessage = "This page uses insecure HTTP."
-            }
+            updatePageSecurityStatus(for: url)
         case .requireExternalApplicationConfirmation:
             requestURLConfirmation(kind: .externalApplication, url: url)
         case .requireLocalFileConfirmation:
@@ -293,6 +337,73 @@ public final class BrowserStore: ObservableObject {
         case .block(let reason):
             lastUserMessage = reason
         }
+    }
+
+    public func historyResults(
+        for query: String,
+        profileID: ProfileID? = nil,
+        limit: Int = 5
+    ) -> [BrowserHistoryEntry] {
+        guard let resolvedProfileID = profileID ?? activeProfile?.id else {
+            return []
+        }
+        return localHistoryStore.query(query, profileID: resolvedProfileID, limit: limit)
+    }
+
+    @discardableResult
+    public func recordHistoryVisit(
+        title: String?,
+        url: URL?,
+        profileID: ProfileID? = nil,
+        date: Date = Date()
+    ) -> BrowserHistoryEntry? {
+        guard let url,
+              let resolvedProfileID = profileID ?? activeProfile?.id,
+              let profile = profiles.first(where: { $0.id == resolvedProfileID }) else {
+            return nil
+        }
+
+        let entry = localHistoryStore.recordVisit(
+            url: url,
+            title: title,
+            profile: profile,
+            visitedAt: date
+        )
+        historyEntries = localHistoryStore.entries
+        if entry != nil {
+            persistHistory()
+        }
+        return entry
+    }
+
+    @discardableResult
+    public func clearHistoryForActiveProfile() -> Int {
+        guard let profileID = activeProfile?.id else {
+            return 0
+        }
+
+        let removedEntries = localHistoryStore.clearEntries(profileID: profileID)
+        historyEntries = localHistoryStore.entries
+        if !removedEntries.isEmpty {
+            persistHistory()
+            lastUserMessage = "History cleared for this profile."
+        } else {
+            lastUserMessage = "No history to clear for this profile."
+        }
+        return removedEntries.count
+    }
+
+    @discardableResult
+    public func deleteHistoryEntry(_ id: UUID, profileID: ProfileID? = nil) -> Bool {
+        let resolvedProfileID = profileID ?? activeProfile?.id
+        guard localHistoryStore.deleteEntry(id: id, profileID: resolvedProfileID) != nil else {
+            return false
+        }
+
+        historyEntries = localHistoryStore.entries
+        persistHistory()
+        lastUserMessage = "History entry deleted."
+        return true
     }
 
     @discardableResult
@@ -352,8 +463,12 @@ public final class BrowserStore: ObservableObject {
             return nil
         }
 
+        let shouldPersist: Bool
         if let setting = sitePermissionPolicy.setting(for: request, decision: decision, date: date) {
             upsertSitePermissionSetting(setting)
+            shouldPersist = true
+        } else {
+            shouldPersist = false
         }
 
         pendingSitePermissionRequest = nil
@@ -365,6 +480,9 @@ public final class BrowserStore: ObservableObject {
             lastUserMessage = request.promptMessage
         case .deny(let reason):
             lastUserMessage = reason
+        }
+        if shouldPersist {
+            persistSession(date: date)
         }
         return evaluation
     }
@@ -512,10 +630,18 @@ public final class BrowserStore: ObservableObject {
         cancelPendingDownloadCompletion(message: request.cancelledMessage)
     }
 
-    public func updateActiveTabFromWebView(title: String?, url: URL?, isLoading: Bool) {
+    public func updateActiveTabFromWebView(
+        title: String?,
+        url: URL?,
+        isLoading: Bool,
+        securityMessage: String? = nil
+    ) {
         guard let selectedTabID else {
             return
         }
+        var visitProfileID: ProfileID?
+        var visitURL: URL?
+        var visitTitle: String?
         updateTab(selectedTabID) { tab in
             if let title, !title.isEmpty {
                 tab.title = title
@@ -523,8 +649,33 @@ public final class BrowserStore: ObservableObject {
             tab.url = url ?? tab.url
             tab.isLoading = isLoading
             tab.restorationMetadata.lastCommittedURL = url ?? tab.restorationMetadata.lastCommittedURL
+            visitProfileID = tab.profileID
+            visitURL = tab.url
+            visitTitle = tab.title
+        }
+        if !isLoading {
+            recordHistoryVisit(title: visitTitle, url: visitURL, profileID: visitProfileID)
+        }
+        if let securityMessage {
+            publishStatusMessage(securityMessage)
+        } else if let statusURL = url ?? visitURL {
+            updatePageSecurityStatus(for: statusURL)
+        } else {
+            clearCurrentPageSecurityStatus()
         }
         persistSession()
+    }
+
+    public func publishStatusMessage(_ message: String?) {
+        guard let message = message?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !message.isEmpty else {
+            return
+        }
+        lastUserMessage = message
+    }
+
+    public func dismissLastUserMessage() {
+        lastUserMessage = nil
     }
 
     private func switchToProfile(_ id: ProfileID) {
@@ -535,6 +686,29 @@ public final class BrowserStore: ObservableObject {
             selectSpace(space.id)
         } else {
             _ = createSpace(name: profiles.first(where: { $0.id == id })?.name ?? "Profile", profileID: id)
+        }
+    }
+
+    private func refreshActivePageSecurityStatus() {
+        updatePageSecurityStatus(for: activeTab?.url)
+    }
+
+    private func updatePageSecurityStatus(for url: URL?) {
+        guard let url else {
+            clearCurrentPageSecurityStatus()
+            return
+        }
+
+        if let message = urlSecurityPolicy.securityMessage(forAllowedWebURL: url) {
+            lastUserMessage = message
+        } else {
+            clearCurrentPageSecurityStatus()
+        }
+    }
+
+    private func clearCurrentPageSecurityStatus() {
+        if lastUserMessage == URLSecurityPolicy.insecureTransportMessage {
+            lastUserMessage = nil
         }
     }
 
@@ -557,6 +731,20 @@ public final class BrowserStore: ObservableObject {
             return
         }
         mutate(&tabs[index])
+    }
+
+    private func matchingOpenTabs(for query: String, limit: Int) -> [BrowserTab] {
+        guard limit > 0 else {
+            return []
+        }
+        return Array(
+            tabs
+                .filter { tab in
+                    tab.title.localizedCaseInsensitiveContains(query)
+                        || (tab.url?.absoluteString.localizedCaseInsensitiveContains(query) ?? false)
+                }
+                .prefix(limit)
+        )
     }
 
     private func upsertSitePermissionSetting(_ setting: SitePermissionSetting) {
@@ -594,6 +782,18 @@ public final class BrowserStore: ObservableObject {
             )
         } catch {
             lastUserMessage = "Session changes could not be saved. Meridian will keep browsing state in memory for this run."
+        }
+    }
+
+    private func persistHistory() {
+        guard let localHistoryPersistence else {
+            return
+        }
+
+        do {
+            try localHistoryPersistence.saveHistory(localHistoryStore.entries, profiles: profiles)
+        } catch {
+            lastUserMessage = "History changes could not be saved. Meridian will keep history in memory for this run."
         }
     }
 

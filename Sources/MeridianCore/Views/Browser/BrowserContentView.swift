@@ -19,6 +19,10 @@ public struct BrowserContentView: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
+            if let message = store.lastUserMessage {
+                statusRow(message)
+                Divider()
+            }
             webSurface
         }
         .background(.background)
@@ -59,6 +63,8 @@ public struct BrowserContentView: View {
                 sitePermissionPolicy: store.sitePermissionPolicy
             ) { title, url, isLoading in
                 store.updateActiveTabFromWebView(title: title, url: url, isLoading: isLoading)
+            } onSecurityMessage: { message in
+                store.publishStatusMessage(message)
             } onURLConfirmationRequired: { kind, url, sourceContext in
                 store.requestURLConfirmation(kind: kind, url: url, sourceContext: sourceContext)
             } onDownloadConfirmationRequired: { request, completion in
@@ -145,6 +151,35 @@ public struct BrowserContentView: View {
         .buttonStyle(.borderless)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+    }
+
+    private func statusRow(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+                .accessibilityHidden(true)
+
+            Text(message)
+                .font(.callout)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("BrowserStatusMessage")
+
+            Spacer(minLength: 0)
+
+            Button {
+                store.dismissLastUserMessage()
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss status message")
+            .accessibilityLabel("Dismiss status message")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.bar)
+        .accessibilityElement(children: .contain)
     }
 
     private var addressText: String {
