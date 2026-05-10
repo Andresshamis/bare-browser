@@ -249,6 +249,57 @@ public final class BrowserStore: ObservableObject {
         persistSession()
     }
 
+    @discardableResult
+    public func setTabPlacement(_ placement: BrowserTabPlacement, for tabID: TabID) -> Bool {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == tabID }) else {
+            return false
+        }
+
+        let tab = tabs[tabIndex]
+        let wasTopLevelRegular = !tab.isPinned && !tab.isFavorite && tab.parentFolderID == nil
+        let wasAlreadyPlaced: Bool
+        switch placement {
+        case .regular:
+            wasAlreadyPlaced = wasTopLevelRegular
+        case .pinned:
+            wasAlreadyPlaced = tab.isPinned && !tab.isFavorite && tab.parentFolderID == nil
+        case .favorite:
+            wasAlreadyPlaced = tab.isFavorite && !tab.isPinned && tab.parentFolderID == nil
+        }
+
+        if wasAlreadyPlaced {
+            return false
+        }
+
+        updateTab(tabID) { tab in
+            tab.parentFolderID = nil
+            tab.isPinned = placement == .pinned
+            tab.isFavorite = placement == .favorite
+        }
+
+        updateSpace(tab.parentSpaceID) { space in
+            space.favoriteTabIDs.removeAll { $0 == tabID }
+            space.pinnedTabIDs.removeAll { $0 == tabID }
+            space.regularTabIDs.removeAll { $0 == tabID }
+
+            switch placement {
+            case .regular:
+                space.regularTabIDs.append(tabID)
+            case .pinned:
+                space.pinnedTabIDs.append(tabID)
+            case .favorite:
+                space.favoriteTabIDs.append(tabID)
+            }
+        }
+
+        for index in folders.indices {
+            folders[index].tabIDs.removeAll { $0 == tabID }
+        }
+
+        persistSession()
+        return true
+    }
+
     public func toggleSidebar() {
         sidebarIsVisible.toggle()
     }
@@ -717,6 +768,21 @@ public final class BrowserStore: ObservableObject {
             }
             closeSelectedTab()
             return true
+        case .pinTab:
+            guard let activeTab else {
+                return false
+            }
+            return setTabPlacement(.pinned, for: activeTab.id)
+        case .addTabToEssentials:
+            guard let activeTab else {
+                return false
+            }
+            return setTabPlacement(.favorite, for: activeTab.id)
+        case .moveTabToRegular:
+            guard let activeTab else {
+                return false
+            }
+            return setTabPlacement(.regular, for: activeTab.id)
         case .splitActiveTab:
             return false
         case .reload, .stopLoading, .goBack, .goForward:
@@ -736,6 +802,12 @@ public final class BrowserStore: ObservableObject {
             return "Forward is unavailable for the current page."
         case .closeTab:
             return "No tab is selected."
+        case .pinTab:
+            return "Tab cannot be pinned right now."
+        case .addTabToEssentials:
+            return "Tab cannot be added to Essentials right now."
+        case .moveTabToRegular:
+            return "Tab is already in Tabs."
         case .splitActiveTab:
             return "Split view is not available yet."
         }

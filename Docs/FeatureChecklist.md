@@ -5,7 +5,7 @@
 - Native SwiftUI app entry point.
 - Sidebar-first browser shell.
 - Space, folder, profile, tab, and split-view models.
-- Space-scoped essentials/favorites and pinned tab metadata.
+- Space-scoped essentials/favorites and pinned tab metadata, with sidebar and command-bar controls for moving existing tabs between regular Tabs, Pinned, and Essentials.
 - Native command bar with URL/search routing, tab search, history results, and first browser actions for back, forward, reload/stop, and close tab.
 - SQLite-backed profile-scoped local history model, service, command-bar history results, active-profile clear, and command-bar result deletion.
 - Minimal `WKWebView` host boundary.

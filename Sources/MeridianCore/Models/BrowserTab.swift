@@ -49,6 +49,23 @@ public struct BrowserTab: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
+public enum BrowserTabPlacement: String, Equatable, Sendable {
+    case regular
+    case pinned
+    case favorite
+
+    public var title: String {
+        switch self {
+        case .regular:
+            return "Tabs"
+        case .pinned:
+            return "Pinned"
+        case .favorite:
+            return "Essentials"
+        }
+    }
+}
+
 public struct TabRestorationMetadata: Hashable, Codable, Sendable {
     public var estimatedScrollPosition: Double?
     public var backForwardListHint: [URL]

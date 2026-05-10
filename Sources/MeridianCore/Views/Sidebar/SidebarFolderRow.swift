@@ -6,19 +6,22 @@ public struct SidebarFolderRow: View {
     private let selectedTabID: TabID?
     private let selectTab: (TabID) -> Void
     private let closeTab: (BrowserTab) -> Void
+    private let setTabPlacement: (TabID, BrowserTabPlacement) -> Void
 
     public init(
         folder: BrowserFolder,
         tabs: [BrowserTab],
         selectedTabID: TabID?,
         selectTab: @escaping (TabID) -> Void,
-        closeTab: @escaping (BrowserTab) -> Void
+        closeTab: @escaping (BrowserTab) -> Void,
+        setTabPlacement: @escaping (TabID, BrowserTabPlacement) -> Void
     ) {
         self.folder = folder
         self.tabs = tabs
         self.selectedTabID = selectedTabID
         self.selectTab = selectTab
         self.closeTab = closeTab
+        self.setTabPlacement = setTabPlacement
     }
 
     public var body: some View {
@@ -29,7 +32,8 @@ public struct SidebarFolderRow: View {
                         tab: tab,
                         isSelected: tab.id == selectedTabID,
                         select: { selectTab(tab.id) },
-                        close: { closeTab(tab) }
+                        close: { closeTab(tab) },
+                        setPlacement: { placement in setTabPlacement(tab.id, placement) }
                     )
                     .padding(.leading, 14)
                 }
