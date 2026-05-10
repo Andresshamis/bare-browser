@@ -113,7 +113,7 @@ public struct SidebarView: View {
     private var spaceSwitcher: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(store.spaces) { space in
+                ForEach(store.activeProfileSpaces) { space in
                     Button {
                         store.selectSpace(space.id)
                     } label: {

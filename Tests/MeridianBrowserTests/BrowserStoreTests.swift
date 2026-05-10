@@ -197,6 +197,30 @@ final class BrowserStoreTests: XCTestCase {
         )
     }
 
+    func testActiveProfileSpacesExcludeOtherProfilesAndPrivateSpaces() throws {
+        let store = BrowserStore()
+        let personalProfileID = try XCTUnwrap(store.activeProfile?.id)
+        let personalSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let personalResearchSpace = store.createSpace(name: "Personal Research", profileID: personalProfileID)
+        let privateProfile = store.createProfile(name: "Private", ephemeral: true)
+        let privateSpace = store.createSpace(name: "Private Vault", profileID: privateProfile.id)
+        let workProfile = store.createPersistentProfile(name: "Work")
+        let workSpaceID = try XCTUnwrap(store.selectedSpaceID)
+
+        XCTAssertTrue(store.switchProfile(personalProfileID))
+
+        XCTAssertEqual(
+            Set(store.activeProfileSpaces.map(\.id)),
+            Set([personalSpaceID, personalResearchSpace.id])
+        )
+        XCTAssertFalse(store.activeProfileSpaces.contains { $0.id == privateSpace.id })
+        XCTAssertFalse(store.activeProfileSpaces.contains { $0.id == workSpaceID })
+
+        XCTAssertTrue(store.switchProfile(workProfile.id))
+        XCTAssertEqual(store.activeProfileSpaces.map(\.id), [workSpaceID])
+        XCTAssertFalse(store.activeProfileSpaces.contains { $0.profileID == privateProfile.id })
+    }
+
     func testCommandBarProfileResultSwitchesPersistentProfiles() throws {
         let store = BrowserStore()
         let personalProfileID = try XCTUnwrap(store.activeProfile?.id)

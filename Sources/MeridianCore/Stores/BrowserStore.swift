@@ -92,6 +92,13 @@ public final class BrowserStore: ObservableObject {
         profiles.filter { !$0.isEphemeral }
     }
 
+    public var activeProfileSpaces: [BrowserSpace] {
+        guard let activeProfileID = activeProfile?.id else {
+            return []
+        }
+        return spaces.filter { $0.profileID == activeProfileID }
+    }
+
     public var suggestedPersistentProfileName: String {
         "Profile \(persistentProfiles.count + 1)"
     }
