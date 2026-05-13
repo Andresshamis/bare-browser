@@ -468,25 +468,58 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(store.isCommandBarPresented)
     }
 
-    func testExplicitHTTPNavigationPublishesSanitizedStatusMessage() {
+    func testExplicitHTTPNavigationAttemptsHTTPSFirst() throws {
         let store = BrowserStore()
         let initialTabCount = store.tabs.count
         let url = URL(string: "http://user:pass@example.com/private?token=secret#frag")!
+        let upgradedURL = URL(string: "https://user:pass@example.com/private?token=secret#frag")!
 
         store.open(url)
 
         XCTAssertEqual(store.tabs.count, initialTabCount + 1)
+        XCTAssertEqual(store.activeTab?.url, upgradedURL)
+        XCTAssertEqual(store.activeTab?.restorationMetadata.pendingHTTPFallbackURL, url)
+        XCTAssertNil(store.lastUserMessage)
+    }
+
+    func testHTTPSUpgradeFallbackPublishesSanitizedHTTPStatusMessage() {
+        let store = BrowserStore()
+        let url = URL(string: "http://user:pass@example.com/private?token=secret#frag")!
+
+        store.open(url)
+        store.updateActiveTabFromWebView(title: "HTTP Page", url: url, isLoading: false)
+
+        XCTAssertEqual(store.activeTab?.url, url)
+        XCTAssertNil(store.activeTab?.restorationMetadata.pendingHTTPFallbackURL)
         XCTAssertEqual(store.lastUserMessage, URLSecurityPolicy.insecureTransportMessage)
         for sensitiveComponent in ["user", "pass", "private", "token", "secret", "frag"] {
             XCTAssertFalse(store.lastUserMessage?.contains(sensitiveComponent) ?? true, sensitiveComponent)
         }
     }
 
+    func testHTTPSUpgradeSuccessClearsPendingFallback() {
+        let store = BrowserStore()
+        let httpURL = URL(string: "http://example.com/path?view=reader")!
+        let httpsURL = URL(string: "https://example.com/path?view=reader")!
+
+        store.open(httpURL)
+        XCTAssertEqual(store.activeTab?.restorationMetadata.pendingHTTPFallbackURL, httpURL)
+
+        store.updateActiveTabFromWebView(title: "Secure Page", url: httpsURL, isLoading: false)
+
+        XCTAssertEqual(store.activeTab?.url, httpsURL)
+        XCTAssertNil(store.activeTab?.restorationMetadata.pendingHTTPFallbackURL)
+        XCTAssertNil(store.lastUserMessage)
+    }
+
     func testLocalHTTPNavigationDoesNotPublishInsecureStatusMessage() {
         let store = BrowserStore()
+        let url = URL(string: "http://localhost:3000")!
 
-        store.open(URL(string: "http://localhost:3000")!)
+        store.open(url)
 
+        XCTAssertEqual(store.activeTab?.url, url)
+        XCTAssertNil(store.activeTab?.restorationMetadata.pendingHTTPFallbackURL)
         XCTAssertNil(store.lastUserMessage)
     }
 
@@ -504,8 +537,10 @@ final class BrowserStoreTests: XCTestCase {
 
     func testWebViewHTTPSUpdateClearsStaleInsecureStatusMessage() {
         let store = BrowserStore()
+        let httpURL = URL(string: "http://example.com")!
 
-        store.open(URL(string: "http://example.com")!)
+        store.open(httpURL)
+        store.updateActiveTabFromWebView(title: "HTTP Page", url: httpURL, isLoading: false)
         XCTAssertEqual(store.lastUserMessage, URLSecurityPolicy.insecureTransportMessage)
 
         store.updateActiveTabFromWebView(
@@ -520,8 +555,10 @@ final class BrowserStoreTests: XCTestCase {
     func testSelectingSecureTabClearsStaleInsecureStatusMessage() throws {
         let store = BrowserStore()
         let secureTab = try XCTUnwrap(store.createTab(title: "Secure", url: URL(string: "https://example.com")!))
+        let httpURL = URL(string: "http://example.com")!
 
-        store.open(URL(string: "http://example.com")!)
+        store.open(httpURL)
+        store.updateActiveTabFromWebView(title: "HTTP Page", url: httpURL, isLoading: false)
         let insecureTabID = try XCTUnwrap(store.selectedTabID)
         XCTAssertEqual(store.lastUserMessage, URLSecurityPolicy.insecureTransportMessage)
 

@@ -14,6 +14,7 @@ Meridian Browser uses `WKWebView`, not Safari's full browser process or Chromium
 - Geolocation and notification permission prompts do not have equivalent public macOS `WKUIDelegate` callbacks in this SDK, so Meridian marks them unsupported and denies them conservatively until a safe API is available.
 - Autoplay is controlled at `WKWebViewConfiguration` level by requiring a user gesture for media playback rather than by per-site WebKit callbacks.
 - TLS error handling must never be bypassed silently. The scaffold does not yet add custom override UI.
+- HTTPS-first fallback is scoped to tracked main-frame upgrade attempts. Certificate trust failures are not downgraded to HTTP; fixture coverage for WebKit delegate edge cases should be added once the signed UI test host is available.
 - Web process lifecycle and memory pressure behavior are controlled partly by WebKit; Meridian should layer tab unloading and restore metadata on top.
 
 ## Engineering Rule

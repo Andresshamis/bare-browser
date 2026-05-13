@@ -70,14 +70,17 @@ public struct TabRestorationMetadata: Hashable, Codable, Sendable {
     public var estimatedScrollPosition: Double?
     public var backForwardListHint: [URL]
     public var lastCommittedURL: URL?
+    public var pendingHTTPFallbackURL: URL?
 
     public init(
         estimatedScrollPosition: Double? = nil,
         backForwardListHint: [URL] = [],
-        lastCommittedURL: URL? = nil
+        lastCommittedURL: URL? = nil,
+        pendingHTTPFallbackURL: URL? = nil
     ) {
         self.estimatedScrollPosition = estimatedScrollPosition
         self.backForwardListHint = backForwardListHint
         self.lastCommittedURL = lastCommittedURL
+        self.pendingHTTPFallbackURL = pendingHTTPFallbackURL
     }
 }

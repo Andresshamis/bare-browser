@@ -23,7 +23,8 @@
 - URL navigation is centralized in `URLSecurityPolicy`.
 - Unsafe script/data schemes are blocked.
 - External app and `file://` links create a pending native confirmation before any external handoff, retaining the target URL for approval while reducing source page context to a sanitized host or scheme label.
-- Non-local HTTP pages are flagged as insecure transport through the visible browser status message path for explicit opens and WebKit-driven navigations.
+- Non-local HTTP main-frame navigations are HTTPS-first where practical: explicit opens and WebKit main-frame HTTP actions first attempt the HTTPS equivalent, while localhost and loopback URLs remain HTTP for local development. If a tracked HTTPS upgrade attempt falls back to HTTP, Meridian shows the generic insecure-transport status message without embedding the full URL.
+- TLS certificate failures are not silently downgraded to HTTP fallback.
 - WebKit downloads are routed through a native save-location confirmation before bytes are written.
 - The download policy sanitizes candidate filenames, avoids existing destination paths, blocks installer-like packages, and requires explicit confirmation for executable-like extensions.
 - Download source metadata published to UI/store state is reduced to a display host plus optional quarantine origin; full source URLs are not retained after WebKit callbacks.
