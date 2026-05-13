@@ -53,6 +53,13 @@ swift test
 macOS bundle behavior that `swift run MeridianBrowser` does not reliably provide.
 It also supports `--debug`, `--logs`, `--subsystem-logs`, and `--verify`.
 
+GitHub Actions runs the baseline CI suite on pull requests targeting `dev` or
+`main` and on pushes to those branches. The `CI / SwiftPM baseline` check uses a
+macOS 26 runner, prints the active Swift/Xcode versions, runs `swift build`,
+`swift test`, `bash -n script/build_and_run.sh`, and checks diff whitespace.
+Signing, UI smoke tests, notarization, and release packaging remain manual until
+the Xcode app/UI test host and owner-approved signing setup are available.
+
 ## Privacy And Diagnostics
 
 Meridian does not collect product analytics, browsing telemetry, page contents,
