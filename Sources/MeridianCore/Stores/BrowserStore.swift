@@ -591,6 +591,98 @@ public final class BrowserStore: ObservableObject {
         pendingSitePermissionRequest = nil
     }
 
+    public func sitePermissionDecision(
+        for kind: SitePermissionKind,
+        origin: SitePermissionOrigin?,
+        profileID: ProfileID? = nil
+    ) -> SitePermissionDecision? {
+        guard let origin,
+              let resolvedProfileID = profileID ?? activeProfile?.id else {
+            return nil
+        }
+
+        if let setting = sitePermissionSettings.last(where: {
+            $0.kind == kind
+                && $0.origin == origin
+                && $0.profileID == resolvedProfileID
+        }) {
+            return setting.decision
+        }
+
+        return sitePermissionPolicy.defaultDecision(for: kind)
+    }
+
+    @discardableResult
+    public func setSitePermissionDecision(
+        _ decision: SitePermissionDecision,
+        for kind: SitePermissionKind,
+        origin: SitePermissionOrigin?,
+        profileID: ProfileID? = nil,
+        date: Date = Date()
+    ) -> Bool {
+        guard let origin else {
+            lastUserMessage = "Site permission setting was not changed because the site is unavailable."
+            return false
+        }
+
+        let resolvedProfileID = profileID ?? activeProfile?.id
+        guard let profile = profiles.first(where: { $0.id == resolvedProfileID }) else {
+            lastUserMessage = "Site permission setting was not changed because its profile is unavailable."
+            return false
+        }
+
+        guard sitePermissionPolicy.supportsStoredUserDecision(for: kind) else {
+            switch sitePermissionPolicy.support(for: kind) {
+            case .webKitConfiguration:
+                lastUserMessage = "\(kind.displayTitle) is controlled by browser configuration and cannot be changed per site."
+            case .unsupported:
+                if case .deny(let reason) = sitePermissionPolicy.evaluation(for: .allow, kind: kind) {
+                    lastUserMessage = reason
+                } else {
+                    lastUserMessage = "\(kind.displayTitle) is not supported by this WebKit version."
+                }
+            case .webKitPermissionDelegate, .webKitUIDelegate:
+                break
+            }
+            return false
+        }
+
+        if decision == .ask {
+            let didRemove = removeSitePermissionSetting(kind: kind, origin: origin, profileID: profile.id)
+            lastUserMessage = sitePermissionStatusMessage(
+                for: decision,
+                kind: kind,
+                origin: origin,
+                isEphemeralProfile: profile.isEphemeral
+            )
+            if didRemove {
+                persistSession(date: date)
+            }
+            return true
+        }
+
+        let request = SitePermissionRequest(
+            kind: kind,
+            origin: origin,
+            profileID: profile.id,
+            isEphemeralProfile: profile.isEphemeral,
+            requestedAt: date
+        )
+        guard let setting = sitePermissionPolicy.setting(for: request, decision: decision, date: date) else {
+            return false
+        }
+
+        upsertSitePermissionSetting(setting)
+        lastUserMessage = sitePermissionStatusMessage(
+            for: decision,
+            kind: kind,
+            origin: origin,
+            isEphemeralProfile: profile.isEphemeral
+        )
+        persistSession(date: date)
+        return true
+    }
+
     public func requestURLConfirmation(
         kind: URLConfirmationRequest.Kind,
         url: URL,
@@ -1004,6 +1096,38 @@ public final class BrowserStore: ObservableObject {
             sitePermissionSettings[index] = setting
         } else {
             sitePermissionSettings.append(setting)
+        }
+    }
+
+    @discardableResult
+    private func removeSitePermissionSetting(
+        kind: SitePermissionKind,
+        origin: SitePermissionOrigin,
+        profileID: ProfileID
+    ) -> Bool {
+        let originalCount = sitePermissionSettings.count
+        sitePermissionSettings.removeAll {
+            $0.kind == kind
+                && $0.origin == origin
+                && $0.profileID == profileID
+        }
+        return sitePermissionSettings.count != originalCount
+    }
+
+    private func sitePermissionStatusMessage(
+        for decision: SitePermissionDecision,
+        kind: SitePermissionKind,
+        origin: SitePermissionOrigin,
+        isEphemeralProfile: Bool
+    ) -> String {
+        let scope = isEphemeralProfile ? " for this private session" : ""
+        switch decision {
+        case .allow:
+            return "\(kind.displayTitle) allowed for \(origin.displayString)\(scope)."
+        case .deny:
+            return "\(kind.displayTitle) blocked for \(origin.displayString)\(scope)."
+        case .ask:
+            return "\(kind.displayTitle) will ask for \(origin.displayString)\(scope)."
         }
     }
 
