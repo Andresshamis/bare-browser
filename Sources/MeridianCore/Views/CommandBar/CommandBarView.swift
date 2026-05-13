@@ -1,10 +1,11 @@
+import AppKit
 import SwiftUI
 
 public struct CommandBarView: View {
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var webViewState: WebViewState
-    @FocusState private var isFocused: Bool
     @State private var query = ""
+    @State private var selectAllTrigger = 0
 
     public init(store: BrowserStore, webViewState: WebViewState) {
         self.store = store
@@ -12,17 +13,22 @@ public struct CommandBarView: View {
     }
 
     public var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
 
-                TextField("Search or enter address", text: $query)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 18, weight: .medium))
-                    .focused($isFocused)
-                    .onSubmit(submit)
+                CommandBarTextField(
+                    text: $query,
+                    placeholder: "Search or enter address",
+                    selectAllTrigger: selectAllTrigger,
+                    submit: submit,
+                    cancel: { store.hideCommandBar() }
+                )
+                .frame(height: 28)
 
                 if !query.isEmpty {
                     Button {
@@ -37,6 +43,7 @@ public struct CommandBarView: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 10)
+            .padding(.bottom, commandBarResults.isEmpty ? 10 : 2)
 
             if !commandBarResults.isEmpty {
                 Divider()
@@ -78,14 +85,14 @@ public struct CommandBarView: View {
             }
         }
         .frame(width: 620)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .glassEffect(.regular, in: shape)
+        .clipShape(shape)
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(.separator.opacity(0.45), lineWidth: 1)
+            shape.stroke(.separator.opacity(0.45), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.22), radius: 18, x: 0, y: 12)
         .onAppear {
-            isFocused = true
+            prepareInitialQuery()
         }
         .onExitCommand {
             store.hideCommandBar()
@@ -97,7 +104,12 @@ public struct CommandBarView: View {
     }
 
     private func submit() {
-        store.submitCommandInput(query, browserActionHandler: performBrowserAction)
+        store.submitAddressInput(query, browserActionHandler: performBrowserAction)
+    }
+
+    private func prepareInitialQuery() {
+        query = store.activeTab?.url?.absoluteString ?? ""
+        selectAllTrigger += 1
     }
 
     private var browserActionAvailability: CommandRouter.BrowserActionAvailability {
@@ -142,6 +154,79 @@ public struct CommandBarView: View {
             return true
         case .closeTab, .pinTab, .addTabToEssentials, .moveTabToRegular, .splitActiveTab:
             return false
+        }
+    }
+}
+
+private struct CommandBarTextField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let selectAllTrigger: Int
+    let submit: () -> Void
+    let cancel: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let textField = NSTextField()
+        textField.isBordered = false
+        textField.drawsBackground = false
+        textField.focusRingType = .none
+        textField.placeholderString = placeholder
+        textField.font = .systemFont(ofSize: 18, weight: .medium)
+        textField.lineBreakMode = .byTruncatingMiddle
+        textField.delegate = context.coordinator
+        return textField
+    }
+
+    func updateNSView(_ textField: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        if textField.stringValue != text {
+            textField.stringValue = text
+        }
+
+        guard context.coordinator.lastSelectAllTrigger != selectAllTrigger else {
+            return
+        }
+        context.coordinator.lastSelectAllTrigger = selectAllTrigger
+        DispatchQueue.main.async {
+            textField.window?.makeFirstResponder(textField)
+            textField.selectText(nil)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: CommandBarTextField
+        var lastSelectAllTrigger = 0
+
+        init(parent: CommandBarTextField) {
+            self.parent = parent
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let textField = notification.object as? NSTextField else {
+                return
+            }
+            parent.text = textField.stringValue
+        }
+
+        func control(
+            _ control: NSControl,
+            textView: NSTextView,
+            doCommandBy commandSelector: Selector
+        ) -> Bool {
+            switch commandSelector {
+            case #selector(NSResponder.insertNewline(_:)):
+                parent.submit()
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                parent.cancel()
+                return true
+            default:
+                return false
+            }
         }
     }
 }
