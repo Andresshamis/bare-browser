@@ -156,7 +156,10 @@ public struct SidebarView: View {
                     isSelected: tab.id == store.selectedTabID,
                     select: { store.selectTab(tab.id) },
                     close: { close(tab) },
-                    setPlacement: { placement in store.setTabPlacement(placement, for: tab.id) }
+                    setPlacement: { placement in store.setTabPlacement(placement, for: tab.id) },
+                    move: { direction in store.moveTab(tab.id, direction) },
+                    canMoveUp: store.canMoveTab(tab.id, .up),
+                    canMoveDown: store.canMoveTab(tab.id, .down)
                 )
             }
         }
@@ -174,7 +177,9 @@ public struct SidebarView: View {
                     selectedTabID: store.selectedTabID,
                     selectTab: { store.selectTab($0) },
                     closeTab: { tab in close(tab) },
-                    setTabPlacement: { tabID, placement in store.setTabPlacement(placement, for: tabID) }
+                    setTabPlacement: { tabID, placement in store.setTabPlacement(placement, for: tabID) },
+                    moveTab: { tabID, direction in store.moveTab(tabID, direction) },
+                    canMoveTab: { tabID, direction in store.canMoveTab(tabID, direction) }
                 )
             }
         }

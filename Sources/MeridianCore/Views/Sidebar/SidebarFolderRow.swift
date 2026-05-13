@@ -7,6 +7,8 @@ public struct SidebarFolderRow: View {
     private let selectTab: (TabID) -> Void
     private let closeTab: (BrowserTab) -> Void
     private let setTabPlacement: (TabID, BrowserTabPlacement) -> Void
+    private let moveTab: (TabID, BrowserTabReorderDirection) -> Void
+    private let canMoveTab: (TabID, BrowserTabReorderDirection) -> Bool
 
     public init(
         folder: BrowserFolder,
@@ -14,7 +16,9 @@ public struct SidebarFolderRow: View {
         selectedTabID: TabID?,
         selectTab: @escaping (TabID) -> Void,
         closeTab: @escaping (BrowserTab) -> Void,
-        setTabPlacement: @escaping (TabID, BrowserTabPlacement) -> Void
+        setTabPlacement: @escaping (TabID, BrowserTabPlacement) -> Void,
+        moveTab: @escaping (TabID, BrowserTabReorderDirection) -> Void,
+        canMoveTab: @escaping (TabID, BrowserTabReorderDirection) -> Bool
     ) {
         self.folder = folder
         self.tabs = tabs
@@ -22,6 +26,8 @@ public struct SidebarFolderRow: View {
         self.selectTab = selectTab
         self.closeTab = closeTab
         self.setTabPlacement = setTabPlacement
+        self.moveTab = moveTab
+        self.canMoveTab = canMoveTab
     }
 
     public var body: some View {
@@ -33,7 +39,10 @@ public struct SidebarFolderRow: View {
                         isSelected: tab.id == selectedTabID,
                         select: { selectTab(tab.id) },
                         close: { closeTab(tab) },
-                        setPlacement: { placement in setTabPlacement(tab.id, placement) }
+                        setPlacement: { placement in setTabPlacement(tab.id, placement) },
+                        move: { direction in moveTab(tab.id, direction) },
+                        canMoveUp: canMoveTab(tab.id, .up),
+                        canMoveDown: canMoveTab(tab.id, .down)
                     )
                     .padding(.leading, 14)
                 }
