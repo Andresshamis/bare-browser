@@ -9,12 +9,12 @@ public struct StartPageView: View {
 
     public var body: some View {
         VStack(spacing: 18) {
-            Image(systemName: "location.north.line.fill")
+            Image(systemName: store.isPrivateBrowsingActive ? "lock.fill" : "location.north.line.fill")
                 .font(.system(size: 44, weight: .semibold))
-                .foregroundStyle(.tint)
+                .foregroundStyle(store.isPrivateBrowsingActive ? Color(hex: "#5E5CE6") : Color.accentColor)
                 .accessibilityHidden(true)
 
-            Text("Meridian Browser")
+            Text(store.isPrivateBrowsingActive ? "Private Browsing" : "Meridian Browser")
                 .font(.system(size: 32, weight: .semibold))
 
             HStack(spacing: 10) {

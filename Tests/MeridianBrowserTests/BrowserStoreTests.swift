@@ -232,6 +232,165 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertTrue(savedSnapshot.tabs.contains { $0.id == selectedTab.id })
     }
 
+    func testPrivateBrowsingSessionCreationSelectsEphemeralContextAndStaysOutOfPersistentSnapshot() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+        let publicProfileID = try XCTUnwrap(store.activeProfile?.id)
+
+        let privateProfile = store.createPrivateBrowsingSession(date: Date(timeIntervalSince1970: 50))
+
+        XCTAssertTrue(privateProfile.isEphemeral)
+        XCTAssertNil(privateProfile.persistentWebsiteDataStoreID)
+        XCTAssertEqual(store.activeProfile?.id, privateProfile.id)
+        XCTAssertTrue(store.isPrivateBrowsingActive)
+        XCTAssertEqual(store.privateBrowsingSessions.map(\.id), [privateProfile.id])
+
+        let selectedSpace = try XCTUnwrap(store.selectedSpace)
+        XCTAssertEqual(selectedSpace.name, "Private")
+        XCTAssertEqual(selectedSpace.profileID, privateProfile.id)
+
+        let selectedTab = try XCTUnwrap(store.activeTab)
+        XCTAssertEqual(selectedTab.title, "Start Page")
+        XCTAssertEqual(selectedTab.profileID, privateProfile.id)
+        XCTAssertNil(selectedTab.url)
+
+        let persisted = store.persistentSnapshot(date: Date(timeIntervalSince1970: 51))
+        XCTAssertTrue(persisted.profiles.contains { $0.id == publicProfileID })
+        XCTAssertFalse(persisted.profiles.contains { $0.id == privateProfile.id })
+        XCTAssertFalse(persisted.spaces.contains { $0.profileID == privateProfile.id })
+        XCTAssertFalse(persisted.tabs.contains { $0.profileID == privateProfile.id })
+        XCTAssertNotNil(spy.savedSnapshots.last)
+    }
+
+    func testDiscardingPrivateBrowsingSessionRemovesDependentStateAndSelectsPublicFallback() throws {
+        let sessionSpy = BrowserStoreSessionPersistenceSpy()
+        let historySpy = LocalHistoryPersistenceSpy()
+        var snapshot = SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 10))
+        let publicProfileID = try XCTUnwrap(snapshot.profiles.first?.id)
+        let publicSpaceID = try XCTUnwrap(snapshot.spaces.first?.id)
+        let publicTabID = try XCTUnwrap(snapshot.tabs.first?.id)
+        let privateProfile = BrowserProfile(
+            name: "Private",
+            colorHex: "#5E5CE6",
+            websiteDataStoreID: nil,
+            isEphemeral: true,
+            createdAt: Date(timeIntervalSince1970: 11)
+        )
+        var privateSpace = BrowserSpace(name: "Private", profileID: privateProfile.id)
+        let privateFolder = BrowserFolder(name: "Private Folder", parentSpaceID: privateSpace.id)
+        let privateTab = BrowserTab(
+            title: "Private Secret",
+            url: URL(string: "https://private.example/secret?token=fixture")!,
+            parentSpaceID: privateSpace.id,
+            profileID: privateProfile.id
+        )
+        let privateFolderTab = BrowserTab(
+            title: "Private Folder Secret",
+            url: URL(string: "https://private.example/folder")!,
+            parentSpaceID: privateSpace.id,
+            parentFolderID: privateFolder.id,
+            profileID: privateProfile.id
+        )
+        privateSpace.regularTabIDs = [privateTab.id]
+        privateSpace.folderIDs = [privateFolder.id]
+        privateSpace.selectedTabID = privateTab.id
+        var folderWithTab = privateFolder
+        folderWithTab.tabIDs = [privateFolderTab.id]
+        let splitView = SplitViewLayout(
+            tabIDs: [publicTabID, privateTab.id],
+            fractions: [0.5, 0.5]
+        )
+        snapshot.profiles.append(privateProfile)
+        snapshot.spaces.append(privateSpace)
+        snapshot.folders.append(folderWithTab)
+        snapshot.tabs.append(privateTab)
+        snapshot.tabs.append(privateFolderTab)
+        snapshot.splitViews.append(splitView)
+        snapshot.selectedSpaceID = privateSpace.id
+        snapshot.selectedTabID = privateTab.id
+        let privateOrigin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://private.example")!))
+        snapshot.sitePermissionSettings = [
+            SitePermissionSetting(
+                kind: .camera,
+                origin: privateOrigin,
+                profileID: privateProfile.id,
+                decision: .allow,
+                persistsBeyondSession: false,
+                updatedAt: Date(timeIntervalSince1970: 12)
+            )
+        ]
+        let privateHistoryEntry = BrowserHistoryEntry(
+            profileID: privateProfile.id,
+            url: URL(string: "https://private.example/secret")!,
+            title: "Private Secret",
+            lastVisitedAt: Date(timeIntervalSince1970: 13)
+        )
+        let store = BrowserStore(
+            snapshot: snapshot,
+            localHistoryStore: LocalHistoryStore(entries: [privateHistoryEntry]),
+            sessionPersistence: sessionSpy,
+            localHistoryPersistence: historySpy
+        )
+        let publicTabIndex = try XCTUnwrap(store.tabs.firstIndex { $0.id == publicTabID })
+        store.tabs[publicTabIndex].splitViewID = splitView.id
+
+        XCTAssertTrue(store.discardPrivateBrowsingSession(profileID: privateProfile.id, date: Date(timeIntervalSince1970: 60)))
+
+        XCTAssertFalse(store.profiles.contains { $0.id == privateProfile.id })
+        XCTAssertFalse(store.spaces.contains { $0.id == privateSpace.id })
+        XCTAssertFalse(store.folders.contains { $0.id == privateFolder.id })
+        XCTAssertFalse(store.tabs.contains { $0.profileID == privateProfile.id })
+        XCTAssertFalse(store.splitViews.contains { $0.id == splitView.id })
+        XCTAssertNil(store.tabs.first(where: { $0.id == publicTabID })?.splitViewID)
+        XCTAssertFalse(store.sitePermissionSettings.contains { $0.profileID == privateProfile.id })
+        XCTAssertFalse(store.historyEntries.contains { $0.profileID == privateProfile.id })
+        XCTAssertEqual(historySpy.savedEntries.last, [])
+        XCTAssertEqual(store.activeProfile?.id, publicProfileID)
+        XCTAssertEqual(store.selectedSpaceID, publicSpaceID)
+        XCTAssertEqual(store.selectedTabID, publicTabID)
+        XCTAssertFalse(store.isPrivateBrowsingActive)
+        XCTAssertEqual(store.lastUserMessage, "Private browsing session closed.")
+
+        let savedSnapshot = try XCTUnwrap(sessionSpy.savedSnapshots.last)
+        XCTAssertFalse(savedSnapshot.profiles.contains { $0.id == privateProfile.id })
+        XCTAssertFalse(savedSnapshot.spaces.contains { $0.profileID == privateProfile.id })
+        XCTAssertFalse(savedSnapshot.tabs.contains { $0.profileID == privateProfile.id })
+    }
+
+    func testDiscardingPrivateBrowsingSessionCreatesPublicFallbackWhenOnlyPrivateStateExists() throws {
+        var snapshot = SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 70))
+        let privateProfile = BrowserProfile(
+            name: "Private",
+            colorHex: "#5E5CE6",
+            websiteDataStoreID: nil,
+            isEphemeral: true,
+            createdAt: Date(timeIntervalSince1970: 71)
+        )
+        var privateSpace = BrowserSpace(name: "Private", profileID: privateProfile.id)
+        let privateTab = BrowserTab(title: "Start Page", parentSpaceID: privateSpace.id, profileID: privateProfile.id)
+        privateSpace.regularTabIDs = [privateTab.id]
+        privateSpace.selectedTabID = privateTab.id
+        snapshot.profiles = [privateProfile]
+        snapshot.spaces = [privateSpace]
+        snapshot.folders = []
+        snapshot.tabs = [privateTab]
+        snapshot.splitViews = []
+        snapshot.selectedSpaceID = privateSpace.id
+        snapshot.selectedTabID = privateTab.id
+        let store = BrowserStore(snapshot: snapshot)
+
+        XCTAssertTrue(store.discardPrivateBrowsingSession(profileID: privateProfile.id, date: Date(timeIntervalSince1970: 72)))
+
+        let fallbackProfile = try XCTUnwrap(store.activeProfile)
+        XCTAssertFalse(fallbackProfile.isEphemeral)
+        XCTAssertEqual(fallbackProfile.name, "Personal")
+        XCTAssertEqual(store.profiles, [fallbackProfile])
+        XCTAssertEqual(store.spaces.count, 1)
+        XCTAssertEqual(store.tabs.count, 1)
+        XCTAssertEqual(store.selectedSpace?.profileID, fallbackProfile.id)
+        XCTAssertEqual(store.activeTab?.profileID, fallbackProfile.id)
+    }
+
     func testPersistentSnapshotIncludesPersistentProfilesAndExcludesPrivateProfiles() throws {
         let store = BrowserStore()
         let workProfile = store.createPersistentProfile(name: "Work")
@@ -314,7 +473,7 @@ final class BrowserStoreTests: XCTestCase {
         let store = BrowserStore()
         let personalProfileID = try XCTUnwrap(store.activeProfile?.id)
         let workProfile = store.createPersistentProfile(name: "Work")
-        let privateProfile = store.createProfile(name: "Private", ephemeral: true)
+        let privateProfile = store.createPrivateBrowsingSession()
         XCTAssertTrue(store.switchProfile(personalProfileID))
 
         let results = store.commandBarResults(

@@ -92,6 +92,16 @@ public final class BrowserStore: ObservableObject {
         profiles.filter { !$0.isEphemeral }
     }
 
+    public var privateBrowsingSessions: [BrowserProfile] {
+        profiles
+            .filter(\.isEphemeral)
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    public var isPrivateBrowsingActive: Bool {
+        activeProfile?.isEphemeral == true
+    }
+
     public var activeProfileSpaces: [BrowserSpace] {
         guard let activeProfileID = activeProfile?.id else {
             return []
@@ -173,6 +183,102 @@ public final class BrowserStore: ObservableObject {
         selectProfileContext(profile, date: Date())
         persistSession()
         return profile
+    }
+
+    @discardableResult
+    public func createPrivateBrowsingSession(date: Date = Date()) -> BrowserProfile {
+        let sessionCount = privateBrowsingSessions.count + 1
+        let profileName = sessionCount == 1 ? "Private" : "Private \(sessionCount)"
+        let profile = BrowserProfile(
+            name: profileName,
+            colorHex: "#5E5CE6",
+            websiteDataStoreID: nil,
+            isEphemeral: true,
+            createdAt: date
+        )
+        profiles.append(profile)
+        selectProfileContext(profile, date: date)
+        persistSession(date: date)
+        return profile
+    }
+
+    @discardableResult
+    public func discardPrivateBrowsingSession(profileID: ProfileID? = nil, date: Date = Date()) -> Bool {
+        let resolvedProfileID: ProfileID?
+        if let profileID {
+            resolvedProfileID = profileID
+        } else if let activeProfile, activeProfile.isEphemeral {
+            resolvedProfileID = activeProfile.id
+        } else {
+            resolvedProfileID = nil
+        }
+
+        guard let resolvedProfileID,
+              profiles.contains(where: { $0.id == resolvedProfileID && $0.isEphemeral }) else {
+            return false
+        }
+
+        let removedSpaceIDs = Set(spaces.filter { $0.profileID == resolvedProfileID }.map(\.id))
+        let removedFolderIDs = Set(folders.filter { removedSpaceIDs.contains($0.parentSpaceID) }.map(\.id))
+        let removedTabIDs = Set(tabs.filter {
+            $0.profileID == resolvedProfileID || removedSpaceIDs.contains($0.parentSpaceID)
+        }.map(\.id))
+        let removedSplitViewIDs = Set(splitViews.filter { splitView in
+            splitView.tabIDs.contains { removedTabIDs.contains($0) }
+        }.map(\.id))
+        let selectionWasRemoved = activeProfile?.id == resolvedProfileID
+            || selectedSpaceID.map { removedSpaceIDs.contains($0) } == true
+            || selectedTabID.map { removedTabIDs.contains($0) } == true
+
+        profiles.removeAll { $0.id == resolvedProfileID }
+        spaces.removeAll { removedSpaceIDs.contains($0.id) }
+        folders.removeAll { removedFolderIDs.contains($0.id) }
+        tabs.removeAll { removedTabIDs.contains($0.id) }
+        splitViews.removeAll { removedSplitViewIDs.contains($0.id) }
+
+        for index in spaces.indices {
+            spaces[index].favoriteTabIDs.removeAll { removedTabIDs.contains($0) }
+            spaces[index].pinnedTabIDs.removeAll { removedTabIDs.contains($0) }
+            spaces[index].regularTabIDs.removeAll { removedTabIDs.contains($0) }
+            spaces[index].folderIDs.removeAll { removedFolderIDs.contains($0) }
+            if let removedSelectedTabID = spaces[index].selectedTabID,
+               removedTabIDs.contains(removedSelectedTabID) {
+                spaces[index].selectedTabID = selectedTabID(in: spaces[index])
+            }
+        }
+
+        for index in folders.indices {
+            folders[index].childFolderIDs.removeAll { removedFolderIDs.contains($0) }
+            folders[index].tabIDs.removeAll { removedTabIDs.contains($0) }
+        }
+
+        for index in tabs.indices {
+            if let splitViewID = tabs[index].splitViewID,
+               removedSplitViewIDs.contains(splitViewID) {
+                tabs[index].splitViewID = nil
+            }
+        }
+
+        sitePermissionSettings.removeAll { $0.profileID == resolvedProfileID }
+        if pendingSitePermissionRequest?.profileID == resolvedProfileID {
+            pendingSitePermissionRequest = nil
+        }
+
+        let removedHistoryEntries = localHistoryStore.clearEntries(profileID: resolvedProfileID)
+        historyEntries = localHistoryStore.entries
+        if !removedHistoryEntries.isEmpty {
+            persistHistory()
+        }
+
+        if selectionWasRemoved || activeProfile == nil {
+            selectPersistentFallbackContext(date: date)
+        } else {
+            refreshActivePageSecurityStatus()
+        }
+
+        lastUserMessage = "Private browsing session closed."
+        persistSession(date: date)
+        return true
     }
 
     @discardableResult
@@ -948,6 +1054,27 @@ public final class BrowserStore: ObservableObject {
         tabs.append(tab)
         selectedSpaceID = space.id
         selectedTabID = tab.id
+    }
+
+    private func selectPersistentFallbackContext(date: Date) {
+        let persistentProfileIDs = Set(persistentProfiles.map(\.id))
+        if let mostRecentPersistentSpace = spaces
+            .filter({ persistentProfileIDs.contains($0.profileID) })
+            .max(by: { $0.lastActiveDate < $1.lastActiveDate }),
+           let profile = profiles.first(where: { $0.id == mostRecentPersistentSpace.profileID }) {
+            selectProfileContext(profile, date: date)
+            return
+        }
+
+        if let profile = persistentProfiles.first {
+            selectProfileContext(profile, date: date)
+            return
+        }
+
+        let profile = BrowserProfile(name: "Personal", colorHex: "#4F7CAC", createdAt: date)
+        profiles.append(profile)
+        createDefaultSpaceAndTab(for: profile, date: date)
+        refreshActivePageSecurityStatus()
     }
 
     private func createStartTab(in spaceID: SpaceID, profileID: ProfileID, date: Date) {

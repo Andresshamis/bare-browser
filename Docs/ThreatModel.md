@@ -30,6 +30,7 @@
 - Download source metadata published to UI/store state is reduced to a display host plus optional quarantine origin; full source URLs are not retained after WebKit callbacks.
 - Completed downloads attempt to apply macOS quarantine metadata with only a privacy-safe source origin; failure is surfaced as a browser security message.
 - Persistent profile metadata stores a WebKit data store UUID; private profiles intentionally do not.
+- Private browsing lifecycle controls keep live private sessions reachable during the current app run and explicitly discard their profile, spaces, folders, tabs, split metadata, session-only permission settings, and any in-memory private history candidates before selecting a public fallback context.
 - SQLite-backed session persistence saves only snapshots that pass through the private-state filtering boundary. Missing, unreadable, unsupported, or privacy-invalid saved state falls back to a seeded public session without logging saved URLs or private metadata.
 - SQLite-backed local history records only HTTP(S) visits for non-ephemeral profiles. Private browsing profile visits are ignored before entering history state and filtered again before disk writes. Retained and restored history URLs strip userinfo, fragments, and known sensitive query parameters while preserving ordinary query items for page fidelity. Corrupt, unsupported, or privacy-invalid history stores recover with generic non-URL-bearing messages.
 - Site permission decisions now pass through `SitePermissionPolicy`, which models camera, microphone, geolocation, notifications, autoplay, and pop-up/new-window behavior with conservative defaults.
@@ -48,5 +49,5 @@
 - Expand history management UI beyond active-profile clearing and command-bar result deletion without weakening private-profile filtering.
 - Revisit geolocation and notification permissions if future macOS WebKit SDKs expose safe delegate callbacks.
 - Add automated profile isolation tests using local web fixtures.
-- Verify private browsing data removal with WebKit data store APIs.
+- Verify private browsing WebKit website-data removal with WebKit data store APIs.
 - Add a future in-app privacy/settings surface for the no-telemetry policy when settings UI exists.

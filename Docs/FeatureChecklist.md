@@ -12,6 +12,7 @@
 - Minimal `WKWebView` host boundary.
 - Persistent and private profile website data store selection.
 - Persistent profile creation and switching controls through the sidebar, native menu, and command bar.
+- Private browsing session lifecycle controls for starting, returning to, identifying, and discarding live private app-state contexts.
 - Default content rule list wiring.
 - URL and download safety helpers.
 - HTTPS-first upgrade attempts for non-local HTTP main-frame navigations, with controlled HTTP fallback warnings.

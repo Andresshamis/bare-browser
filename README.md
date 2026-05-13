@@ -24,7 +24,9 @@ any session snapshot is written to disk.
 
 Persistent profiles can be created from the sidebar profile menu, native menu,
 or command bar, and switching profiles selects or creates a safe default
-space/tab context for that profile. Private profiles remain session-only.
+space/tab context for that profile. Private browsing sessions can be started,
+reselected, and closed from runtime UI, but private profiles remain session-only
+and are not listed as persistent command-bar profile results.
 
 Local history is stored in a separate SQLite database under Application Support
 and scoped to persistent profiles for command-bar search. Private browsing

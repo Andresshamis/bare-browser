@@ -12,6 +12,9 @@ public struct SidebarView: View {
     public var body: some View {
         VStack(spacing: 0) {
             profileHeader
+            if store.isPrivateBrowsingActive {
+                privateBrowsingIndicator
+            }
             spaceSwitcher
             Divider()
             ScrollView {
@@ -62,6 +65,38 @@ public struct SidebarView: View {
 
                 Divider()
 
+                Section("Private Browsing") {
+                    Button {
+                        startPrivateBrowsing()
+                    } label: {
+                        Label("New Private Session", systemImage: "lock.fill")
+                    }
+                    .accessibilityLabel("Start private browsing session")
+
+                    ForEach(store.privateBrowsingSessions) { profile in
+                        Button {
+                            _ = store.switchProfile(profile.id)
+                        } label: {
+                            Label(
+                                profile.name,
+                                systemImage: profile.id == store.activeProfile?.id ? "checkmark.circle.fill" : "lock"
+                            )
+                        }
+                        .accessibilityLabel("Switch to \(profile.name) private session")
+                    }
+
+                    if store.isPrivateBrowsingActive {
+                        Button(role: .destructive) {
+                            _ = store.discardPrivateBrowsingSession()
+                        } label: {
+                            Label("Close Private Session", systemImage: "xmark.circle")
+                        }
+                        .accessibilityLabel("Close current private browsing session")
+                    }
+                }
+
+                Divider()
+
                 Button {
                     beginCreatingProfile()
                 } label: {
@@ -70,16 +105,14 @@ public struct SidebarView: View {
                 .accessibilityLabel("Create new persistent profile")
             } label: {
                 HStack(spacing: 10) {
-                    Circle()
-                        .fill(Color(hex: store.activeProfile?.colorHex ?? "#4F7CAC"))
-                        .frame(width: 12, height: 12)
+                    profileHeaderIcon
                         .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(store.activeProfile?.name ?? "Profile")
                             .font(.headline)
                             .lineLimit(1)
-                        Text(store.selectedSpace?.name ?? "No Space")
+                        Text(profileHeaderSubtitle)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -95,7 +128,7 @@ public struct SidebarView: View {
             .buttonStyle(.plain)
             .help("Switch or create profile")
             .accessibilityLabel("Profile menu")
-            .accessibilityValue(store.activeProfile?.name ?? "Profile")
+            .accessibilityValue(profileAccessibilityValue)
 
             Spacer()
 
@@ -108,6 +141,61 @@ public struct SidebarView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+    }
+
+    private var profileHeaderIcon: some View {
+        Group {
+            if store.isPrivateBrowsingActive {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 18, height: 18)
+                    .background(Circle().fill(Color(hex: store.activeProfile?.colorHex ?? "#5E5CE6")))
+            } else {
+                Circle()
+                    .fill(Color(hex: store.activeProfile?.colorHex ?? "#4F7CAC"))
+                    .frame(width: 12, height: 12)
+            }
+        }
+    }
+
+    private var privateBrowsingIndicator: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color(hex: "#5E5CE6"))
+                .accessibilityHidden(true)
+
+            Text("Private Browsing")
+                .font(.caption.weight(.semibold))
+
+            Spacer(minLength: 0)
+
+            Button {
+                _ = store.discardPrivateBrowsingSession()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Close private session")
+            .accessibilityLabel("Close private browsing session")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Color(hex: "#5E5CE6").opacity(0.12))
+        .accessibilityElement(children: .combine)
+    }
+
+    private var profileHeaderSubtitle: String {
+        store.isPrivateBrowsingActive ? "Private Browsing" : (store.selectedSpace?.name ?? "No Space")
+    }
+
+    private var profileAccessibilityValue: String {
+        if store.isPrivateBrowsingActive {
+            return "\(store.activeProfile?.name ?? "Private"), private browsing"
+        }
+        return store.activeProfile?.name ?? "Profile"
     }
 
     private var spaceSwitcher: some View {
@@ -202,6 +290,11 @@ public struct SidebarView: View {
     private func beginCreatingProfile() {
         newProfileName = store.suggestedPersistentProfileName
         isProfileCreatorPresented = true
+    }
+
+    private func startPrivateBrowsing() {
+        _ = store.createPrivateBrowsingSession()
+        store.showCommandBar()
     }
 }
 

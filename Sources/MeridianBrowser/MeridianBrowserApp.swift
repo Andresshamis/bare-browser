@@ -48,9 +48,8 @@ struct MeridianBrowserApp: App {
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
 
-                Button("New Private Window") {
-                    let profile = store.createProfile(name: "Private", ephemeral: true)
-                    _ = store.createSpace(name: "Private", profileID: profile.id)
+                Button("New Private Session") {
+                    _ = store.createPrivateBrowsingSession()
                     store.showCommandBar()
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift, .option])
@@ -82,6 +81,11 @@ struct MeridianBrowserApp: App {
                     _ = store.createPersistentProfile(name: store.suggestedPersistentProfileName)
                 }
 
+                Button("New Private Session") {
+                    _ = store.createPrivateBrowsingSession()
+                    store.showCommandBar()
+                }
+
                 Divider()
 
                 ForEach(store.persistentProfiles) { profile in
@@ -89,6 +93,22 @@ struct MeridianBrowserApp: App {
                         _ = store.switchProfile(profile.id)
                     }
                     .disabled(profile.id == store.activeProfile?.id)
+                }
+
+                if !store.privateBrowsingSessions.isEmpty {
+                    Divider()
+
+                    ForEach(store.privateBrowsingSessions) { profile in
+                        Button(profile.name) {
+                            _ = store.switchProfile(profile.id)
+                        }
+                        .disabled(profile.id == store.activeProfile?.id)
+                    }
+
+                    Button("Close Current Private Session") {
+                        _ = store.discardPrivateBrowsingSession()
+                    }
+                    .disabled(!store.isPrivateBrowsingActive)
                 }
             }
 
