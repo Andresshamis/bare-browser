@@ -75,6 +75,8 @@ struct MeridianBrowserApp: App {
                 .keyboardShortcut("s", modifiers: [.command, .shift])
             }
 
+            BrowserNavigationCommandMenu()
+
             CommandMenu("Profiles") {
                 Button("New Profile") {
                     _ = store.createPersistentProfile(name: store.suggestedPersistentProfileName)
@@ -95,6 +97,41 @@ struct MeridianBrowserApp: App {
                     store.clearHistoryForActiveProfile()
                 }
             }
+        }
+    }
+}
+
+private struct BrowserNavigationCommandMenu: Commands {
+    @FocusedValue(\.browserNavigationCommandContext)
+    private var navigationCommandContext
+
+    var body: some Commands {
+        CommandMenu("Navigate") {
+            Button("Back") {
+                navigationCommandContext?.goBack()
+            }
+            .keyboardShortcut("[", modifiers: [.command])
+            .disabled(!(navigationCommandContext?.canGoBack ?? false))
+
+            Button("Forward") {
+                navigationCommandContext?.goForward()
+            }
+            .keyboardShortcut("]", modifiers: [.command])
+            .disabled(!(navigationCommandContext?.canGoForward ?? false))
+
+            Divider()
+
+            Button("Reload") {
+                navigationCommandContext?.reload()
+            }
+            .keyboardShortcut("r", modifiers: [.command])
+            .disabled(!(navigationCommandContext?.canReload ?? false))
+
+            Button("Stop") {
+                navigationCommandContext?.stopLoading()
+            }
+            .keyboardShortcut(".", modifiers: [.command])
+            .disabled(!(navigationCommandContext?.canStopLoading ?? false))
         }
     }
 }
