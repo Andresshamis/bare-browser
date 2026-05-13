@@ -21,6 +21,7 @@ public final class WebViewState: ObservableObject {
     }
 
     @Published public var requestedURL: URL?
+    @Published public var pendingHTTPFallbackURL: URL?
     @Published public var committedURL: URL?
     @Published public var title: String
     @Published public var isLoading: Bool
@@ -32,6 +33,7 @@ public final class WebViewState: ObservableObject {
 
     public init(
         requestedURL: URL? = nil,
+        pendingHTTPFallbackURL: URL? = nil,
         committedURL: URL? = nil,
         title: String = "New Tab",
         isLoading: Bool = false,
@@ -41,6 +43,7 @@ public final class WebViewState: ObservableObject {
         securityMessage: String? = nil
     ) {
         self.requestedURL = requestedURL
+        self.pendingHTTPFallbackURL = pendingHTTPFallbackURL
         self.committedURL = committedURL
         self.title = title
         self.isLoading = isLoading
@@ -51,8 +54,9 @@ public final class WebViewState: ObservableObject {
         self.pendingCommand = nil
     }
 
-    public func request(_ url: URL?) {
+    public func request(_ url: URL?, pendingHTTPFallbackURL: URL? = nil) {
         requestedURL = url
+        self.pendingHTTPFallbackURL = pendingHTTPFallbackURL
     }
 
     public func dispatch(_ command: Command) {
