@@ -27,6 +27,25 @@ public enum SitePermissionKind: String, CaseIterable, Codable, Sendable {
             "pop-up windows"
         }
     }
+
+    public var displayTitle: String {
+        switch self {
+        case .camera:
+            "Camera"
+        case .microphone:
+            "Microphone"
+        case .cameraAndMicrophone:
+            "Camera and microphone"
+        case .geolocation:
+            "Location"
+        case .notifications:
+            "Notifications"
+        case .autoplay:
+            "Autoplay"
+        case .popupWindow:
+            "Pop-up windows"
+        }
+    }
 }
 
 public enum SitePermissionDecision: String, Codable, Sendable {
@@ -178,6 +197,15 @@ public struct SitePermissionPolicy: Sendable {
         }
     }
 
+    public func supportsStoredUserDecision(for kind: SitePermissionKind) -> Bool {
+        switch support(for: kind) {
+        case .webKitPermissionDelegate, .webKitUIDelegate:
+            true
+        case .webKitConfiguration, .unsupported:
+            false
+        }
+    }
+
     public func evaluation(
         for request: SitePermissionRequest,
         settings: [SitePermissionSetting]
@@ -211,7 +239,7 @@ public struct SitePermissionPolicy: Sendable {
             if support(for: kind) == .unsupported {
                 return .deny(reason: unsupportedReason(for: kind))
             }
-            return .deny(reason: "\(kind.displayName.capitalized) is blocked for this site.")
+            return .deny(reason: "\(kind.displayTitle) is blocked for this site.")
         }
     }
 
@@ -239,6 +267,6 @@ public struct SitePermissionPolicy: Sendable {
     }
 
     private func unsupportedReason(for kind: SitePermissionKind) -> String {
-        "\(kind.displayName.capitalized) permissions are not supported by Meridian on this WebKit version."
+        "\(kind.displayTitle) permissions are not supported by Meridian on this WebKit version."
     }
 }

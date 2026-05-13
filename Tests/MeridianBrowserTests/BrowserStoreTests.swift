@@ -727,6 +727,97 @@ final class BrowserStoreTests: XCTestCase {
         )
     }
 
+    func testManualSitePermissionDecisionUpdatesStoredDecisionAndPersists() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let origin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://manage.example/settings")!))
+
+        let didSet = store.setSitePermissionDecision(
+            .allow,
+            for: .camera,
+            origin: origin,
+            profileID: profileID,
+            date: Date(timeIntervalSince1970: 40)
+        )
+
+        XCTAssertTrue(didSet)
+        XCTAssertEqual(store.sitePermissionDecision(for: .camera, origin: origin, profileID: profileID), .allow)
+        XCTAssertEqual(store.sitePermissionSettings.count, 1)
+        XCTAssertEqual(store.sitePermissionSettings.first?.kind, .camera)
+        XCTAssertEqual(store.sitePermissionSettings.first?.origin.serializedOrigin, "https://manage.example")
+        XCTAssertEqual(store.sitePermissionSettings.first?.decision, .allow)
+        XCTAssertEqual(store.sitePermissionSettings.first?.persistsBeyondSession, true)
+        XCTAssertEqual(spy.savedSnapshots.last?.sitePermissionSettings.count, 1)
+        XCTAssertEqual(store.lastUserMessage, "Camera allowed for manage.example.")
+    }
+
+    func testManualSitePermissionAskDecisionRemovesStoredOverride() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let origin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://reset.example")!))
+
+        XCTAssertTrue(store.setSitePermissionDecision(.deny, for: .popupWindow, origin: origin, profileID: profileID))
+
+        let didReset = store.setSitePermissionDecision(
+            .ask,
+            for: .popupWindow,
+            origin: origin,
+            profileID: profileID,
+            date: Date(timeIntervalSince1970: 41)
+        )
+
+        XCTAssertTrue(didReset)
+        XCTAssertEqual(store.sitePermissionDecision(for: .popupWindow, origin: origin, profileID: profileID), .ask)
+        XCTAssertTrue(store.sitePermissionSettings.isEmpty)
+        XCTAssertEqual(spy.savedSnapshots.last?.sitePermissionSettings.count, 0)
+        XCTAssertEqual(store.lastUserMessage, "Pop-up windows will ask for reset.example.")
+    }
+
+    func testManualSitePermissionRejectsUnsupportedAndConfigurationOnlyKinds() throws {
+        let store = BrowserStore()
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let origin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://unsupported.example")!))
+
+        XCTAssertFalse(store.setSitePermissionDecision(.allow, for: .notifications, origin: origin, profileID: profileID))
+        XCTAssertEqual(
+            store.lastUserMessage,
+            "Notifications permissions are not supported by Meridian on this WebKit version."
+        )
+
+        XCTAssertFalse(store.setSitePermissionDecision(.allow, for: .autoplay, origin: origin, profileID: profileID))
+        XCTAssertEqual(
+            store.lastUserMessage,
+            "Autoplay is controlled by browser configuration and cannot be changed per site."
+        )
+        XCTAssertTrue(store.sitePermissionSettings.isEmpty)
+    }
+
+    func testManualPrivateSitePermissionDecisionIsSessionOnly() throws {
+        let store = BrowserStore()
+        let privateProfile = store.createProfile(name: "Private", ephemeral: true)
+        let privateSpace = store.createSpace(name: "Private", profileID: privateProfile.id)
+        _ = store.createTab(
+            title: "Private",
+            url: URL(string: "https://private-permission.example")!,
+            in: privateSpace.id
+        )
+        let origin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://private-permission.example")!))
+
+        XCTAssertTrue(store.setSitePermissionDecision(.allow, for: .microphone, origin: origin, profileID: privateProfile.id))
+
+        let setting = try XCTUnwrap(store.sitePermissionSettings.first)
+        XCTAssertEqual(setting.profileID, privateProfile.id)
+        XCTAssertEqual(setting.decision, .allow)
+        XCTAssertEqual(setting.persistsBeyondSession, false)
+        XCTAssertTrue(store.persistentSnapshot().sitePermissionSettings.isEmpty)
+        XCTAssertEqual(
+            store.lastUserMessage,
+            "Microphone allowed for private-permission.example for this private session."
+        )
+    }
+
     func testExternalURLCreatesPendingConfirmationInsteadOfOpeningTab() {
         let store = BrowserStore()
         let initialTabCount = store.tabs.count

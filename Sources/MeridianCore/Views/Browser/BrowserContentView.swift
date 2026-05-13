@@ -113,6 +113,8 @@ public struct BrowserContentView: View {
             }
             .help(webViewState.isLoading ? "Stop" : "Reload")
 
+            sitePermissionsMenu
+
             Button {
                 store.showCommandBar()
             } label: {
@@ -151,6 +153,71 @@ public struct BrowserContentView: View {
         .buttonStyle(.borderless)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+    }
+
+    private var sitePermissionsMenu: some View {
+        Menu {
+            if let context = activeSitePermissionContext {
+                Section("Site") {
+                    Label(context.origin.displayString, systemImage: "globe")
+                }
+
+                Section("Permissions") {
+                    ForEach(Self.manageableSitePermissionKinds, id: \.self) { kind in
+                        Menu {
+                            sitePermissionDecisionButton(.ask, kind: kind, context: context)
+                            sitePermissionDecisionButton(.allow, kind: kind, context: context)
+                            sitePermissionDecisionButton(.deny, kind: kind, context: context)
+                        } label: {
+                            Label(
+                                "\(permissionTitle(for: kind)): \(permissionDecisionTitle(for: decision(for: kind, context: context)))",
+                                systemImage: permissionSymbolName(for: kind)
+                            )
+                        }
+                    }
+                }
+
+                Section("Limited by WebKit") {
+                    disabledPermissionItem("Location: Unsupported", symbolName: "location.slash")
+                    disabledPermissionItem("Notifications: Unsupported", symbolName: "bell.slash")
+                    disabledPermissionItem("Autoplay: User gesture required", symbolName: "play.slash")
+                }
+            } else {
+                disabledPermissionItem("No active site", symbolName: "globe.badge.chevron.backward")
+            }
+        } label: {
+            Image(systemName: sitePermissionMenuSymbolName)
+        }
+        .help("Site permissions")
+        .accessibilityLabel("Site permissions")
+    }
+
+    private func sitePermissionDecisionButton(
+        _ decision: SitePermissionDecision,
+        kind: SitePermissionKind,
+        context: ActiveSitePermissionContext
+    ) -> some View {
+        Button {
+            _ = store.setSitePermissionDecision(
+                decision,
+                for: kind,
+                origin: context.origin,
+                profileID: context.profileID
+            )
+        } label: {
+            Label(
+                permissionDecisionTitle(for: decision),
+                systemImage: self.decision(for: kind, context: context) == decision ? "checkmark.circle.fill" : "circle"
+            )
+        }
+        .accessibilityLabel("\(permissionTitle(for: kind)) \(permissionDecisionTitle(for: decision))")
+    }
+
+    private func disabledPermissionItem(_ title: String, symbolName: String) -> some View {
+        Button {} label: {
+            Label(title, systemImage: symbolName)
+        }
+        .disabled(true)
     }
 
     private func statusRow(_ message: String) -> some View {
@@ -196,6 +263,83 @@ public struct BrowserContentView: View {
         return store.urlSecurityPolicy.isInsecureTransport(url) ? "exclamationmark.triangle" : "lock"
     }
 
+    private var sitePermissionMenuSymbolName: String {
+        guard let context = activeSitePermissionContext else {
+            return "shield"
+        }
+
+        let hasStoredDecision = Self.manageableSitePermissionKinds.contains { kind in
+            decision(for: kind, context: context) != store.sitePermissionPolicy.defaultDecision(for: kind)
+        }
+        return hasStoredDecision ? "shield.lefthalf.filled" : "shield"
+    }
+
+    private var activeSitePermissionContext: ActiveSitePermissionContext? {
+        guard let tab = store.activeTab,
+              let url = tab.url,
+              let origin = SitePermissionOrigin(url: url) else {
+            return nil
+        }
+        return ActiveSitePermissionContext(origin: origin, profileID: tab.profileID)
+    }
+
+    private func decision(
+        for kind: SitePermissionKind,
+        context: ActiveSitePermissionContext
+    ) -> SitePermissionDecision {
+        store.sitePermissionDecision(for: kind, origin: context.origin, profileID: context.profileID)
+            ?? store.sitePermissionPolicy.defaultDecision(for: kind)
+    }
+
+    private func permissionDecisionTitle(for decision: SitePermissionDecision) -> String {
+        switch decision {
+        case .ask:
+            "Ask Every Time"
+        case .allow:
+            "Allow"
+        case .deny:
+            "Block"
+        }
+    }
+
+    private func permissionTitle(for kind: SitePermissionKind) -> String {
+        switch kind {
+        case .camera:
+            "Camera"
+        case .microphone:
+            "Microphone"
+        case .cameraAndMicrophone:
+            "Camera & Microphone"
+        case .popupWindow:
+            "Pop-ups"
+        case .geolocation:
+            "Location"
+        case .notifications:
+            "Notifications"
+        case .autoplay:
+            "Autoplay"
+        }
+    }
+
+    private func permissionSymbolName(for kind: SitePermissionKind) -> String {
+        switch kind {
+        case .camera:
+            "camera"
+        case .microphone:
+            "mic"
+        case .cameraAndMicrophone:
+            "video.badge.waveform"
+        case .popupWindow:
+            "macwindow.badge.plus"
+        case .geolocation:
+            "location"
+        case .notifications:
+            "bell"
+        case .autoplay:
+            "play"
+        }
+    }
+
     private var sitePermissionAlertIsPresented: Binding<Bool> {
         Binding {
             store.pendingSitePermissionRequest != nil
@@ -210,4 +354,16 @@ public struct BrowserContentView: View {
         webViewState.title = store.activeTab?.title ?? "New Tab"
         webViewState.request(store.activeTab?.url)
     }
+
+    private static let manageableSitePermissionKinds: [SitePermissionKind] = [
+        .camera,
+        .microphone,
+        .cameraAndMicrophone,
+        .popupWindow
+    ]
+}
+
+private struct ActiveSitePermissionContext {
+    var origin: SitePermissionOrigin
+    var profileID: ProfileID
 }
