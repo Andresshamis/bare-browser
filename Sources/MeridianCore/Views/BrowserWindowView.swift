@@ -1,10 +1,13 @@
 import AppKit
 import SwiftUI
 
+private let sidebarRevealHotZoneWidth: CGFloat = 8
+
 public struct BrowserWindowView: View {
     @ObservedObject private var store: BrowserStore
     @StateObject private var webViewState = WebViewState()
-    @State private var sidebarFloatingChromeOpacity = 0.0
+    @State private var sidebarFloatingChromeIsMounted = false
+    @State private var sidebarFloatingChromeProgress: CGFloat = 0
     private let dataStoreProvider = ProfileWebsiteDataStoreProvider()
     private let sidebarWidth: CGFloat = 280
     private let sidebarOuterPadding: CGFloat = 8
@@ -50,7 +53,8 @@ public struct BrowserWindowView: View {
             .animation(.snappy(duration: 0.16), value: store.sidebarIsVisible)
             .animation(.snappy(duration: 0.16), value: store.sidebarIsLockedOpen)
             .onAppear {
-                sidebarFloatingChromeOpacity = store.sidebarIsLockedOpen ? 0 : 1
+                sidebarFloatingChromeIsMounted = !store.sidebarIsLockedOpen
+                sidebarFloatingChromeProgress = store.sidebarIsLockedOpen ? 0 : 1
             }
             .task(id: store.sidebarIsLockedOpen) {
                 await updateSidebarFloatingChrome()
@@ -102,7 +106,7 @@ public struct BrowserWindowView: View {
                 SidebarRevealZone {
                     store.revealSidebar()
                 }
-                .frame(width: 32)
+                .frame(width: sidebarRevealHotZoneWidth)
                 .frame(maxHeight: .infinity)
                 .accessibilityHidden(true)
                 .zIndex(3)
@@ -144,31 +148,47 @@ public struct BrowserWindowView: View {
 
     private var sidebarShell: some View {
         sidebar
-            .frame(width: sidebarWidth)
-            .padding(.vertical, sidebarOuterPadding)
-            .padding(sidebarPaddingEdge, sidebarOuterPadding)
+            .frame(width: sidebarContentWidth)
+            .padding(.vertical, sidebarCurrentOuterPadding)
+            .padding(sidebarPaddingEdge, sidebarCurrentOuterPadding)
     }
 
     private var sidebar: some View {
-        let shape = RoundedRectangle(cornerRadius: sidebarCornerRadius, style: .continuous)
+        let chromeShape = RoundedRectangle(cornerRadius: sidebarCornerRadius, style: .continuous)
+        let clipShape = RoundedRectangle(cornerRadius: sidebarCurrentCornerRadius, style: .continuous)
 
         return ZStack {
-            shape
-                .fill(.clear)
-                .glassEffect(.regular, in: shape)
-                .opacity(sidebarFloatingChromeOpacity)
-                .allowsHitTesting(false)
+            if sidebarFloatingChromeIsMounted {
+                chromeShape
+                    .fill(.clear)
+                    .glassEffect(.regular, in: chromeShape)
+                    .compositingGroup()
+                    .opacity(Double(sidebarFloatingChromeProgress))
+                    .allowsHitTesting(false)
+            }
 
             SidebarView(store: store, webViewState: webViewState)
         }
             .frame(maxHeight: .infinity)
-            .clipShape(shape)
+            .clipShape(clipShape)
             .overlay {
-                shape
+                clipShape
                     .stroke(.separator.opacity(0.42), lineWidth: 0.5)
-                    .opacity(sidebarFloatingChromeOpacity)
+                    .opacity(Double(sidebarFloatingChromeProgress))
             }
             .accessibilityIdentifier("BrowserSidebar")
+    }
+
+    private var sidebarCurrentOuterPadding: CGFloat {
+        sidebarOuterPadding * sidebarFloatingChromeProgress
+    }
+
+    private var sidebarContentWidth: CGFloat {
+        sidebarWidth + sidebarOuterPadding * (1 - sidebarFloatingChromeProgress)
+    }
+
+    private var sidebarCurrentCornerRadius: CGFloat {
+        sidebarCornerRadius * sidebarFloatingChromeProgress
     }
 
     private var sidebarShouldBeMounted: Bool {
@@ -209,7 +229,7 @@ public struct BrowserWindowView: View {
     @MainActor
     private func updateSidebarFloatingChrome() async {
         if store.sidebarIsLockedOpen {
-            guard sidebarFloatingChromeOpacity > 0 else {
+            guard sidebarFloatingChromeIsMounted || sidebarFloatingChromeProgress > 0 else {
                 return
             }
 
@@ -219,11 +239,19 @@ public struct BrowserWindowView: View {
             }
 
             withAnimation(.easeInOut(duration: 0.18)) {
-                sidebarFloatingChromeOpacity = 0
+                sidebarFloatingChromeProgress = 0
             }
+
+            try? await Task.sleep(nanoseconds: 190_000_000)
+            guard !Task.isCancelled, store.sidebarIsLockedOpen else {
+                return
+            }
+
+            sidebarFloatingChromeIsMounted = false
         } else {
+            sidebarFloatingChromeIsMounted = true
             withAnimation(.easeInOut(duration: 0.12)) {
-                sidebarFloatingChromeOpacity = 1
+                sidebarFloatingChromeProgress = 1
             }
         }
     }
@@ -358,7 +386,6 @@ private final class SidebarWindowRevealNSView: NSView {
 
     private var pointerTimer: Timer?
     private var eventMonitor: Any?
-    private let revealWidth: CGFloat = 40
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -433,7 +460,7 @@ private final class SidebarWindowRevealNSView: NSView {
 
         let windowPoint = window.convertPoint(fromScreen: NSEvent.mouseLocation)
         let contentPoint = contentView.convert(windowPoint, from: nil)
-        if contentPoint.isAt(edge: edge, width: revealWidth, in: contentView.bounds) {
+        if contentPoint.isAt(edge: edge, width: sidebarRevealHotZoneWidth, in: contentView.bounds) {
             Task { @MainActor in reveal?() }
         }
     }
