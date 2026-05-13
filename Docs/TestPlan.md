@@ -19,7 +19,7 @@ Current coverage:
 - Pending confirmation state for external app and local file URLs.
 - Insecure HTTP detection and visible browser status message publication for explicit opens and WebKit-published URLs.
 - Download filename sanitization, risk classification, safe destination selection, and pending confirmation state.
-- Site permission origin sanitization, supported/unsupported defaults, stored allow/deny decisions, pending store state, restored public decisions, and private-profile persistence exclusion.
+- Site permission origin sanitization, supported/unsupported defaults, stored allow/deny decisions, manual active-site allow/block/reset management, pending store state, restored public decisions, and private-profile persistence exclusion.
 - Profile metadata for persistent and private browsing.
 - Browser store relationships for spaces, folders, tabs, tab placement across Essentials/Pinned/Tabs, and session snapshots.
 - Session persistence boundary filtering for private profiles, private site permission decisions, dependent browser state, encoded payloads, and all-private fallback.

@@ -14,6 +14,18 @@ final class SitePermissionPolicyTests: XCTestCase {
         XCTAssertEqual(policy.support(for: .popupWindow), .webKitUIDelegate)
     }
 
+    func testOnlyDelegateBackedPermissionsSupportStoredUserDecisions() {
+        let policy = SitePermissionPolicy()
+
+        XCTAssertTrue(policy.supportsStoredUserDecision(for: .camera))
+        XCTAssertTrue(policy.supportsStoredUserDecision(for: .microphone))
+        XCTAssertTrue(policy.supportsStoredUserDecision(for: .cameraAndMicrophone))
+        XCTAssertTrue(policy.supportsStoredUserDecision(for: .popupWindow))
+        XCTAssertFalse(policy.supportsStoredUserDecision(for: .geolocation))
+        XCTAssertFalse(policy.supportsStoredUserDecision(for: .notifications))
+        XCTAssertFalse(policy.supportsStoredUserDecision(for: .autoplay))
+    }
+
     func testOriginStripsSensitiveURLComponents() {
         let origin = SitePermissionOrigin(
             url: URL(string: "https://user:pass@Example.com/private/path?token=secret#frag")!
