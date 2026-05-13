@@ -14,6 +14,7 @@ Current coverage:
 - Search query routing.
 - Command routing for URLs, search, spaces, and folders.
 - Profile-scoped local history recording, private-profile exclusion, URL normalization before retention/restore, restored duplicate collapse, scoped querying, command-bar history result activation, active-profile clear, and individual history delete.
+- Persistent profile creation and switching, including default profile space/tab seeding, command-bar profile results, public session persistence, active-profile open-tab/history scoping, and site-permission scoping.
 - URL scheme security decisions.
 - Pending confirmation state for external app and local file URLs.
 - Insecure HTTP detection and visible browser status message publication for explicit opens and WebKit-published URLs.

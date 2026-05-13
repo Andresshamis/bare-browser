@@ -2,6 +2,8 @@ import SwiftUI
 
 public struct SidebarView: View {
     @ObservedObject private var store: BrowserStore
+    @State private var isProfileCreatorPresented = false
+    @State private var newProfileName = ""
 
     public init(store: BrowserStore) {
         self.store = store
@@ -25,24 +27,75 @@ public struct SidebarView: View {
         }
         .background(.regularMaterial)
         .accessibilityLabel("Sidebar")
+        .sheet(isPresented: $isProfileCreatorPresented) {
+            ProfileCreationSheet(
+                profileName: $newProfileName,
+                create: {
+                    _ = store.createPersistentProfile(name: newProfileName)
+                    isProfileCreatorPresented = false
+                    newProfileName = ""
+                },
+                cancel: {
+                    isProfileCreatorPresented = false
+                    newProfileName = ""
+                }
+            )
+        }
     }
 
     private var profileHeader: some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(Color(hex: store.activeProfile?.colorHex ?? "#4F7CAC"))
-                .frame(width: 12, height: 12)
-                .accessibilityHidden(true)
+            Menu {
+                Section("Profiles") {
+                    ForEach(store.persistentProfiles) { profile in
+                        Button {
+                            _ = store.switchProfile(profile.id)
+                        } label: {
+                            Label(
+                                profile.name,
+                                systemImage: profile.id == store.activeProfile?.id ? "checkmark.circle.fill" : "person.circle"
+                            )
+                        }
+                        .accessibilityLabel("Switch to \(profile.name) profile")
+                    }
+                }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(store.activeProfile?.name ?? "Profile")
-                    .font(.headline)
-                    .lineLimit(1)
-                Text(store.selectedSpace?.name ?? "No Space")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                Divider()
+
+                Button {
+                    beginCreatingProfile()
+                } label: {
+                    Label("New Profile...", systemImage: "person.crop.circle.badge.plus")
+                }
+                .accessibilityLabel("Create new persistent profile")
+            } label: {
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(Color(hex: store.activeProfile?.colorHex ?? "#4F7CAC"))
+                        .frame(width: 12, height: 12)
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(store.activeProfile?.name ?? "Profile")
+                            .font(.headline)
+                            .lineLimit(1)
+                        Text(store.selectedSpace?.name ?? "No Space")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
             }
+            .menuStyle(.borderlessButton)
+            .buttonStyle(.plain)
+            .help("Switch or create profile")
+            .accessibilityLabel("Profile menu")
+            .accessibilityValue(store.activeProfile?.name ?? "Profile")
 
             Spacer()
 
@@ -60,7 +113,7 @@ public struct SidebarView: View {
     private var spaceSwitcher: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(store.spaces) { space in
+                ForEach(store.activeProfileSpaces) { space in
                     Button {
                         store.selectSpace(space.id)
                     } label: {
@@ -144,5 +197,43 @@ public struct SidebarView: View {
             store.selectTab(tab.id)
         }
         store.closeSelectedTab()
+    }
+
+    private func beginCreatingProfile() {
+        newProfileName = store.suggestedPersistentProfileName
+        isProfileCreatorPresented = true
+    }
+}
+
+private struct ProfileCreationSheet: View {
+    @Binding var profileName: String
+    var create: () -> Void
+    var cancel: () -> Void
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("New Profile")
+                .font(.headline)
+
+            TextField("Profile name", text: $profileName)
+                .textFieldStyle(.roundedBorder)
+                .focused($isFocused)
+                .onSubmit(create)
+                .accessibilityLabel("Profile name")
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: cancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Create", action: create)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 340)
+        .onAppear {
+            isFocused = true
+        }
     }
 }

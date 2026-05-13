@@ -206,6 +206,182 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.historyResults(for: "portal", profileID: workProfile.id).map(\.title), ["Work Portal"])
     }
 
+    func testPersistentProfileCreationSelectsDefaultContextAndPersistsPublicState() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+
+        let profile = store.createPersistentProfile(name: "  Work  ")
+
+        XCTAssertEqual(profile.name, "Work")
+        XCTAssertFalse(profile.isEphemeral)
+        XCTAssertNotNil(profile.persistentWebsiteDataStoreID)
+        XCTAssertEqual(store.activeProfile?.id, profile.id)
+
+        let selectedSpace = try XCTUnwrap(store.selectedSpace)
+        XCTAssertEqual(selectedSpace.name, "Work")
+        XCTAssertEqual(selectedSpace.profileID, profile.id)
+
+        let selectedTab = try XCTUnwrap(store.activeTab)
+        XCTAssertEqual(selectedTab.profileID, profile.id)
+        XCTAssertEqual(selectedTab.parentSpaceID, selectedSpace.id)
+        XCTAssertNil(selectedTab.url)
+
+        let savedSnapshot = try XCTUnwrap(spy.savedSnapshots.last)
+        XCTAssertTrue(savedSnapshot.profiles.contains { $0.id == profile.id })
+        XCTAssertTrue(savedSnapshot.spaces.contains { $0.id == selectedSpace.id })
+        XCTAssertTrue(savedSnapshot.tabs.contains { $0.id == selectedTab.id })
+    }
+
+    func testPersistentSnapshotIncludesPersistentProfilesAndExcludesPrivateProfiles() throws {
+        let store = BrowserStore()
+        let workProfile = store.createPersistentProfile(name: "Work")
+        let privateProfile = store.createProfile(name: "Private", ephemeral: true)
+        _ = store.createSpace(name: "Private", profileID: privateProfile.id)
+
+        let persisted = store.persistentSnapshot()
+
+        XCTAssertTrue(persisted.profiles.contains { $0.id == workProfile.id })
+        XCTAssertFalse(persisted.profiles.contains { $0.id == privateProfile.id })
+        XCTAssertFalse(persisted.spaces.contains { $0.profileID == privateProfile.id })
+        XCTAssertFalse(persisted.tabs.contains { $0.profileID == privateProfile.id })
+    }
+
+    func testSwitchingProfilesKeepsHistoryAndSitePermissionsScoped() throws {
+        let store = BrowserStore()
+        let personalProfileID = try XCTUnwrap(store.activeProfile?.id)
+        let workProfile = store.createPersistentProfile(name: "Work")
+        let origin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://camera.example")!))
+
+        store.recordHistoryVisit(
+            title: "Personal Portal",
+            url: URL(string: "https://personal.example/portal")!,
+            profileID: personalProfileID,
+            date: Date(timeIntervalSince1970: 10)
+        )
+        store.recordHistoryVisit(
+            title: "Work Portal",
+            url: URL(string: "https://work.example/portal")!,
+            profileID: workProfile.id,
+            date: Date(timeIntervalSince1970: 20)
+        )
+
+        _ = store.requestSitePermission(kind: .camera, origin: origin, profileID: personalProfileID)
+        _ = store.resolvePendingSitePermission(
+            .allow,
+            requestID: try XCTUnwrap(store.pendingSitePermissionRequest?.id)
+        )
+
+        XCTAssertTrue(store.switchProfile(personalProfileID))
+        XCTAssertEqual(store.historyResults(for: "portal").map(\.title), ["Personal Portal"])
+        XCTAssertEqual(
+            store.requestSitePermission(kind: .camera, origin: origin, profileID: personalProfileID),
+            .allow
+        )
+
+        XCTAssertTrue(store.switchProfile(workProfile.id))
+        XCTAssertEqual(store.historyResults(for: "portal").map(\.title), ["Work Portal"])
+        XCTAssertEqual(
+            store.requestSitePermission(kind: .camera, origin: origin, profileID: workProfile.id),
+            .ask
+        )
+    }
+
+    func testActiveProfileSpacesExcludeOtherProfilesAndPrivateSpaces() throws {
+        let store = BrowserStore()
+        let personalProfileID = try XCTUnwrap(store.activeProfile?.id)
+        let personalSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let personalResearchSpace = store.createSpace(name: "Personal Research", profileID: personalProfileID)
+        let privateProfile = store.createProfile(name: "Private", ephemeral: true)
+        let privateSpace = store.createSpace(name: "Private Vault", profileID: privateProfile.id)
+        let workProfile = store.createPersistentProfile(name: "Work")
+        let workSpaceID = try XCTUnwrap(store.selectedSpaceID)
+
+        XCTAssertTrue(store.switchProfile(personalProfileID))
+
+        XCTAssertEqual(
+            Set(store.activeProfileSpaces.map(\.id)),
+            Set([personalSpaceID, personalResearchSpace.id])
+        )
+        XCTAssertFalse(store.activeProfileSpaces.contains { $0.id == privateSpace.id })
+        XCTAssertFalse(store.activeProfileSpaces.contains { $0.id == workSpaceID })
+
+        XCTAssertTrue(store.switchProfile(workProfile.id))
+        XCTAssertEqual(store.activeProfileSpaces.map(\.id), [workSpaceID])
+        XCTAssertFalse(store.activeProfileSpaces.contains { $0.profileID == privateProfile.id })
+    }
+
+    func testCommandBarProfileResultSwitchesPersistentProfiles() throws {
+        let store = BrowserStore()
+        let personalProfileID = try XCTUnwrap(store.activeProfile?.id)
+        let workProfile = store.createPersistentProfile(name: "Work")
+        let privateProfile = store.createProfile(name: "Private", ephemeral: true)
+        XCTAssertTrue(store.switchProfile(personalProfileID))
+
+        let results = store.commandBarResults(
+            for: "work",
+            openTabLimit: 0,
+            profileLimit: 5,
+            historyLimit: 0
+        )
+        let result = try XCTUnwrap(results.first)
+        guard case .profile(let matchedProfile) = result else {
+            return XCTFail("Expected a profile command bar result.")
+        }
+        XCTAssertEqual(matchedProfile.id, workProfile.id)
+        let privateResults = store.commandBarResults(
+            for: "private",
+            openTabLimit: 0,
+            profileLimit: 5,
+            historyLimit: 0
+        )
+        XCTAssertFalse(privateResults.contains { result in
+            if case .profile(let profile) = result {
+                return profile.id == privateProfile.id
+            }
+            return false
+        })
+
+        store.showCommandBar()
+        store.activateCommandBarResult(result)
+
+        XCTAssertEqual(store.activeProfile?.id, workProfile.id)
+        XCTAssertFalse(store.isCommandBarPresented)
+    }
+
+    func testCommandBarOpenTabResultsFollowActiveProfile() throws {
+        let store = BrowserStore()
+        let personalProfileID = try XCTUnwrap(store.activeProfile?.id)
+        let personalTab = try XCTUnwrap(store.createTab(
+            title: "Shared Docs",
+            url: URL(string: "https://personal.example/docs")
+        ))
+        let workProfile = store.createPersistentProfile(name: "Work")
+        let workTab = try XCTUnwrap(store.createTab(
+            title: "Shared Docs",
+            url: URL(string: "https://work.example/docs")
+        ))
+
+        XCTAssertTrue(store.switchProfile(personalProfileID))
+        let personalResults = store.commandBarResults(
+            for: "docs",
+            openTabLimit: 5,
+            profileLimit: 0,
+            historyLimit: 0
+        )
+
+        XCTAssertEqual(personalResults.map(\.id), ["tab-\(personalTab.id.uuidString)"])
+
+        XCTAssertTrue(store.switchProfile(workProfile.id))
+        let workResults = store.commandBarResults(
+            for: "docs",
+            openTabLimit: 5,
+            profileLimit: 0,
+            historyLimit: 0
+        )
+
+        XCTAssertEqual(workResults.map(\.id), ["tab-\(workTab.id.uuidString)"])
+    }
+
     func testCommandBarHistoryResultOpensThroughStoreOpenPath() throws {
         let store = BrowserStore()
         let profileID = try XCTUnwrap(store.activeProfile?.id)
