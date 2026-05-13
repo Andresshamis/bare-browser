@@ -13,6 +13,7 @@ Current coverage:
 - Address parsing, HTTPS-first bare-host resolution, and main-frame HTTP upgrade candidate policy.
 - Search query routing.
 - Command routing for URLs, search, spaces, and folders.
+- Window-scoped browser navigation command bridge availability and dispatch gating for Back, Forward, Reload, and Stop.
 - Profile-scoped local history recording, private-profile exclusion, URL normalization before retention/restore, restored duplicate collapse, scoped querying, command-bar history result activation, active-profile clear, and individual history delete.
 - Persistent profile creation and switching, including default profile space/tab seeding, command-bar profile results, public session persistence, active-profile open-tab/history scoping, and site-permission scoping.
 - URL scheme security decisions.
@@ -44,6 +45,7 @@ Current coverage:
 - Local web fixture tests proving cookies/localStorage do not leak between profiles.
 - Private browsing persistence tests proving website data does not survive window/session close.
 - Broader history management UI tests once the signed app/UI test host can cover menus and command-bar context actions.
+- UI coverage proving native Back, Forward, Reload, and Stop menu shortcuts reach the active WebKit view once the signed app/UI test host can cover app menus.
 - End-to-end WebKit download fixture tests for delegate callbacks, save panel behavior, destination handling, quarantine metadata, and risky extension confirmation.
 - SwiftUI/UI coverage proving the browser status row remains visible, dismissible, and VoiceOver reachable.
 - End-to-end WebKit fixture tests proving main-frame HTTP link clicks attempt HTTPS first and fall back only for tracked upgrade attempts.

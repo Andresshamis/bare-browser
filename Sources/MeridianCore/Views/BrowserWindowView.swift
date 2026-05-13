@@ -30,6 +30,7 @@ public struct BrowserWindowView: View {
                 }
             }
         }
+        .focusedSceneValue(\.browserNavigationCommandContext, browserNavigationCommandContext)
         .animation(.snappy(duration: 0.16), value: store.isCommandBarPresented)
         .alert(
             store.pendingURLConfirmation?.confirmationTitle ?? "Open Link?",
@@ -62,6 +63,17 @@ public struct BrowserWindowView: View {
             }
         } message: { request in
             Text(request.confirmationMessage)
+        }
+    }
+
+    private var browserNavigationCommandContext: BrowserNavigationCommandContext {
+        BrowserNavigationCommandContext(
+            canGoBack: webViewState.canGoBack,
+            canGoForward: webViewState.canGoForward,
+            canReload: store.activeTab?.url != nil,
+            canStopLoading: webViewState.isLoading
+        ) { command in
+            webViewState.dispatch(command)
         }
     }
 

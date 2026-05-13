@@ -7,6 +7,7 @@
 - Space, folder, profile, tab, and split-view models.
 - Space-scoped essentials/favorites and pinned tab metadata, with sidebar and command-bar controls for moving existing tabs between regular Tabs, Pinned, and Essentials.
 - Native command bar with URL/search routing, tab search, history results, and first browser actions for back, forward, reload/stop, and close tab.
+- Native Navigate menu shortcuts for active browser Back, Forward, Reload, and Stop commands through a window-scoped command bridge.
 - SQLite-backed profile-scoped local history model, service, command-bar history results, active-profile clear, and command-bar result deletion.
 - Minimal `WKWebView` host boundary.
 - Persistent and private profile website data store selection.
@@ -24,7 +25,7 @@
 
 ## Not Yet Implemented
 
-- Full native menu set.
+- Full native menu set beyond the current browser navigation, profile, history, and tab basics.
 - Drag-and-drop sidebar reordering and moves.
 - Profile rename/delete/import/export controls.
 - Multi-tab web view lifecycle/pool and tab unloading.
