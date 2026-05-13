@@ -1,5 +1,11 @@
+import OSLog
 import SwiftUI
 import WebKit
+
+private let webViewLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "MeridianBrowser",
+    category: "WebView"
+)
 
 @MainActor
 public struct WebViewHost: NSViewRepresentable {
@@ -69,11 +75,12 @@ public struct WebViewHost: NSViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
+        webView.customUserAgent = BrowserUserAgentPolicy.desktopSafariUserAgent()
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
 
         if let requestedURL = state.requestedURL {
-            webView.load(URLRequest(url: requestedURL))
+            context.coordinator.loadRequestedURLIfNeeded(requestedURL, in: webView)
         }
 
         return webView
@@ -108,9 +115,7 @@ public struct WebViewHost: NSViewRepresentable {
             return
         }
 
-        if webView.url != requestedURL {
-            webView.load(URLRequest(url: requestedURL))
-        }
+        context.coordinator.loadRequestedURLIfNeeded(requestedURL, in: webView)
     }
 
     @MainActor
@@ -124,6 +129,7 @@ public struct WebViewHost: NSViewRepresentable {
         fileprivate var onDownloadConfirmationRequired: @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
         fileprivate var onSitePermissionRequest: @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
         fileprivate var lastHandledCommandID: UUID?
+        private var lastLoadedRequestedURL: URL?
         private var downloadSourceMetadata: [ObjectIdentifier: DownloadSourceMetadata] = [:]
         private var downloadDestinations: [ObjectIdentifier: URL] = [:]
 
@@ -160,11 +166,11 @@ public struct WebViewHost: NSViewRepresentable {
         }
 
         public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            publish(webView, isLoading: false, message: "Navigation failed.")
+            handleNavigationFailure(webView, error: error, phase: "committed")
         }
 
         public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            publish(webView, isLoading: false, message: "Navigation failed.")
+            handleNavigationFailure(webView, error: error, phase: "provisional")
         }
 
         public func webView(
@@ -320,15 +326,22 @@ public struct WebViewHost: NSViewRepresentable {
             windowFeatures: WKWindowFeatures
         ) -> WKWebView? {
             if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
-                let origin = SitePermissionOrigin(securityOrigin: navigationAction.sourceFrame.securityOrigin)
-                    ?? SitePermissionOrigin(url: webView.url ?? url)
-                switch onSitePermissionRequest(.popupWindow, origin) {
-                case .allow:
-                    webView.load(URLRequest(url: url))
-                case .ask:
-                    publishSecurityMessage("Pop-up windows require permission for this site.")
-                case .deny(let reason):
-                    publishSecurityMessage(reason)
+                if WebViewNewWindowPolicy.shouldOpenInCurrentTab(
+                    navigationType: navigationAction.navigationType,
+                    sourceFrameIsMainFrame: navigationAction.sourceFrame.isMainFrame
+                ) {
+                    routeWebContentNavigation(to: url, in: webView)
+                } else {
+                    let origin = SitePermissionOrigin(securityOrigin: navigationAction.sourceFrame.securityOrigin)
+                        ?? SitePermissionOrigin(url: webView.url ?? url)
+                    switch onSitePermissionRequest(.popupWindow, origin) {
+                    case .allow:
+                        routeWebContentNavigation(to: url, in: webView)
+                    case .ask:
+                        publishSecurityMessage("Pop-up windows require permission for this site.")
+                    case .deny(let reason):
+                        publishSecurityMessage(reason)
+                    }
                 }
             }
             return nil
@@ -354,6 +367,33 @@ public struct WebViewHost: NSViewRepresentable {
         ) {
             publishSecurityMessage(kind.pendingMessage)
             onURLConfirmationRequired(kind, url, URLConfirmationSourceContext(sourceURL: sourceURL))
+        }
+
+        fileprivate func loadRequestedURLIfNeeded(_ requestedURL: URL, in webView: WKWebView) {
+            guard lastLoadedRequestedURL != requestedURL else {
+                return
+            }
+
+            lastLoadedRequestedURL = requestedURL
+            guard webView.url != requestedURL else {
+                return
+            }
+
+            webView.load(URLRequest(url: requestedURL))
+        }
+
+        private func routeWebContentNavigation(to url: URL, in webView: WKWebView) {
+            switch securityPolicy.decision(for: url) {
+            case .allowInWebView:
+                publishSecurityMessage(securityPolicy.securityMessage(forAllowedWebURL: url))
+                loadRequestedURLIfNeeded(url, in: webView)
+            case .requireExternalApplicationConfirmation:
+                requestConfirmation(.externalApplication, url: url, sourceURL: webView.url)
+            case .requireLocalFileConfirmation:
+                requestConfirmation(.localFile, url: url, sourceURL: webView.url)
+            case .block(let reason):
+                publishSecurityMessage(reason)
+            }
         }
 
         private func prepare(_ download: WKDownload, sourceURL: URL?) {
@@ -406,6 +446,22 @@ public struct WebViewHost: NSViewRepresentable {
             }
         }
 
+        private func handleNavigationFailure(_ webView: WKWebView, error: Error, phase: String) {
+            let diagnostics = NavigationFailureDiagnostics(error: error)
+            guard let message = diagnostics.userMessage else {
+                webViewLogger.debug(
+                    "Suppressed benign navigation failure. phase=\(phase, privacy: .public) domain=\(diagnostics.domain, privacy: .public) code=\(diagnostics.code, privacy: .public)"
+                )
+                publish(webView, isLoading: false)
+                return
+            }
+
+            webViewLogger.error(
+                "Navigation failed. phase=\(phase, privacy: .public) domain=\(diagnostics.domain, privacy: .public) code=\(diagnostics.code, privacy: .public)"
+            )
+            publish(webView, isLoading: false, message: message)
+        }
+
         private static func permissionKind(for type: WKMediaCaptureType) -> SitePermissionKind {
             switch type {
             case .camera:
@@ -431,6 +487,64 @@ public struct WebViewHost: NSViewRepresentable {
                 .deny
             }
         }
+    }
+}
+
+struct NavigationFailureDiagnostics {
+    let domain: String
+    let code: Int
+    let userMessage: String?
+
+    init(error: Error) {
+        let nsError = error as NSError
+        domain = nsError.domain
+        code = nsError.code
+        userMessage = Self.userMessage(for: nsError)
+    }
+
+    private static func userMessage(for error: NSError) -> String? {
+        if isBenignNavigationCancellation(error) {
+            return nil
+        }
+
+        guard error.domain == NSURLErrorDomain else {
+            return "Navigation failed. Check Meridian logs for details."
+        }
+
+        switch error.code {
+        case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost:
+            return "Navigation failed: network connection is unavailable."
+        case NSURLErrorTimedOut:
+            return "Navigation failed: request timed out."
+        case NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost, NSURLErrorDNSLookupFailed:
+            return "Navigation failed: server could not be reached."
+        case NSURLErrorUnsupportedURL:
+            return "Navigation failed: URL is not supported."
+        case NSURLErrorAppTransportSecurityRequiresSecureConnection:
+            return "Navigation failed: insecure connection was blocked."
+        case NSURLErrorSecureConnectionFailed,
+             NSURLErrorServerCertificateHasBadDate,
+             NSURLErrorServerCertificateUntrusted,
+             NSURLErrorServerCertificateHasUnknownRoot,
+             NSURLErrorServerCertificateNotYetValid,
+             NSURLErrorClientCertificateRejected,
+             NSURLErrorClientCertificateRequired:
+            return "Navigation failed: secure connection could not be verified."
+        default:
+            return "Navigation failed. Check Meridian logs for details."
+        }
+    }
+
+    private static func isBenignNavigationCancellation(_ error: NSError) -> Bool {
+        if error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled {
+            return true
+        }
+
+        if error.domain == "WebKitErrorDomain" && error.code == 102 {
+            return true
+        }
+
+        return false
     }
 }
 

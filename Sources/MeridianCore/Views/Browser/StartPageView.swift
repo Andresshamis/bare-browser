@@ -14,9 +14,6 @@ public struct StartPageView: View {
                 .foregroundStyle(.tint)
                 .accessibilityHidden(true)
 
-            Text("Meridian Browser")
-                .font(.system(size: 32, weight: .semibold))
-
             HStack(spacing: 10) {
                 Button {
                     store.showCommandBar()

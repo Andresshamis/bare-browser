@@ -21,7 +21,7 @@ final class AddressResolverTests: XCTestCase {
         XCTAssertEqual(resolver.resolve("localhost:5173"), .url(URL(string: "http://localhost:5173")!))
     }
 
-    func testSearchesPlainTextQueries() {
+    func testSearchesPlainTextQueriesWithGoogleLucky() {
         let resolver = AddressResolver()
 
         guard case .search(let url, let query) = resolver.resolve("swift webkit profiles") else {
@@ -30,7 +30,11 @@ final class AddressResolverTests: XCTestCase {
 
         XCTAssertEqual(query, "swift webkit profiles")
         XCTAssertEqual(url.scheme, "https")
-        XCTAssertEqual(url.host(percentEncoded: false), "duckduckgo.com")
-        XCTAssertTrue(url.absoluteString.contains("swift"))
+        XCTAssertEqual(url.host(percentEncoded: false), "www.google.com")
+        XCTAssertEqual(url.path(), "/search")
+
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "q" })?.value, "swift webkit profiles")
+        XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "btnI" })?.value, "I'm Feeling Lucky")
     }
 }

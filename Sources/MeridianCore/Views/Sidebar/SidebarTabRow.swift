@@ -6,49 +6,78 @@ public struct SidebarTabRow: View {
     private let select: () -> Void
     private let close: () -> Void
     private let setPlacement: (BrowserTabPlacement) -> Void
+    private let moveBefore: (TabID) -> Bool
+    @State private var isHovered = false
 
     public init(
         tab: BrowserTab,
         isSelected: Bool,
         select: @escaping () -> Void,
         close: @escaping () -> Void,
-        setPlacement: @escaping (BrowserTabPlacement) -> Void
+        setPlacement: @escaping (BrowserTabPlacement) -> Void,
+        moveBefore: @escaping (TabID) -> Bool = { _ in false }
     ) {
         self.tab = tab
         self.isSelected = isSelected
         self.select = select
         self.close = close
         self.setPlacement = setPlacement
+        self.moveBefore = moveBefore
     }
 
     public var body: some View {
-        Button(action: select) {
-            HStack(spacing: 8) {
-                Image(systemName: iconName)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 16)
-                    .accessibilityHidden(true)
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 10)
+                .opacity(isHovered ? 1 : 0)
+                .accessibilityHidden(true)
 
-                Text(tab.title)
-                    .font(.system(size: 13))
-                    .lineLimit(1)
+            Image(systemName: iconName)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+                .accessibilityHidden(true)
 
-                Spacer(minLength: 4)
+            Text(tab.title)
+                .font(.system(size: 13))
+                .lineLimit(1)
 
-                if tab.isLoading {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 14, height: 14)
-                }
+            Spacer(minLength: 4)
+
+            if tab.isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 14, height: 14)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(selectionBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .contentShape(Rectangle())
+
+            Button(action: close) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .opacity(isHovered || isSelected ? 1 : 0)
+            .help("Close tab")
+            .accessibilityLabel("Close \(tab.title)")
         }
-        .buttonStyle(.plain)
+        .padding(.leading, 6)
+        .padding(.trailing, 4)
+        .padding(.vertical, 5)
+        .background(selectionBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: select)
+        .onHover { isHovered = $0 }
+        .draggable(tab.id.uuidString)
+        .dropDestination(for: String.self) { values, _ in
+            guard let value = values.first,
+                  let draggedTabID = UUID(uuidString: value) else {
+                return false
+            }
+            return moveBefore(draggedTabID)
+        }
         .contextMenu {
             Button("Add to Essentials") {
                 setPlacement(.favorite)
