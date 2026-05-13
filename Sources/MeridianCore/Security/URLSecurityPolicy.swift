@@ -86,7 +86,9 @@ public struct URLSecurityPolicy: Sendable {
             return true
         }
 
-        let certificateErrorCodes: Set<Int> = [
+        let noFallbackErrorCodes: Set<Int> = [
+            NSURLErrorCancelled,
+            NSURLErrorUserCancelledAuthentication,
             NSURLErrorServerCertificateHasBadDate,
             NSURLErrorServerCertificateUntrusted,
             NSURLErrorServerCertificateHasUnknownRoot,
@@ -95,7 +97,7 @@ public struct URLSecurityPolicy: Sendable {
             NSURLErrorClientCertificateRequired
         ]
 
-        return !certificateErrorCodes.contains(nsError.code)
+        return !noFallbackErrorCodes.contains(nsError.code)
     }
 
     public func securityMessage(forAllowedWebURL url: URL) -> String? {

@@ -66,11 +66,19 @@ final class URLSecurityPolicyTests: XCTestCase {
         XCTAssertNil(policy.httpsUpgradeCandidate(for: URL(string: "https://example.com")!))
     }
 
-    func testCertificateErrorsDoNotFallbackToHTTP() {
+    func testCertificateAndCancellationErrorsDoNotFallbackToHTTP() {
         let policy = URLSecurityPolicy()
         let certificateError = NSError(
             domain: NSURLErrorDomain,
             code: NSURLErrorServerCertificateUntrusted
+        )
+        let cancelledError = NSError(
+            domain: NSURLErrorDomain,
+            code: NSURLErrorCancelled
+        )
+        let userCancelledAuthenticationError = NSError(
+            domain: NSURLErrorDomain,
+            code: NSURLErrorUserCancelledAuthentication
         )
         let connectionError = NSError(
             domain: NSURLErrorDomain,
@@ -78,6 +86,8 @@ final class URLSecurityPolicyTests: XCTestCase {
         )
 
         XCTAssertFalse(policy.shouldFallbackToHTTP(afterHTTPSUpgradeError: certificateError))
+        XCTAssertFalse(policy.shouldFallbackToHTTP(afterHTTPSUpgradeError: cancelledError))
+        XCTAssertFalse(policy.shouldFallbackToHTTP(afterHTTPSUpgradeError: userCancelledAuthenticationError))
         XCTAssertTrue(policy.shouldFallbackToHTTP(afterHTTPSUpgradeError: connectionError))
     }
 

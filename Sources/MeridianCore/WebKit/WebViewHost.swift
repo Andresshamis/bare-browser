@@ -166,10 +166,13 @@ public struct WebViewHost: NSViewRepresentable {
         }
 
         public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            if let fallbackURL = httpFallbackURL(for: error),
-               securityPolicy.shouldFallbackToHTTP(afterHTTPSUpgradeError: error) {
-                beginHTTPFallback(to: fallbackURL, in: webView)
-                return
+            if let fallbackURL = httpFallbackURL(for: error) {
+                if securityPolicy.shouldFallbackToHTTP(afterHTTPSUpgradeError: error) {
+                    beginHTTPFallback(to: fallbackURL, in: webView)
+                    return
+                }
+
+                discardHTTPFallback(to: fallbackURL)
             }
 
             publish(webView, isLoading: false, message: "Navigation failed.")
@@ -421,6 +424,14 @@ public struct WebViewHost: NSViewRepresentable {
             onStateChange(nil, fallbackURL, true)
             publishSecurityMessage(securityPolicy.securityMessage(forAllowedWebURL: fallbackURL))
             webView.load(URLRequest(url: fallbackURL))
+        }
+
+        private func discardHTTPFallback(to fallbackURL: URL) {
+            pendingHTTPFallbacksByUpgradeURL = pendingHTTPFallbacksByUpgradeURL.filter { $0.value != fallbackURL }
+            httpFallbacksInFlight.remove(fallbackURL)
+            if state.pendingHTTPFallbackURL == fallbackURL {
+                state.pendingHTTPFallbackURL = nil
+            }
         }
 
         private func httpFallbackURL(for error: Error) -> URL? {
