@@ -97,6 +97,88 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(restoredSpace.regularTabIDs.contains(tab.id))
     }
 
+    func testTabReorderMovesWithinSidebarSectionsAndPreservesSelection() throws {
+        let store = BrowserStore()
+        let spaceID = try XCTUnwrap(store.selectedSpaceID)
+        let regularA = try XCTUnwrap(store.createTab(title: "Regular A"))
+        let regularB = try XCTUnwrap(store.createTab(title: "Regular B"))
+        let regularC = try XCTUnwrap(store.createTab(title: "Regular C"))
+        store.selectTab(regularB.id)
+
+        XCTAssertTrue(store.canMoveTab(regularB.id, .up))
+        XCTAssertTrue(store.moveTab(regularB.id, .up))
+        XCTAssertEqual(Array(try XCTUnwrap(store.spaces.first { $0.id == spaceID }).regularTabIDs.suffix(3)), [regularB.id, regularA.id, regularC.id])
+        XCTAssertEqual(store.selectedTabID, regularB.id)
+
+        XCTAssertTrue(store.moveTab(regularB.id, .down))
+        XCTAssertEqual(Array(try XCTUnwrap(store.spaces.first { $0.id == spaceID }).regularTabIDs.suffix(3)), [regularA.id, regularB.id, regularC.id])
+
+        let favoriteA = try XCTUnwrap(store.createTab(title: "Favorite A"))
+        let favoriteB = try XCTUnwrap(store.createTab(title: "Favorite B"))
+        XCTAssertTrue(store.setTabPlacement(.favorite, for: favoriteA.id))
+        XCTAssertTrue(store.setTabPlacement(.favorite, for: favoriteB.id))
+        XCTAssertTrue(store.moveTab(favoriteB.id, .up))
+        XCTAssertEqual(Array(try XCTUnwrap(store.spaces.first { $0.id == spaceID }).favoriteTabIDs.suffix(2)), [favoriteB.id, favoriteA.id])
+
+        let pinnedA = try XCTUnwrap(store.createTab(title: "Pinned A"))
+        let pinnedB = try XCTUnwrap(store.createTab(title: "Pinned B"))
+        XCTAssertTrue(store.setTabPlacement(.pinned, for: pinnedA.id))
+        XCTAssertTrue(store.setTabPlacement(.pinned, for: pinnedB.id))
+        XCTAssertTrue(store.moveTab(pinnedA.id, .down))
+        XCTAssertEqual(store.spaces.first(where: { $0.id == spaceID })?.pinnedTabIDs, [pinnedB.id, pinnedA.id])
+    }
+
+    func testTabReorderMovesFolderTabsWithinFolderOnly() throws {
+        let store = BrowserStore()
+        let spaceID = try XCTUnwrap(store.selectedSpaceID)
+        let folder = try XCTUnwrap(store.createFolder(name: "Research", in: spaceID))
+        let first = try XCTUnwrap(store.createTab(title: "Folder A", in: spaceID, folderID: folder.id))
+        let second = try XCTUnwrap(store.createTab(title: "Folder B", in: spaceID, folderID: folder.id))
+        let third = try XCTUnwrap(store.createTab(title: "Folder C", in: spaceID, folderID: folder.id))
+        store.selectTab(second.id)
+
+        XCTAssertTrue(store.moveTab(second.id, .down))
+        XCTAssertEqual(store.folders.first(where: { $0.id == folder.id })?.tabIDs, [first.id, third.id, second.id])
+        XCTAssertEqual(store.selectedTabID, second.id)
+        XCTAssertFalse(store.spaces.first(where: { $0.id == spaceID })?.regularTabIDs.contains(second.id) ?? true)
+
+        XCTAssertTrue(store.moveTab(second.id, .up))
+        XCTAssertEqual(store.folders.first(where: { $0.id == folder.id })?.tabIDs, [first.id, second.id, third.id])
+    }
+
+    func testTabReorderRejectsEdgesAndMissingTabs() throws {
+        let store = BrowserStore()
+        let spaceID = try XCTUnwrap(store.selectedSpaceID)
+        _ = try XCTUnwrap(store.createTab(title: "Regular A"))
+        let regularB = try XCTUnwrap(store.createTab(title: "Regular B"))
+        let space = try XCTUnwrap(store.spaces.first(where: { $0.id == spaceID }))
+        let leadingTabID = try XCTUnwrap(space.regularTabIDs.first)
+
+        XCTAssertFalse(store.canMoveTab(leadingTabID, .up))
+        XCTAssertFalse(store.moveTab(leadingTabID, .up))
+        XCTAssertFalse(store.canMoveTab(regularB.id, .down))
+        XCTAssertFalse(store.moveTab(regularB.id, .down))
+        XCTAssertFalse(store.moveTab(UUID(), .up))
+        XCTAssertEqual(store.spaces.first(where: { $0.id == spaceID })?.regularTabIDs, space.regularTabIDs)
+    }
+
+    func testTabReorderRoundTripsThroughSnapshotPersistenceShape() throws {
+        let store = BrowserStore()
+        let spaceID = try XCTUnwrap(store.selectedSpaceID)
+        let first = try XCTUnwrap(store.createTab(title: "First"))
+        let second = try XCTUnwrap(store.createTab(title: "Second"))
+        let third = try XCTUnwrap(store.createTab(title: "Third"))
+        XCTAssertTrue(store.moveTab(third.id, .up))
+        XCTAssertTrue(store.moveTab(third.id, .up))
+
+        let data = try JSONEncoder().encode(store.persistentSnapshot(date: Date(timeIntervalSince1970: 24)))
+        let decoded = try JSONDecoder().decode(BrowserSessionSnapshot.self, from: data)
+        let restored = BrowserStore(snapshot: decoded)
+        let restoredSpace = try XCTUnwrap(restored.spaces.first { $0.id == spaceID })
+
+        XCTAssertEqual(Array(restoredSpace.regularTabIDs.suffix(3)), [third.id, first.id, second.id])
+    }
+
     func testCommandBarPlacementActionsMoveSelectedTab() throws {
         let store = BrowserStore()
         let tab = try XCTUnwrap(store.createTab(title: "Actions", url: URL(string: "https://actions.example.com")!))
@@ -114,6 +196,22 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.spaces.first(where: { $0.id == spaceID })?.regularTabIDs.last, tab.id)
         XCTAssertEqual(store.activeTab?.isPinned, false)
         XCTAssertEqual(store.activeTab?.isFavorite, false)
+    }
+
+    func testCommandBarReorderActionsMoveSelectedTabWithinSection() throws {
+        let store = BrowserStore()
+        let spaceID = try XCTUnwrap(store.selectedSpaceID)
+        let first = try XCTUnwrap(store.createTab(title: "First"))
+        let second = try XCTUnwrap(store.createTab(title: "Second"))
+        let third = try XCTUnwrap(store.createTab(title: "Third"))
+        store.selectTab(second.id)
+
+        store.submitCommandInput("move tab up")
+        XCTAssertEqual(Array(try XCTUnwrap(store.spaces.first { $0.id == spaceID }).regularTabIDs.suffix(3)), [second.id, first.id, third.id])
+        XCTAssertEqual(store.selectedTabID, second.id)
+
+        store.submitCommandInput("move tab down")
+        XCTAssertEqual(Array(try XCTUnwrap(store.spaces.first { $0.id == spaceID }).regularTabIDs.suffix(3)), [first.id, second.id, third.id])
     }
 
     func testSnapshotRoundTripsThroughJSON() throws {

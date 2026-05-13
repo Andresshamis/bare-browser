@@ -329,6 +329,61 @@ public final class BrowserStore: ObservableObject {
         return true
     }
 
+    public func canMoveSelectedTab(_ direction: BrowserTabReorderDirection) -> Bool {
+        guard let selectedTabID else {
+            return false
+        }
+        return canMoveTab(selectedTabID, direction)
+    }
+
+    public func canMoveTab(_ tabID: TabID, _ direction: BrowserTabReorderDirection) -> Bool {
+        guard let position = tabReorderPosition(for: tabID) else {
+            return false
+        }
+        return position.canMove(direction)
+    }
+
+    @discardableResult
+    public func moveSelectedTab(_ direction: BrowserTabReorderDirection) -> Bool {
+        guard let selectedTabID else {
+            return false
+        }
+        return moveTab(selectedTabID, direction)
+    }
+
+    @discardableResult
+    public func moveTab(_ tabID: TabID, _ direction: BrowserTabReorderDirection) -> Bool {
+        guard let position = tabReorderPosition(for: tabID),
+              position.canMove(direction) else {
+            return false
+        }
+
+        var didMove = false
+        switch position.container {
+        case .favorites(let spaceID):
+            updateSpace(spaceID) { space in
+                didMove = Self.moveTabID(tabID, direction, in: &space.favoriteTabIDs)
+            }
+        case .pinned(let spaceID):
+            updateSpace(spaceID) { space in
+                didMove = Self.moveTabID(tabID, direction, in: &space.pinnedTabIDs)
+            }
+        case .regular(let spaceID):
+            updateSpace(spaceID) { space in
+                didMove = Self.moveTabID(tabID, direction, in: &space.regularTabIDs)
+            }
+        case .folder(let folderID):
+            updateFolder(folderID) { folder in
+                didMove = Self.moveTabID(tabID, direction, in: &folder.tabIDs)
+            }
+        }
+
+        if didMove {
+            persistSession()
+        }
+        return didMove
+    }
+
     public func toggleSidebar() {
         sidebarIsVisible.toggle()
     }
@@ -992,6 +1047,10 @@ public final class BrowserStore: ObservableObject {
                 return false
             }
             return setTabPlacement(.regular, for: activeTab.id)
+        case .moveTabUp:
+            return moveSelectedTab(.up)
+        case .moveTabDown:
+            return moveSelectedTab(.down)
         case .splitActiveTab:
             return false
         case .reload, .stopLoading, .goBack, .goForward:
@@ -1017,6 +1076,10 @@ public final class BrowserStore: ObservableObject {
             return "Tab cannot be added to Essentials right now."
         case .moveTabToRegular:
             return "Tab is already in Tabs."
+        case .moveTabUp:
+            return "Tab cannot move up in its current section."
+        case .moveTabDown:
+            return "Tab cannot move down in its current section."
         case .splitActiveTab:
             return "Split view is not available yet."
         }
@@ -1054,6 +1117,91 @@ public final class BrowserStore: ObservableObject {
             || urlSecurityPolicy.isHTTPSUpgradeCandidate(committedURL, for: fallbackURL) {
             tab.restorationMetadata.pendingHTTPFallbackURL = nil
         }
+    }
+
+    private enum TabReorderContainer {
+        case favorites(SpaceID)
+        case pinned(SpaceID)
+        case regular(SpaceID)
+        case folder(FolderID)
+    }
+
+    private struct TabReorderPosition {
+        var container: TabReorderContainer
+        var index: Int
+        var count: Int
+
+        func canMove(_ direction: BrowserTabReorderDirection) -> Bool {
+            switch direction {
+            case .up:
+                return index > 0
+            case .down:
+                return index < count - 1
+            }
+        }
+    }
+
+    private func tabReorderPosition(for tabID: TabID) -> TabReorderPosition? {
+        guard let tab = tabs.first(where: { $0.id == tabID }) else {
+            return nil
+        }
+
+        if let folderID = tab.parentFolderID {
+            guard let folder = folders.first(where: { $0.id == folderID }),
+                  folder.parentSpaceID == tab.parentSpaceID,
+                  let index = folder.tabIDs.firstIndex(of: tabID) else {
+                return nil
+            }
+            return TabReorderPosition(container: .folder(folderID), index: index, count: folder.tabIDs.count)
+        }
+
+        guard let space = spaces.first(where: { $0.id == tab.parentSpaceID }) else {
+            return nil
+        }
+
+        if tab.isFavorite {
+            guard let index = space.favoriteTabIDs.firstIndex(of: tabID) else {
+                return nil
+            }
+            return TabReorderPosition(container: .favorites(space.id), index: index, count: space.favoriteTabIDs.count)
+        }
+
+        if tab.isPinned {
+            guard let index = space.pinnedTabIDs.firstIndex(of: tabID) else {
+                return nil
+            }
+            return TabReorderPosition(container: .pinned(space.id), index: index, count: space.pinnedTabIDs.count)
+        }
+
+        guard let index = space.regularTabIDs.firstIndex(of: tabID) else {
+            return nil
+        }
+        return TabReorderPosition(container: .regular(space.id), index: index, count: space.regularTabIDs.count)
+    }
+
+    private static func moveTabID(
+        _ tabID: TabID,
+        _ direction: BrowserTabReorderDirection,
+        in tabIDs: inout [TabID]
+    ) -> Bool {
+        guard let index = tabIDs.firstIndex(of: tabID) else {
+            return false
+        }
+
+        let targetIndex: Int
+        switch direction {
+        case .up:
+            targetIndex = index - 1
+        case .down:
+            targetIndex = index + 1
+        }
+
+        guard tabIDs.indices.contains(targetIndex) else {
+            return false
+        }
+
+        tabIDs.swapAt(index, targetIndex)
+        return true
     }
 
     private func updateSpace(_ id: SpaceID, mutate: (inout BrowserSpace) -> Void) {

@@ -6,19 +6,28 @@ public struct SidebarTabRow: View {
     private let select: () -> Void
     private let close: () -> Void
     private let setPlacement: (BrowserTabPlacement) -> Void
+    private let move: (BrowserTabReorderDirection) -> Void
+    private let canMoveUp: Bool
+    private let canMoveDown: Bool
 
     public init(
         tab: BrowserTab,
         isSelected: Bool,
         select: @escaping () -> Void,
         close: @escaping () -> Void,
-        setPlacement: @escaping (BrowserTabPlacement) -> Void
+        setPlacement: @escaping (BrowserTabPlacement) -> Void,
+        move: @escaping (BrowserTabReorderDirection) -> Void,
+        canMoveUp: Bool,
+        canMoveDown: Bool
     ) {
         self.tab = tab
         self.isSelected = isSelected
         self.select = select
         self.close = close
         self.setPlacement = setPlacement
+        self.move = move
+        self.canMoveUp = canMoveUp
+        self.canMoveDown = canMoveDown
     }
 
     public var body: some View {
@@ -64,6 +73,18 @@ public struct SidebarTabRow: View {
                 setPlacement(.regular)
             }
             .disabled(!tab.isPinned && !tab.isFavorite && tab.parentFolderID == nil)
+
+            Divider()
+
+            Button("Move Tab Up") {
+                move(.up)
+            }
+            .disabled(!canMoveUp)
+
+            Button("Move Tab Down") {
+                move(.down)
+            }
+            .disabled(!canMoveDown)
 
             Divider()
 

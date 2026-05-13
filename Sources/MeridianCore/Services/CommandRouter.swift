@@ -23,6 +23,8 @@ public struct CommandRouter: Sendable {
         case pinTab
         case addTabToEssentials
         case moveTabToRegular
+        case moveTabUp
+        case moveTabDown
         case splitActiveTab
     }
 
@@ -34,6 +36,8 @@ public struct CommandRouter: Sendable {
         public var canPinTab: Bool
         public var canAddTabToEssentials: Bool
         public var canMoveTabToRegular: Bool
+        public var canMoveTabUp: Bool
+        public var canMoveTabDown: Bool
         public var isLoading: Bool
 
         public init(
@@ -44,6 +48,8 @@ public struct CommandRouter: Sendable {
             canPinTab: Bool = false,
             canAddTabToEssentials: Bool = false,
             canMoveTabToRegular: Bool = false,
+            canMoveTabUp: Bool = false,
+            canMoveTabDown: Bool = false,
             isLoading: Bool = false
         ) {
             self.canGoBack = canGoBack
@@ -53,6 +59,8 @@ public struct CommandRouter: Sendable {
             self.canPinTab = canPinTab
             self.canAddTabToEssentials = canAddTabToEssentials
             self.canMoveTabToRegular = canMoveTabToRegular
+            self.canMoveTabUp = canMoveTabUp
+            self.canMoveTabDown = canMoveTabDown
             self.isLoading = isLoading
         }
     }
@@ -167,6 +175,10 @@ public struct CommandRouter: Sendable {
                 return availability.canAddTabToEssentials
             case .moveTabToRegular:
                 return availability.canMoveTabToRegular
+            case .moveTabUp:
+                return availability.canMoveTabUp
+            case .moveTabDown:
+                return availability.canMoveTabDown
             case .splitActiveTab:
                 return false
             }
@@ -229,6 +241,20 @@ public struct CommandRouter: Sendable {
             subtitle: "Return selected tab to regular Tabs",
             symbolName: "rectangle.stack",
             aliases: ["move to tabs", "regular tab", "unpin tab", "remove from essentials"]
+        ),
+        BrowserActionSuggestion(
+            action: .moveTabUp,
+            title: "Move Tab Up",
+            subtitle: "Reorder within current sidebar section",
+            symbolName: "arrow.up",
+            aliases: ["move tab up", "tab up", "move up", "reorder tab up"]
+        ),
+        BrowserActionSuggestion(
+            action: .moveTabDown,
+            title: "Move Tab Down",
+            subtitle: "Reorder within current sidebar section",
+            symbolName: "arrow.down",
+            aliases: ["move tab down", "tab down", "move down", "reorder tab down"]
         )
     ]
 

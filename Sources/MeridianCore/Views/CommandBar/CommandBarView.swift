@@ -110,6 +110,8 @@ public struct CommandBarView: View {
             canPinTab: activeTab.map { !$0.isPinned || $0.isFavorite || $0.parentFolderID != nil } ?? false,
             canAddTabToEssentials: activeTab.map { !$0.isFavorite || $0.isPinned || $0.parentFolderID != nil } ?? false,
             canMoveTabToRegular: activeTab.map { $0.isPinned || $0.isFavorite || $0.parentFolderID != nil } ?? false,
+            canMoveTabUp: store.canMoveSelectedTab(.up),
+            canMoveTabDown: store.canMoveSelectedTab(.down),
             isLoading: webViewState.isLoading
         )
     }
@@ -140,7 +142,7 @@ public struct CommandBarView: View {
             }
             webViewState.dispatch(.goForward)
             return true
-        case .closeTab, .pinTab, .addTabToEssentials, .moveTabToRegular, .splitActiveTab:
+        case .closeTab, .pinTab, .addTabToEssentials, .moveTabToRegular, .moveTabUp, .moveTabDown, .splitActiveTab:
             return false
         }
     }

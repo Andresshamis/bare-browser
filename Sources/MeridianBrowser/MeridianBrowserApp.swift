@@ -62,6 +62,22 @@ struct MeridianBrowserApp: App {
                 }
                 .keyboardShortcut("w", modifiers: [.command])
 
+                Divider()
+
+                Button("Move Tab Up") {
+                    store.moveSelectedTab(.up)
+                }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                .disabled(!store.canMoveSelectedTab(.up))
+
+                Button("Move Tab Down") {
+                    store.moveSelectedTab(.down)
+                }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                .disabled(!store.canMoveSelectedTab(.down))
+
+                Divider()
+
                 Button("Command Bar") {
                     store.showCommandBar()
                 }

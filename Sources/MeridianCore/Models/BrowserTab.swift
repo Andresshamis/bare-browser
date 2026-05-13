@@ -66,6 +66,20 @@ public enum BrowserTabPlacement: String, Equatable, Sendable {
     }
 }
 
+public enum BrowserTabReorderDirection: String, Equatable, Sendable {
+    case up
+    case down
+
+    public var title: String {
+        switch self {
+        case .up:
+            return "Up"
+        case .down:
+            return "Down"
+        }
+    }
+}
+
 public struct TabRestorationMetadata: Hashable, Codable, Sendable {
     public var estimatedScrollPosition: Double?
     public var backForwardListHint: [URL]
