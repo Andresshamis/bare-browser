@@ -35,6 +35,8 @@ final class CommandRouterTests: XCTestCase {
         XCTAssertEqual(router.route(input: "pin tab"), .browserAction(.pinTab))
         XCTAssertEqual(router.route(input: "add to essentials"), .browserAction(.addTabToEssentials))
         XCTAssertEqual(router.route(input: "move to tabs"), .browserAction(.moveTabToRegular))
+        XCTAssertEqual(router.route(input: "move tab up"), .browserAction(.moveTabUp))
+        XCTAssertEqual(router.route(input: "move tab down"), .browserAction(.moveTabDown))
     }
 
     func testBrowserActionSuggestionsRespectAvailability() {
@@ -87,6 +89,29 @@ final class CommandRouterTests: XCTestCase {
         XCTAssertEqual(
             suggestions.map(\.action),
             [.pinTab, .addTabToEssentials, .moveTabToRegular]
+        )
+    }
+
+    func testTabReorderActionSuggestionsRespectAvailability() {
+        let router = CommandRouter()
+
+        let unavailableSuggestions = router.browserActionSuggestions(
+            for: "move tab",
+            availability: CommandRouter.BrowserActionAvailability(canMoveTabUp: false, canMoveTabDown: false)
+        )
+        XCTAssertTrue(unavailableSuggestions.isEmpty)
+
+        let suggestions = router.browserActionSuggestions(
+            for: "move tab",
+            availability: CommandRouter.BrowserActionAvailability(
+                canMoveTabUp: true,
+                canMoveTabDown: true
+            )
+        )
+
+        XCTAssertEqual(
+            suggestions.map(\.action),
+            [.moveTabUp, .moveTabDown]
         )
     }
 
