@@ -357,6 +357,56 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(savedSnapshot.tabs.contains { $0.profileID == privateProfile.id })
     }
 
+    func testDiscardingPrivateBrowsingSessionClearsPrivatePendingURLConfirmation() throws {
+        let store = BrowserStore()
+        let privateProfile = store.createPrivateBrowsingSession(date: Date(timeIntervalSince1970: 62))
+        let externalURL = URL(string: "mailto:secret@example.com")!
+
+        store.requestURLConfirmation(
+            kind: .externalApplication,
+            url: externalURL,
+            sourceURL: URL(string: "https://private.example/secret")
+        )
+
+        XCTAssertEqual(store.pendingURLConfirmation?.url, externalURL)
+        XCTAssertEqual(store.pendingURLConfirmation?.sourceDescription, "private.example")
+
+        XCTAssertTrue(store.discardPrivateBrowsingSession(profileID: privateProfile.id, date: Date(timeIntervalSince1970: 63)))
+
+        XCTAssertNil(store.pendingURLConfirmation)
+        XCTAssertEqual(store.lastUserMessage, "Private browsing session closed.")
+        XCTAssertFalse(store.approvePendingURLConfirmation { _ in true })
+    }
+
+    func testDiscardingPrivateBrowsingSessionCancelsPrivatePendingDownloadConfirmation() throws {
+        let store = BrowserStore()
+        let privateProfile = store.createPrivateBrowsingSession(date: Date(timeIntervalSince1970: 64))
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "secret.zip",
+            sourceURL: URL(string: "https://private.example/secret.zip")
+        )
+        var completionCallCount = 0
+        var completedURL: URL? = URL(fileURLWithPath: "/tmp/should-not-save")
+
+        store.requestDownloadConfirmation(request) { destinationURL in
+            completionCallCount += 1
+            completedURL = destinationURL
+        }
+
+        XCTAssertNotNil(store.pendingDownloadConfirmation)
+        XCTAssertTrue(store.beginPendingDownloadDestinationSelection())
+        XCTAssertTrue(store.isChoosingDownloadDestination)
+
+        XCTAssertTrue(store.discardPrivateBrowsingSession(profileID: privateProfile.id, date: Date(timeIntervalSince1970: 65)))
+
+        XCTAssertEqual(completionCallCount, 1)
+        XCTAssertNil(completedURL)
+        XCTAssertNil(store.pendingDownloadConfirmation)
+        XCTAssertFalse(store.isChoosingDownloadDestination)
+        XCTAssertEqual(store.lastUserMessage, "Private browsing session closed.")
+        XCTAssertFalse(store.approvePendingDownloadConfirmation(destination: URL(fileURLWithPath: "/tmp/secret.zip")))
+    }
+
     func testDiscardingPrivateBrowsingSessionCreatesPublicFallbackWhenOnlyPrivateStateExists() throws {
         var snapshot = SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 70))
         let privateProfile = BrowserProfile(

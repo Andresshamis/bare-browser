@@ -27,6 +27,8 @@ public final class BrowserStore: ObservableObject {
     private let sessionPersistence: SessionSnapshotPersisting?
     private let localHistoryPersistence: LocalHistoryPersisting?
     private var localHistoryStore: LocalHistoryStore
+    private var pendingURLConfirmationProfileID: ProfileID?
+    private var pendingDownloadConfirmationProfileID: ProfileID?
     private var pendingDownloadCompletion: (@MainActor (URL?) -> Void)?
 
     public init(
@@ -64,6 +66,8 @@ public final class BrowserStore: ObservableObject {
         self.sessionPersistence = sessionPersistence
         self.localHistoryPersistence = localHistoryPersistence
         self.localHistoryStore = localHistoryStore
+        self.pendingURLConfirmationProfileID = nil
+        self.pendingDownloadConfirmationProfileID = nil
         self.pendingDownloadCompletion = nil
     }
 
@@ -262,6 +266,13 @@ public final class BrowserStore: ObservableObject {
         sitePermissionSettings.removeAll { $0.profileID == resolvedProfileID }
         if pendingSitePermissionRequest?.profileID == resolvedProfileID {
             pendingSitePermissionRequest = nil
+        }
+        if pendingURLConfirmationProfileID == resolvedProfileID {
+            pendingURLConfirmation = nil
+            pendingURLConfirmationProfileID = nil
+        }
+        if pendingDownloadConfirmationProfileID == resolvedProfileID {
+            cancelPendingDownloadCompletion(message: nil)
         }
 
         let removedHistoryEntries = localHistoryStore.clearEntries(profileID: resolvedProfileID)
@@ -808,6 +819,7 @@ public final class BrowserStore: ObservableObject {
             sourceContext: sourceContext,
             createdAt: date
         )
+        pendingURLConfirmationProfileID = activeProfile?.id
         lastUserMessage = kind.pendingMessage
     }
 
@@ -833,11 +845,13 @@ public final class BrowserStore: ObservableObject {
 
         guard urlSecurityPolicy.confirmationKind(for: request.url) == request.kind else {
             pendingURLConfirmation = nil
+            pendingURLConfirmationProfileID = nil
             lastUserMessage = "URL confirmation was rejected because the link no longer matches its security decision."
             return false
         }
 
         pendingURLConfirmation = nil
+        pendingURLConfirmationProfileID = nil
         let didOpen = open(request.url)
         lastUserMessage = didOpen ? request.kind.approvedMessage : "Unable to open confirmed link."
         return didOpen
@@ -849,6 +863,7 @@ public final class BrowserStore: ObservableObject {
         }
 
         pendingURLConfirmation = nil
+        pendingURLConfirmationProfileID = nil
         lastUserMessage = request.kind.cancelledMessage
     }
 
@@ -864,6 +879,7 @@ public final class BrowserStore: ObservableObject {
             completion(nil)
         case .low, .requiresConfirmation:
             pendingDownloadConfirmation = request
+            pendingDownloadConfirmationProfileID = activeProfile?.id
             pendingDownloadCompletion = completion
             lastUserMessage = request.pendingMessage
         }
@@ -919,6 +935,7 @@ public final class BrowserStore: ObservableObject {
         }
 
         pendingDownloadConfirmation = nil
+        pendingDownloadConfirmationProfileID = nil
         pendingDownloadCompletion = nil
         isChoosingDownloadDestination = false
         lastUserMessage = "Download will be saved as \(destinationURL.lastPathComponent)."
@@ -1282,6 +1299,7 @@ public final class BrowserStore: ObservableObject {
     private func cancelPendingDownloadCompletion(message: String?) {
         let completion = pendingDownloadCompletion
         pendingDownloadConfirmation = nil
+        pendingDownloadConfirmationProfileID = nil
         pendingDownloadCompletion = nil
         isChoosingDownloadDestination = false
         if let message {
