@@ -182,7 +182,8 @@ public final class BrowserStore: ObservableObject {
         in spaceID: SpaceID? = nil,
         folderID: FolderID? = nil,
         pinned: Bool = false,
-        favorite: Bool = false
+        favorite: Bool = false,
+        pendingHTTPFallbackURL: URL? = nil
     ) -> BrowserTab? {
         guard let targetSpaceID = spaceID ?? selectedSpaceID,
               let targetSpace = spaces.first(where: { $0.id == targetSpaceID }) else {
@@ -198,7 +199,10 @@ public final class BrowserStore: ObservableObject {
             isPinned: pinned,
             isFavorite: favorite,
             profileID: profileID,
-            restorationMetadata: TabRestorationMetadata(lastCommittedURL: url)
+            restorationMetadata: TabRestorationMetadata(
+                lastCommittedURL: url,
+                pendingHTTPFallbackURL: pendingHTTPFallbackURL
+            )
         )
         tabs.append(tab)
 
@@ -428,8 +432,11 @@ public final class BrowserStore: ObservableObject {
     public func open(_ url: URL) {
         switch urlSecurityPolicy.decision(for: url) {
         case .allowInWebView:
-            _ = createTab(url: url)
-            updatePageSecurityStatus(for: url)
+            let upgradeCandidate = urlSecurityPolicy.httpsUpgradeCandidate(for: url)
+            let pendingFallbackURL = upgradeCandidate == nil ? nil : url
+            let navigationURL = upgradeCandidate ?? url
+            _ = createTab(url: navigationURL, pendingHTTPFallbackURL: pendingFallbackURL)
+            updatePageSecurityStatus(for: navigationURL)
         case .requireExternalApplicationConfirmation:
             requestURLConfirmation(kind: .externalApplication, url: url)
         case .requireLocalFileConfirmation:
@@ -749,6 +756,9 @@ public final class BrowserStore: ObservableObject {
             tab.url = url ?? tab.url
             tab.isLoading = isLoading
             tab.restorationMetadata.lastCommittedURL = url ?? tab.restorationMetadata.lastCommittedURL
+            if let updatedURL = url {
+                updateHTTPSUpgradeFallbackMetadata(for: &tab, committedURL: updatedURL)
+            }
             visitProfileID = tab.profileID
             visitURL = tab.url
             visitTitle = tab.title
@@ -940,6 +950,17 @@ public final class BrowserStore: ObservableObject {
     private func clearCurrentPageSecurityStatus() {
         if lastUserMessage == URLSecurityPolicy.insecureTransportMessage {
             lastUserMessage = nil
+        }
+    }
+
+    private func updateHTTPSUpgradeFallbackMetadata(for tab: inout BrowserTab, committedURL: URL) {
+        guard let fallbackURL = tab.restorationMetadata.pendingHTTPFallbackURL else {
+            return
+        }
+
+        if committedURL == fallbackURL
+            || urlSecurityPolicy.isHTTPSUpgradeCandidate(committedURL, for: fallbackURL) {
+            tab.restorationMetadata.pendingHTTPFallbackURL = nil
         }
     }
 

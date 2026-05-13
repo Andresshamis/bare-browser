@@ -63,6 +63,41 @@ public struct URLSecurityPolicy: Sendable {
         url.scheme?.lowercased() == "http" && !isLoopbackOrLocalhost(url)
     }
 
+    public func httpsUpgradeCandidate(for url: URL) -> URL? {
+        guard allowedWebSchemes.contains("http"),
+              allowedWebSchemes.contains("https"),
+              url.scheme?.lowercased() == "http",
+              !isLoopbackOrLocalhost(url),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+
+        components.scheme = "https"
+        return components.url
+    }
+
+    public func isHTTPSUpgradeCandidate(_ candidateURL: URL, for originalHTTPURL: URL) -> Bool {
+        httpsUpgradeCandidate(for: originalHTTPURL) == candidateURL
+    }
+
+    public func shouldFallbackToHTTP(afterHTTPSUpgradeError error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == NSURLErrorDomain else {
+            return true
+        }
+
+        let certificateErrorCodes: Set<Int> = [
+            NSURLErrorServerCertificateHasBadDate,
+            NSURLErrorServerCertificateUntrusted,
+            NSURLErrorServerCertificateHasUnknownRoot,
+            NSURLErrorServerCertificateNotYetValid,
+            NSURLErrorClientCertificateRejected,
+            NSURLErrorClientCertificateRequired
+        ]
+
+        return !certificateErrorCodes.contains(nsError.code)
+    }
+
     public func securityMessage(forAllowedWebURL url: URL) -> String? {
         isInsecureTransport(url) ? Self.insecureTransportMessage : nil
     }

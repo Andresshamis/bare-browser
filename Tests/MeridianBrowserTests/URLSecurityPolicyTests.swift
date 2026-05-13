@@ -47,6 +47,40 @@ final class URLSecurityPolicyTests: XCTestCase {
         XCTAssertFalse(policy.isInsecureTransport(URL(string: "https://example.com")!))
     }
 
+    func testBuildsHTTPSUpgradeCandidateForNonLocalHTTP() throws {
+        let policy = URLSecurityPolicy()
+        let originalURL = URL(string: "http://example.com:8080/path/article?view=reader#section")!
+
+        let upgradedURL = try XCTUnwrap(policy.httpsUpgradeCandidate(for: originalURL))
+
+        XCTAssertEqual(upgradedURL, URL(string: "https://example.com:8080/path/article?view=reader#section")!)
+        XCTAssertTrue(policy.isHTTPSUpgradeCandidate(upgradedURL, for: originalURL))
+    }
+
+    func testDoesNotUpgradeLocalOrAlreadySecureURLs() {
+        let policy = URLSecurityPolicy()
+
+        XCTAssertNil(policy.httpsUpgradeCandidate(for: URL(string: "http://localhost:3000")!))
+        XCTAssertNil(policy.httpsUpgradeCandidate(for: URL(string: "http://127.0.0.1:8080")!))
+        XCTAssertNil(policy.httpsUpgradeCandidate(for: URL(string: "http://[::1]:8080")!))
+        XCTAssertNil(policy.httpsUpgradeCandidate(for: URL(string: "https://example.com")!))
+    }
+
+    func testCertificateErrorsDoNotFallbackToHTTP() {
+        let policy = URLSecurityPolicy()
+        let certificateError = NSError(
+            domain: NSURLErrorDomain,
+            code: NSURLErrorServerCertificateUntrusted
+        )
+        let connectionError = NSError(
+            domain: NSURLErrorDomain,
+            code: NSURLErrorCannotConnectToHost
+        )
+
+        XCTAssertFalse(policy.shouldFallbackToHTTP(afterHTTPSUpgradeError: certificateError))
+        XCTAssertTrue(policy.shouldFallbackToHTTP(afterHTTPSUpgradeError: connectionError))
+    }
+
     func testInsecureTransportMessageDoesNotIncludeURLComponents() {
         let policy = URLSecurityPolicy()
         let url = URL(string: "http://user:pass@example.com/private?token=secret#fragment")!

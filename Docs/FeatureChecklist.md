@@ -13,6 +13,7 @@
 - Persistent profile creation and switching controls through the sidebar, native menu, and command bar.
 - Default content rule list wiring.
 - URL and download safety helpers.
+- HTTPS-first upgrade attempts for non-local HTTP main-frame navigations, with controlled HTTP fallback warnings.
 - Native pending confirmation for external app and local file URL handoff.
 - WebKit download delegate handling with native destination approval and risky download confirmation.
 - Site permission policy with public-profile allow/deny persistence and private-profile session-only filtering.

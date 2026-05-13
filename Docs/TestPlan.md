@@ -10,14 +10,14 @@ swift test
 
 Current coverage:
 
-- Address parsing and HTTPS-first host resolution.
+- Address parsing, HTTPS-first bare-host resolution, and main-frame HTTP upgrade candidate policy.
 - Search query routing.
 - Command routing for URLs, search, spaces, and folders.
 - Profile-scoped local history recording, private-profile exclusion, URL normalization before retention/restore, restored duplicate collapse, scoped querying, command-bar history result activation, active-profile clear, and individual history delete.
 - Persistent profile creation and switching, including default profile space/tab seeding, command-bar profile results, public session persistence, active-profile open-tab/history scoping, and site-permission scoping.
 - URL scheme security decisions.
 - Pending confirmation state for external app and local file URLs.
-- Insecure HTTP detection and visible browser status message publication for explicit opens and WebKit-published URLs.
+- Insecure HTTP detection, HTTPS-first explicit HTTP opens, controlled HTTP fallback warning publication, and stale insecure-status clearing after successful HTTPS updates.
 - Download filename sanitization, risk classification, safe destination selection, and pending confirmation state.
 - Site permission origin sanitization, supported/unsupported defaults, stored allow/deny decisions, pending store state, restored public decisions, and private-profile persistence exclusion.
 - Profile metadata for persistent and private browsing.
@@ -46,4 +46,5 @@ Current coverage:
 - Broader history management UI tests once the signed app/UI test host can cover menus and command-bar context actions.
 - End-to-end WebKit download fixture tests for delegate callbacks, save panel behavior, destination handling, quarantine metadata, and risky extension confirmation.
 - SwiftUI/UI coverage proving the browser status row remains visible, dismissible, and VoiceOver reachable.
+- End-to-end WebKit fixture tests proving main-frame HTTP link clicks attempt HTTPS first and fall back only for tracked upgrade attempts.
 - UI or WebKit fixture tests for camera/microphone and pop-up prompts once the app test host exists.

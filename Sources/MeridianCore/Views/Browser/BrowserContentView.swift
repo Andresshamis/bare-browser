@@ -208,6 +208,9 @@ public struct BrowserContentView: View {
 
     private func syncWebViewState() {
         webViewState.title = store.activeTab?.title ?? "New Tab"
-        webViewState.request(store.activeTab?.url)
+        webViewState.request(
+            store.activeTab?.url,
+            pendingHTTPFallbackURL: store.activeTab?.restorationMetadata.pendingHTTPFallbackURL
+        )
     }
 }

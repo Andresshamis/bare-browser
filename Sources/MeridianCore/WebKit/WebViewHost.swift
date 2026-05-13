@@ -124,6 +124,8 @@ public struct WebViewHost: NSViewRepresentable {
         fileprivate var onDownloadConfirmationRequired: @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
         fileprivate var onSitePermissionRequest: @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
         fileprivate var lastHandledCommandID: UUID?
+        private var pendingHTTPFallbacksByUpgradeURL: [URL: URL] = [:]
+        private var httpFallbacksInFlight: Set<URL> = []
         private var downloadSourceMetadata: [ObjectIdentifier: DownloadSourceMetadata] = [:]
         private var downloadDestinations: [ObjectIdentifier: URL] = [:]
 
@@ -164,6 +166,12 @@ public struct WebViewHost: NSViewRepresentable {
         }
 
         public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            if let fallbackURL = httpFallbackURL(for: error),
+               securityPolicy.shouldFallbackToHTTP(afterHTTPSUpgradeError: error) {
+                beginHTTPFallback(to: fallbackURL, in: webView)
+                return
+            }
+
             publish(webView, isLoading: false, message: "Navigation failed.")
         }
 
@@ -179,6 +187,13 @@ public struct WebViewHost: NSViewRepresentable {
 
             switch securityPolicy.decision(for: url) {
             case .allowInWebView:
+                if shouldUpgradeNavigationAction(navigationAction, url: url),
+                   let upgradedURL = securityPolicy.httpsUpgradeCandidate(for: url) {
+                    beginHTTPSUpgrade(from: url, to: upgradedURL, in: webView)
+                    decisionHandler(.cancel)
+                    return
+                }
+
                 publishSecurityMessage(securityPolicy.securityMessage(forAllowedWebURL: url))
                 decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
             case .requireExternalApplicationConfirmation:
@@ -381,6 +396,55 @@ public struct WebViewHost: NSViewRepresentable {
             onSecurityMessage(message)
         }
 
+        private func shouldUpgradeNavigationAction(_ navigationAction: WKNavigationAction, url: URL) -> Bool {
+            guard navigationAction.targetFrame?.isMainFrame == true,
+                  !navigationAction.shouldPerformDownload,
+                  !httpFallbacksInFlight.contains(url) else {
+                return false
+            }
+
+            return securityPolicy.httpsUpgradeCandidate(for: url) != nil
+        }
+
+        private func beginHTTPSUpgrade(from originalURL: URL, to upgradedURL: URL, in webView: WKWebView) {
+            pendingHTTPFallbacksByUpgradeURL[upgradedURL] = originalURL
+            httpFallbacksInFlight.remove(originalURL)
+            if state.requestedURL != upgradedURL || state.pendingHTTPFallbackURL != originalURL {
+                state.request(upgradedURL, pendingHTTPFallbackURL: originalURL)
+            }
+            webView.load(URLRequest(url: upgradedURL))
+        }
+
+        private func beginHTTPFallback(to fallbackURL: URL, in webView: WKWebView) {
+            httpFallbacksInFlight.insert(fallbackURL)
+            state.request(fallbackURL)
+            onStateChange(nil, fallbackURL, true)
+            publishSecurityMessage(securityPolicy.securityMessage(forAllowedWebURL: fallbackURL))
+            webView.load(URLRequest(url: fallbackURL))
+        }
+
+        private func httpFallbackURL(for error: Error) -> URL? {
+            let failedURL = failedNavigationURL(from: error) ?? state.requestedURL
+
+            if let failedURL,
+               let fallbackURL = pendingHTTPFallbacksByUpgradeURL.removeValue(forKey: failedURL) {
+                return fallbackURL
+            }
+
+            guard let failedURL,
+                  let fallbackURL = state.pendingHTTPFallbackURL,
+                  securityPolicy.isHTTPSUpgradeCandidate(failedURL, for: fallbackURL) else {
+                return nil
+            }
+
+            return fallbackURL
+        }
+
+        private func failedNavigationURL(from error: Error) -> URL? {
+            let nsError = error as NSError
+            return nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL
+        }
+
         private func publish(_ webView: WKWebView, isLoading: Bool, message: String? = nil) {
             let title = webView.title
             let url = webView.url
@@ -394,6 +458,10 @@ public struct WebViewHost: NSViewRepresentable {
             Task { @MainActor in
                 state.title = title ?? state.title
                 state.committedURL = url
+                if let url {
+                    self.pendingHTTPFallbacksByUpgradeURL.removeValue(forKey: url)
+                    self.httpFallbacksInFlight.remove(url)
+                }
                 state.isLoading = isLoading
                 state.estimatedProgress = progress
                 state.canGoBack = canGoBack
