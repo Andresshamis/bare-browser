@@ -8,6 +8,17 @@ Run:
 swift test
 ```
 
+GitHub Actions runs the baseline `CI / SwiftPM baseline` job for pull requests
+targeting `dev` or `main` and for pushes to those branches. The job runs on a
+macOS 26 runner and verifies:
+
+- Swift and Xcode version traceability.
+- `swift build`.
+- `swift test`.
+- `bash -n script/build_and_run.sh`.
+- `git diff --check` whitespace hygiene against the pull request base or push
+  range when available.
+
 Current coverage:
 
 - Address parsing, HTTPS-first bare-host resolution, and main-frame HTTP upgrade candidate policy.
@@ -42,6 +53,7 @@ Current coverage:
 ## Required Future Tests
 
 - UI tests for creating spaces, folders, profiles, opening tabs, switching tabs, restoring sessions, and split view.
+- CI coverage for signed Xcode app builds and UI smoke tests once issue #4 / PR #12 provides a signing-capable app/UI test host and the owner approves CI signing credentials.
 - Local web fixture tests proving cookies/localStorage do not leak between profiles.
 - Private browsing persistence tests proving website data does not survive window/session close.
 - Broader history management UI tests once the signed app/UI test host can cover menus and command-bar context actions.
