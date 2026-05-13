@@ -7,6 +7,7 @@ public struct CommandRouter: Sendable {
         case createTab(URL?)
         case createSpace(String)
         case createFolder(String)
+        case createProfile(String)
         case switchSpace(SpaceID)
         case switchProfile(ProfileID)
         case browserAction(BrowserAction)
@@ -97,6 +98,14 @@ public struct CommandRouter: Sendable {
 
         if trimmed.lowercased().hasPrefix("folder ") {
             return .createFolder(String(trimmed.dropFirst("folder ".count)).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        if trimmed.lowercased().hasPrefix("new profile ") {
+            return .createProfile(String(trimmed.dropFirst("new profile ".count)).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        if trimmed.lowercased().hasPrefix("profile ") {
+            return .createProfile(String(trimmed.dropFirst("profile ".count)).trimmingCharacters(in: .whitespacesAndNewlines))
         }
 
         if let action = Self.browserAction(forAlias: trimmed) {

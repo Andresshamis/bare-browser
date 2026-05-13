@@ -19,6 +19,8 @@ final class CommandRouterTests: XCTestCase {
 
         XCTAssertEqual(router.route(input: "space Work"), .createSpace("Work"))
         XCTAssertEqual(router.route(input: "folder Research"), .createFolder("Research"))
+        XCTAssertEqual(router.route(input: "profile Work"), .createProfile("Work"))
+        XCTAssertEqual(router.route(input: "new profile Personal Projects"), .createProfile("Personal Projects"))
     }
 
     func testRoutesBrowserActionAliasesBeforeSearch() {

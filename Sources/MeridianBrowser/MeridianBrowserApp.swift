@@ -43,6 +43,11 @@ struct MeridianBrowserApp: App {
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
 
+                Button("New Profile") {
+                    _ = store.createPersistentProfile(name: store.suggestedPersistentProfileName)
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+
                 Button("New Private Window") {
                     let profile = store.createProfile(name: "Private", ephemeral: true)
                     _ = store.createSpace(name: "Private", profileID: profile.id)
@@ -68,6 +73,21 @@ struct MeridianBrowserApp: App {
                     store.toggleSidebar()
                 }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
+            }
+
+            CommandMenu("Profiles") {
+                Button("New Profile") {
+                    _ = store.createPersistentProfile(name: store.suggestedPersistentProfileName)
+                }
+
+                Divider()
+
+                ForEach(store.persistentProfiles) { profile in
+                    Button(profile.name) {
+                        _ = store.switchProfile(profile.id)
+                    }
+                    .disabled(profile.id == store.activeProfile?.id)
+                }
             }
 
             CommandMenu("History") {
