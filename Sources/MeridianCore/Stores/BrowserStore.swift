@@ -19,6 +19,11 @@ public enum SidebarRevealEdge: String, CaseIterable, Identifiable {
     }
 }
 
+public enum CommandBarMode: Equatable, Sendable {
+    case address
+    case newTab
+}
+
 @MainActor
 public final class BrowserStore: ObservableObject {
     @Published public var profiles: [BrowserProfile]
@@ -29,6 +34,7 @@ public final class BrowserStore: ObservableObject {
     @Published public var selectedSpaceID: SpaceID?
     @Published public var selectedTabID: TabID?
     @Published public var isCommandBarPresented: Bool
+    @Published public private(set) var commandBarMode: CommandBarMode
     @Published public var sidebarIsVisible: Bool
     @Published public var sidebarIsLockedOpen: Bool
     @Published public var sidebarRevealEdge: SidebarRevealEdge
@@ -70,6 +76,7 @@ public final class BrowserStore: ObservableObject {
         self.selectedSpaceID = snapshot.selectedSpaceID
         self.selectedTabID = snapshot.selectedTabID
         self.isCommandBarPresented = false
+        self.commandBarMode = .address
         self.sidebarIsVisible = true
         self.sidebarIsLockedOpen = true
         self.sidebarRevealEdge = sidebarRevealEdge
@@ -88,6 +95,10 @@ public final class BrowserStore: ObservableObject {
         self.localHistoryPersistence = localHistoryPersistence
         self.localHistoryStore = localHistoryStore
         self.pendingDownloadCompletion = nil
+
+        if pruneStaleEmptyTabsFromLoadedSession() {
+            persistSession()
+        }
     }
 
     public var selectedSpace: BrowserSpace? {
@@ -560,20 +571,18 @@ public final class BrowserStore: ObservableObject {
     }
 
     public func showCommandBar() {
+        commandBarMode = .address
         isCommandBarPresented = true
     }
 
     public func hideCommandBar() {
         isCommandBarPresented = false
+        commandBarMode = .address
     }
 
-    @discardableResult
-    public func beginNewTab() -> BrowserTab? {
-        let tab = createTab()
-        if tab != nil {
-            showCommandBar()
-        }
-        return tab
+    public func beginNewTab() {
+        commandBarMode = .newTab
+        isCommandBarPresented = true
     }
 
     public func submitCommandInput(
@@ -589,7 +598,12 @@ public final class BrowserStore: ObservableObject {
     ) {
         switch commandRouter.route(input: input) {
         case .openURL(let url), .search(let url, _):
-            navigateActiveTab(to: url)
+            switch commandBarMode {
+            case .address:
+                navigateActiveTab(to: url)
+            case .newTab:
+                open(url)
+            }
             hideCommandBar()
         case let command:
             perform(command, browserActionHandler: browserActionHandler)
@@ -1468,6 +1482,68 @@ public final class BrowserStore: ObservableObject {
         mutate(&tabs[index])
     }
 
+    @discardableResult
+    private func pruneStaleEmptyTabsFromLoadedSession() -> Bool {
+        let emptyTabIDs = Set(tabs.filter(Self.isStaleEmptyTab).map(\.id))
+        guard !emptyTabIDs.isEmpty else {
+            return false
+        }
+
+        var tabIDsToRemove = Set<TabID>()
+        for space in spaces {
+            let emptyRegularTabIDs = space.regularTabIDs.filter { emptyTabIDs.contains($0) }
+            guard !emptyRegularTabIDs.isEmpty else {
+                continue
+            }
+
+            let folderTabIDs = folders
+                .filter { $0.parentSpaceID == space.id }
+                .flatMap(\.tabIDs)
+            let hasRestorableTab = (space.favoriteTabIDs + space.pinnedTabIDs + space.regularTabIDs + folderTabIDs)
+                .contains { !emptyTabIDs.contains($0) }
+
+            if hasRestorableTab {
+                tabIDsToRemove.formUnion(emptyRegularTabIDs)
+            } else if emptyRegularTabIDs.count > 1 {
+                let newestEmptyTabID = emptyRegularTabIDs.max { lhs, rhs in
+                    lastActiveDate(for: lhs) < lastActiveDate(for: rhs)
+                }
+                tabIDsToRemove.formUnion(emptyRegularTabIDs.filter { $0 != newestEmptyTabID })
+            }
+        }
+
+        guard !tabIDsToRemove.isEmpty else {
+            return false
+        }
+
+        tabs.removeAll { tabIDsToRemove.contains($0.id) }
+        folders.indices.forEach { index in
+            folders[index].tabIDs.removeAll { tabIDsToRemove.contains($0) }
+        }
+        spaces.indices.forEach { index in
+            spaces[index].favoriteTabIDs.removeAll { tabIDsToRemove.contains($0) }
+            spaces[index].pinnedTabIDs.removeAll { tabIDsToRemove.contains($0) }
+            spaces[index].regularTabIDs.removeAll { tabIDsToRemove.contains($0) }
+            if let selectedTabID = spaces[index].selectedTabID,
+               tabIDsToRemove.contains(selectedTabID) {
+                spaces[index].selectedTabID = self.selectedTabID(in: spaces[index])
+            }
+        }
+        splitViews.removeAll { splitView in
+            splitView.tabIDs.contains { tabIDsToRemove.contains($0) }
+        }
+        if let selectedTabID,
+           tabIDsToRemove.contains(selectedTabID) {
+            self.selectedTabID = selectedSpace.flatMap { self.selectedTabID(in: $0) }
+        }
+        refreshActivePageSecurityStatus()
+        return true
+    }
+
+    private func lastActiveDate(for tabID: TabID) -> Date {
+        tabs.first { $0.id == tabID }?.lastActiveDate ?? .distantPast
+    }
+
     private func matchingOpenTabs(for query: String, limit: Int) -> [BrowserTab] {
         guard limit > 0,
               let activeProfileID = activeProfile?.id else {
@@ -1586,5 +1662,13 @@ public final class BrowserStore: ObservableObject {
             return "New Tab"
         }
         return url.host(percentEncoded: false) ?? url.absoluteString
+    }
+
+    private static func isStaleEmptyTab(_ tab: BrowserTab) -> Bool {
+        tab.url == nil
+            && tab.title == defaultTitle(for: nil)
+            && tab.restorationMetadata.lastCommittedURL == nil
+            && tab.restorationMetadata.pendingHTTPFallbackURL == nil
+            && tab.restorationMetadata.backForwardListHint.isEmpty
     }
 }
