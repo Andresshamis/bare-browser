@@ -13,7 +13,7 @@ final class WindowTitlebarInteractionNSView: NSView {
     private var mouseDownEvent: NSEvent?
 
     override var acceptsFirstResponder: Bool {
-        true
+        false
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {

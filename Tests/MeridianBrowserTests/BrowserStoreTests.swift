@@ -58,6 +58,59 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.folders.first(where: { $0.id == folder?.id })?.tabIDs, [tab?.id].compactMap { $0 })
     }
 
+    func testDeleteSpaceRejectsOnlyProfileSpace() throws {
+        let store = BrowserStore()
+        let spaceID = try XCTUnwrap(store.selectedSpaceID)
+        let tabID = try XCTUnwrap(store.selectedTabID)
+
+        XCTAssertFalse(store.canDeleteSpace(spaceID))
+        XCTAssertFalse(store.deleteSpace(spaceID))
+
+        XCTAssertEqual(store.spaces.map(\.id), [spaceID])
+        XCTAssertEqual(store.tabs.map(\.id), [tabID])
+        XCTAssertEqual(store.selectedSpaceID, spaceID)
+        XCTAssertEqual(store.selectedTabID, tabID)
+    }
+
+    func testDeleteSelectedSpaceRemovesOwnedTabsAndFoldersAndSelectsRemainingSpace() throws {
+        let store = BrowserStore()
+        let originalSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let originalTabID = try XCTUnwrap(store.selectedTabID)
+        let doomedSpace = store.createSpace(name: "Doomed")
+        let folder = try XCTUnwrap(store.createFolder(name: "Research", in: doomedSpace.id))
+        let folderTab = try XCTUnwrap(store.createTab(title: "Foldered", in: doomedSpace.id, folderID: folder.id))
+        let regularTab = try XCTUnwrap(store.createTab(title: "Regular", in: doomedSpace.id))
+        store.splitViews = [
+            SplitViewLayout(tabIDs: [folderTab.id, regularTab.id], fractions: [0.5, 0.5])
+        ]
+
+        XCTAssertTrue(store.canDeleteSpace(doomedSpace.id))
+        XCTAssertTrue(store.deleteSpace(doomedSpace.id))
+
+        XCTAssertFalse(store.spaces.contains { $0.id == doomedSpace.id })
+        XCTAssertFalse(store.tabs.contains { $0.parentSpaceID == doomedSpace.id })
+        XCTAssertFalse(store.folders.contains { $0.parentSpaceID == doomedSpace.id })
+        XCTAssertFalse(store.tabs.contains { $0.id == folderTab.id || $0.id == regularTab.id })
+        XCTAssertTrue(store.splitViews.isEmpty)
+        XCTAssertEqual(store.selectedSpaceID, originalSpaceID)
+        XCTAssertEqual(store.selectedTabID, originalTabID)
+    }
+
+    func testBeginNewTabCreatesSelectedBlankTabAndShowsCommandBar() throws {
+        let store = BrowserStore()
+        let previousSelectedTabID = store.selectedTabID
+        let previousTabCount = store.tabs.count
+
+        let tab = try XCTUnwrap(store.beginNewTab())
+
+        XCTAssertEqual(store.tabs.count, previousTabCount + 1)
+        XCTAssertEqual(store.selectedTabID, tab.id)
+        XCTAssertNotEqual(store.selectedTabID, previousSelectedTabID)
+        XCTAssertNil(tab.url)
+        XCTAssertEqual(store.selectedSpace?.regularTabIDs.last, tab.id)
+        XCTAssertTrue(store.isCommandBarPresented)
+    }
+
     func testTabPlacementMovesBetweenSectionsAndPreservesSelection() throws {
         let store = BrowserStore()
         let tab = try XCTUnwrap(store.createTab(title: "Docs", url: URL(string: "https://docs.example.com")!))

@@ -5,7 +5,7 @@ public struct CommandBarView: View {
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var webViewState: WebViewState
     @State private var query = ""
-    @State private var selectAllTrigger = 0
+    @State private var focusRequest = 0
 
     public init(store: BrowserStore, webViewState: WebViewState) {
         self.store = store
@@ -24,7 +24,7 @@ public struct CommandBarView: View {
                 CommandBarTextField(
                     text: $query,
                     placeholder: "Search or enter address",
-                    selectAllTrigger: selectAllTrigger,
+                    focusRequest: focusRequest,
                     submit: submit,
                     cancel: { store.hideCommandBar() }
                 )
@@ -86,7 +86,6 @@ public struct CommandBarView: View {
         }
         .frame(width: 620)
         .glassEffect(.regular, in: shape)
-        .clipShape(shape)
         .overlay(
             shape.stroke(.separator.opacity(0.45), lineWidth: 0.5)
         )
@@ -109,7 +108,7 @@ public struct CommandBarView: View {
 
     private func prepareInitialQuery() {
         query = store.activeTab?.url?.absoluteString ?? ""
-        selectAllTrigger += 1
+        focusRequest += 1
     }
 
     private var browserActionAvailability: CommandRouter.BrowserActionAvailability {
@@ -163,45 +162,67 @@ public struct CommandBarView: View {
 private struct CommandBarTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
-    let selectAllTrigger: Int
+    let focusRequest: Int
     let submit: () -> Void
     let cancel: () -> Void
 
-    func makeNSView(context: Context) -> NSTextField {
-        let textField = NSTextField()
+    func makeNSView(context: Context) -> FocusableCommandBarTextField {
+        let textField = FocusableCommandBarTextField()
         textField.isBordered = false
         textField.drawsBackground = false
         textField.focusRingType = .none
         textField.placeholderString = placeholder
         textField.font = .systemFont(ofSize: 18, weight: .medium)
         textField.lineBreakMode = .byTruncatingMiddle
+        textField.isEditable = true
+        textField.isSelectable = true
+        textField.refusesFirstResponder = false
         textField.delegate = context.coordinator
         return textField
     }
 
-    func updateNSView(_ textField: NSTextField, context: Context) {
+    func updateNSView(_ textField: FocusableCommandBarTextField, context: Context) {
         context.coordinator.parent = self
+        textField.onMouseDown = {
+            focus(textField, selectAll: false)
+        }
+
         if textField.stringValue != text {
             textField.stringValue = text
         }
 
-        guard context.coordinator.lastSelectAllTrigger != selectAllTrigger else {
+        guard context.coordinator.lastFocusRequest != focusRequest else {
             return
         }
-        context.coordinator.lastSelectAllTrigger = selectAllTrigger
-        DispatchQueue.main.async {
-            textField.window?.makeFirstResponder(textField)
-            textField.selectText(nil)
-        }
+        context.coordinator.lastFocusRequest = focusRequest
+        focus(textField, selectAll: true)
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
 
+    private func focus(_ textField: FocusableCommandBarTextField, selectAll: Bool) {
+        DispatchQueue.main.async {
+            guard let window = textField.window else {
+                return
+            }
+
+            window.makeKey()
+            window.makeFirstResponder(textField)
+
+            guard selectAll else {
+                return
+            }
+
+            textField.selectText(nil)
+            textField.currentEditor()?.selectAll(nil)
+        }
+    }
+
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: CommandBarTextField
-        var lastSelectAllTrigger = 0
+        var lastFocusRequest = 0
 
         init(parent: CommandBarTextField) {
             self.parent = parent
@@ -230,5 +251,22 @@ private struct CommandBarTextField: NSViewRepresentable {
                 return false
             }
         }
+    }
+}
+
+private final class FocusableCommandBarTextField: NSTextField {
+    var onMouseDown: (() -> Void)?
+
+    override var acceptsFirstResponder: Bool {
+        true
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onMouseDown?()
+        super.mouseDown(with: event)
     }
 }

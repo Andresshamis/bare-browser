@@ -49,6 +49,14 @@ public struct BrowserWindowView: View {
             .overlay(alignment: .top) {
                 WindowDragStrip()
             }
+            .overlay(alignment: .top) {
+                if store.isCommandBarPresented {
+                    CommandBarView(store: store, webViewState: webViewState)
+                        .padding(.top, 24)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(10)
+                }
+            }
             .animation(.snappy(duration: 0.16), value: store.isCommandBarPresented)
             .animation(.snappy(duration: 0.16), value: store.sidebarIsVisible)
             .animation(.snappy(duration: 0.16), value: store.sidebarIsLockedOpen)
@@ -122,14 +130,6 @@ public struct BrowserWindowView: View {
             dataStoreProvider: dataStoreProvider
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(alignment: .top) {
-            if store.isCommandBarPresented {
-                CommandBarView(store: store, webViewState: webViewState)
-                    .background(CommandBarOutsideClickMonitor(dismiss: { store.hideCommandBar() }))
-                    .padding(.top, 24)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
     }
 
     private var sidebarOverlay: some View {
@@ -305,67 +305,6 @@ public struct BrowserWindowView: View {
                 store.approvePendingDownloadConfirmation(destination: destinationURL)
             }
         }
-    }
-}
-
-private struct CommandBarOutsideClickMonitor: NSViewRepresentable {
-    let dismiss: @MainActor () -> Void
-
-    func makeNSView(context: Context) -> CommandBarOutsideClickNSView {
-        CommandBarOutsideClickNSView()
-    }
-
-    func updateNSView(_ nsView: CommandBarOutsideClickNSView, context: Context) {
-        nsView.dismiss = dismiss
-        nsView.installEventMonitorIfNeeded()
-    }
-}
-
-private final class CommandBarOutsideClickNSView: NSView {
-    var dismiss: (@MainActor () -> Void)?
-    private var eventMonitor: Any?
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        installEventMonitorIfNeeded()
-    }
-
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        super.viewWillMove(toWindow: newWindow)
-        if newWindow == nil {
-            removeEventMonitor()
-        }
-    }
-
-    func installEventMonitorIfNeeded() {
-        guard eventMonitor == nil else {
-            return
-        }
-
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
-            self?.dismissIfEventIsOutside(event)
-            return event
-        }
-    }
-
-    private func removeEventMonitor() {
-        if let eventMonitor {
-            NSEvent.removeMonitor(eventMonitor)
-            self.eventMonitor = nil
-        }
-    }
-
-    private func dismissIfEventIsOutside(_ event: NSEvent) {
-        guard event.window === window else {
-            return
-        }
-
-        let localPoint = convert(event.locationInWindow, from: nil)
-        guard !bounds.contains(localPoint) else {
-            return
-        }
-
-        Task { @MainActor in dismiss?() }
     }
 }
 
@@ -720,8 +659,7 @@ private extension NSWindow {
         title = "Meridian Browser"
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
-        styleMask.remove(.titled)
-        styleMask.insert([.closable, .miniaturizable, .resizable, .fullSizeContentView])
+        styleMask.insert([.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView])
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
