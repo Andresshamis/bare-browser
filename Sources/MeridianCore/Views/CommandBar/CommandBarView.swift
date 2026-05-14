@@ -93,6 +93,9 @@ public struct CommandBarView: View {
         .onAppear {
             prepareInitialQuery()
         }
+        .onChange(of: store.commandBarMode) { _, _ in
+            prepareInitialQuery()
+        }
         .onExitCommand {
             store.hideCommandBar()
         }
@@ -107,7 +110,12 @@ public struct CommandBarView: View {
     }
 
     private func prepareInitialQuery() {
-        query = store.activeTab?.url?.absoluteString ?? ""
+        switch store.commandBarMode {
+        case .address:
+            query = store.activeTab?.url?.absoluteString ?? ""
+        case .newTab:
+            query = ""
+        }
         focusRequest += 1
     }
 

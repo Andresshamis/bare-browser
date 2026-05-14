@@ -96,19 +96,70 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedTabID, originalTabID)
     }
 
-    func testBeginNewTabCreatesSelectedBlankTabAndShowsCommandBar() throws {
+    func testBeginNewTabShowsCommandBarWithoutCreatingBlankTab() throws {
         let store = BrowserStore()
         let previousSelectedTabID = store.selectedTabID
         let previousTabCount = store.tabs.count
 
-        let tab = try XCTUnwrap(store.beginNewTab())
+        store.beginNewTab()
+
+        XCTAssertEqual(store.tabs.count, previousTabCount)
+        XCTAssertEqual(store.selectedTabID, previousSelectedTabID)
+        XCTAssertTrue(store.isCommandBarPresented)
+        XCTAssertEqual(store.commandBarMode, .newTab)
+    }
+
+    func testNewTabAddressSubmissionCreatesSelectedTab() throws {
+        let store = BrowserStore()
+        let previousSelectedTabID = store.selectedTabID
+        let previousTabCount = store.tabs.count
+
+        store.beginNewTab()
+        store.submitAddressInput("example.com")
 
         XCTAssertEqual(store.tabs.count, previousTabCount + 1)
-        XCTAssertEqual(store.selectedTabID, tab.id)
         XCTAssertNotEqual(store.selectedTabID, previousSelectedTabID)
-        XCTAssertNil(tab.url)
-        XCTAssertEqual(store.selectedSpace?.regularTabIDs.last, tab.id)
-        XCTAssertTrue(store.isCommandBarPresented)
+        XCTAssertEqual(store.activeTab?.url, URL(string: "https://example.com")!)
+        XCTAssertEqual(store.selectedSpace?.regularTabIDs.last, store.selectedTabID)
+        XCTAssertFalse(store.isCommandBarPresented)
+        XCTAssertEqual(store.commandBarMode, .address)
+    }
+
+    func testLoadedSessionPrunesStaleEmptyTabsWhenRestorableTabExists() throws {
+        let date = Date(timeIntervalSince1970: 10)
+        let profile = BrowserProfile(name: "Personal", createdAt: date)
+        var space = BrowserSpace(name: "Today", profileID: profile.id, lastActiveDate: date)
+        let staleEmptyTab = BrowserTab(
+            title: "New Tab",
+            parentSpaceID: space.id,
+            profileID: profile.id,
+            lastActiveDate: date.addingTimeInterval(1)
+        )
+        let restorableTab = BrowserTab(
+            title: "Docs",
+            url: URL(string: "https://docs.example.com")!,
+            parentSpaceID: space.id,
+            profileID: profile.id,
+            lastActiveDate: date
+        )
+        space.regularTabIDs = [staleEmptyTab.id, restorableTab.id]
+        space.selectedTabID = staleEmptyTab.id
+        let snapshot = BrowserSessionSnapshot(
+            profiles: [profile],
+            spaces: [space],
+            folders: [],
+            tabs: [staleEmptyTab, restorableTab],
+            selectedSpaceID: space.id,
+            selectedTabID: staleEmptyTab.id,
+            capturedAt: date
+        )
+
+        let store = BrowserStore(snapshot: snapshot)
+
+        XCTAssertFalse(store.tabs.contains { $0.id == staleEmptyTab.id })
+        XCTAssertEqual(store.tabs.map(\.id), [restorableTab.id])
+        XCTAssertEqual(store.selectedTabID, restorableTab.id)
+        XCTAssertEqual(store.selectedSpace?.regularTabIDs, [restorableTab.id])
     }
 
     func testTabPlacementMovesBetweenSectionsAndPreservesSelection() throws {

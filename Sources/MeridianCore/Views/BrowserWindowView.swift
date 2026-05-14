@@ -39,6 +39,11 @@ public struct BrowserWindowView: View {
             .toolbarVisibility(.hidden, for: .windowToolbar)
             .background(WindowChromeController(contentCornerRadius: appCornerRadius))
             .background(
+                BrowserKeyboardShortcutMonitor(
+                    beginNewTab: { store.beginNewTab() }
+                )
+            )
+            .background(
                 SidebarWindowRevealMonitor(
                     edge: store.sidebarRevealEdge,
                     sidebarIsVisible: store.sidebarIsVisible,
@@ -48,6 +53,14 @@ public struct BrowserWindowView: View {
             )
             .overlay(alignment: .top) {
                 WindowDragStrip()
+            }
+            .overlay {
+                if store.isCommandBarPresented {
+                    CommandBarDismissalBackdrop {
+                        store.hideCommandBar()
+                    }
+                    .zIndex(9)
+                }
             }
             .overlay(alignment: .top) {
                 if store.isCommandBarPresented {
@@ -637,6 +650,158 @@ private struct WindowDragStrip: View {
         WindowTitlebarInteractionZone()
             .frame(height: 8)
             .accessibilityHidden(true)
+    }
+}
+
+private struct BrowserKeyboardShortcutMonitor: NSViewRepresentable {
+    let beginNewTab: @MainActor () -> Void
+
+    func makeNSView(context: Context) -> BrowserKeyboardShortcutMonitorNSView {
+        let nsView = BrowserKeyboardShortcutMonitorNSView()
+        nsView.beginNewTab = beginNewTab
+        return nsView
+    }
+
+    func updateNSView(_ nsView: BrowserKeyboardShortcutMonitorNSView, context: Context) {
+        nsView.beginNewTab = beginNewTab
+        nsView.installEventMonitorIfNeeded()
+    }
+
+    static func dismantleNSView(_ nsView: BrowserKeyboardShortcutMonitorNSView, coordinator: ()) {
+        nsView.removeEventMonitor()
+    }
+}
+
+private final class BrowserKeyboardShortcutMonitorNSView: NSView {
+    var beginNewTab: (@MainActor () -> Void)?
+    private var eventMonitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installEventMonitorIfNeeded()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            removeEventMonitor()
+        }
+    }
+
+    func installEventMonitorIfNeeded() {
+        guard eventMonitor == nil else {
+            return
+        }
+
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  event.window === self.window,
+                  event.isCommandT else {
+                return event
+            }
+
+            Task { @MainActor in
+                self.beginNewTab?()
+            }
+            return nil
+        }
+    }
+
+    func removeEventMonitor() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+    }
+}
+
+private struct CommandBarDismissalBackdrop: View {
+    let dismiss: @MainActor () -> Void
+
+    var body: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture {
+                dismiss()
+            }
+            .background(CommandBarEscapeKeyMonitor(dismiss: dismiss))
+            .accessibilityHidden(true)
+    }
+}
+
+private struct CommandBarEscapeKeyMonitor: NSViewRepresentable {
+    let dismiss: @MainActor () -> Void
+
+    func makeNSView(context: Context) -> CommandBarEscapeKeyMonitorNSView {
+        let nsView = CommandBarEscapeKeyMonitorNSView()
+        nsView.dismiss = dismiss
+        return nsView
+    }
+
+    func updateNSView(_ nsView: CommandBarEscapeKeyMonitorNSView, context: Context) {
+        nsView.dismiss = dismiss
+        nsView.installEventMonitorIfNeeded()
+    }
+
+    static func dismantleNSView(_ nsView: CommandBarEscapeKeyMonitorNSView, coordinator: ()) {
+        nsView.removeEventMonitor()
+    }
+}
+
+private final class CommandBarEscapeKeyMonitorNSView: NSView {
+    var dismiss: (@MainActor () -> Void)?
+    private var eventMonitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installEventMonitorIfNeeded()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            removeEventMonitor()
+        }
+    }
+
+    func installEventMonitorIfNeeded() {
+        guard eventMonitor == nil else {
+            return
+        }
+
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  event.window === self.window,
+                  event.isEscapeKey else {
+                return event
+            }
+
+            Task { @MainActor in
+                self.dismiss?()
+            }
+            return nil
+        }
+    }
+
+    func removeEventMonitor() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+    }
+}
+
+private extension NSEvent {
+    var isCommandT: Bool {
+        charactersIgnoringModifiers?.lowercased() == "t"
+            && modifierFlags.contains(.command)
+            && !modifierFlags.contains(.shift)
+            && !modifierFlags.contains(.option)
+            && !modifierFlags.contains(.control)
+    }
+
+    var isEscapeKey: Bool {
+        keyCode == 53 || charactersIgnoringModifiers == "\u{1B}"
     }
 }
 
