@@ -9,7 +9,7 @@ public struct AddressResolver: Sendable {
 
     public var searchURL: @Sendable (String) -> URL
 
-    public init(searchURL: @escaping @Sendable (String) -> URL = AddressResolver.duckDuckGoSearchURL) {
+    public init(searchURL: @escaping @Sendable (String) -> URL = AddressResolver.googleLuckySearchURL) {
         self.searchURL = searchURL
     }
 
@@ -57,13 +57,14 @@ public struct AddressResolver: Sendable {
             || input.hasPrefix("[::1]")
     }
 
-    public static func duckDuckGoSearchURL(for query: String) -> URL {
+    public static func googleLuckySearchURL(for query: String) -> URL {
         var components = URLComponents()
         components.scheme = "https"
-        components.host = "duckduckgo.com"
-        components.path = "/"
+        components.host = "www.google.com"
+        components.path = "/search"
         components.queryItems = [
-            URLQueryItem(name: "q", value: query)
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "btnI", value: "I'm Feeling Lucky")
         ]
         return components.url!
     }

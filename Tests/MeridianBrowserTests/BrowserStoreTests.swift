@@ -15,6 +15,37 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.activeProfile?.name, "Personal")
     }
 
+    func testSidebarRevealStateDefaultsAndUpdates() {
+        let store = BrowserStore()
+
+        XCTAssertTrue(store.sidebarIsVisible)
+        XCTAssertTrue(store.sidebarIsLockedOpen)
+        XCTAssertEqual(store.sidebarRevealEdge, .left)
+
+        store.toggleSidebar()
+        XCTAssertTrue(store.sidebarIsVisible)
+        XCTAssertFalse(store.sidebarIsLockedOpen)
+
+        store.hideTransientSidebar()
+        XCTAssertFalse(store.sidebarIsVisible)
+        XCTAssertFalse(store.sidebarIsLockedOpen)
+
+        store.revealSidebar()
+        XCTAssertTrue(store.sidebarIsVisible)
+        XCTAssertFalse(store.sidebarIsLockedOpen)
+
+        store.hideTransientSidebar()
+        XCTAssertFalse(store.sidebarIsVisible)
+        XCTAssertFalse(store.sidebarIsLockedOpen)
+
+        store.toggleSidebarLock()
+        XCTAssertTrue(store.sidebarIsVisible)
+        XCTAssertTrue(store.sidebarIsLockedOpen)
+
+        store.setSidebarRevealEdge(.right)
+        XCTAssertEqual(store.sidebarRevealEdge, .right)
+    }
+
     func testCreatesSpaceFolderAndTabWithStableRelationships() {
         let store = BrowserStore()
         let space = store.createSpace(name: "Work")
@@ -53,6 +84,57 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(store.spaces.first(where: { $0.id == spaceID })?.favoriteTabIDs.contains(tab.id) ?? true)
         XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isPinned, false)
         XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isFavorite, false)
+    }
+
+    func testCloseInactiveTabPreservesSelectedTab() throws {
+        let store = BrowserStore()
+        let selectedTab = try XCTUnwrap(store.createTab(title: "Selected", url: URL(string: "https://selected.example.com")!))
+        let inactiveTab = try XCTUnwrap(store.createTab(title: "Inactive", url: URL(string: "https://inactive.example.com")!))
+        store.selectTab(selectedTab.id)
+
+        XCTAssertTrue(store.closeTab(inactiveTab.id))
+
+        XCTAssertEqual(store.selectedTabID, selectedTab.id)
+        XCTAssertFalse(store.tabs.contains { $0.id == inactiveTab.id })
+        XCTAssertFalse(store.selectedSpace?.regularTabIDs.contains(inactiveTab.id) ?? true)
+    }
+
+    func testMoveTabReordersRegularTabs() throws {
+        let store = BrowserStore()
+        let first = try XCTUnwrap(store.createTab(title: "First", url: URL(string: "https://first.example.com")!))
+        let second = try XCTUnwrap(store.createTab(title: "Second", url: URL(string: "https://second.example.com")!))
+        let third = try XCTUnwrap(store.createTab(title: "Third", url: URL(string: "https://third.example.com")!))
+
+        XCTAssertTrue(store.moveTab(third.id, to: .regular, before: first.id))
+
+        let regularTabIDs = try XCTUnwrap(store.selectedSpace?.regularTabIDs)
+        XCTAssertLessThan(regularTabIDs.firstIndex(of: third.id)!, regularTabIDs.firstIndex(of: first.id)!)
+        XCTAssertLessThan(regularTabIDs.firstIndex(of: first.id)!, regularTabIDs.firstIndex(of: second.id)!)
+    }
+
+    func testMoveTabBetweenSections() throws {
+        let store = BrowserStore()
+        let tab = try XCTUnwrap(store.createTab(title: "Move Me", url: URL(string: "https://move.example.com")!))
+
+        XCTAssertTrue(store.moveTab(tab.id, to: .pinned))
+
+        let updatedTab = try XCTUnwrap(store.tabs.first { $0.id == tab.id })
+        XCTAssertTrue(updatedTab.isPinned)
+        XCTAssertFalse(updatedTab.isFavorite)
+        XCTAssertEqual(store.selectedSpace?.pinnedTabIDs, [tab.id])
+        XCTAssertFalse(store.selectedSpace?.regularTabIDs.contains(tab.id) ?? true)
+    }
+
+    func testSubmitAddressInputNavigatesSelectedTab() throws {
+        let store = BrowserStore()
+        let tabCount = store.tabs.count
+        let selectedTabID = try XCTUnwrap(store.selectedTabID)
+
+        store.submitAddressInput("example.com")
+
+        XCTAssertEqual(store.tabs.count, tabCount)
+        XCTAssertEqual(store.selectedTabID, selectedTabID)
+        XCTAssertEqual(store.activeTab?.url, URL(string: "https://example.com")!)
     }
 
     func testPromotingFolderTabRemovesFolderMembership() throws {

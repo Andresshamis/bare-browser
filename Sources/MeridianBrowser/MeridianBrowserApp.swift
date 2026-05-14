@@ -3,6 +3,10 @@ import SwiftUI
 
 @main
 struct MeridianBrowserApp: App {
+    private enum Preferences {
+        static let sidebarRevealEdgeKey = "SidebarRevealEdge"
+    }
+
     private let sessionPersistence: SQLiteSessionPersistenceStore
     private let historyPersistence: SQLiteLocalHistoryPersistenceStore
     @StateObject private var store: BrowserStore
@@ -12,12 +16,14 @@ struct MeridianBrowserApp: App {
         let historyPersistence = SQLiteLocalHistoryPersistenceStore()
         let loadResult = sessionPersistence.loadSnapshot()
         let historyResult = historyPersistence.loadHistory(profiles: loadResult.snapshot.profiles)
+        let sidebarRevealEdge = Self.savedSidebarRevealEdge()
         self.sessionPersistence = sessionPersistence
         self.historyPersistence = historyPersistence
         _store = StateObject(
             wrappedValue: BrowserStore(
                 snapshot: loadResult.snapshot,
                 localHistoryStore: LocalHistoryStore(entries: historyResult.entries),
+                sidebarRevealEdge: sidebarRevealEdge,
                 lastUserMessage: loadResult.recoveryReason?.userMessage
                     ?? historyResult.recoveryReason?.userMessage,
                 sessionPersistence: sessionPersistence,
@@ -31,6 +37,7 @@ struct MeridianBrowserApp: App {
             BrowserWindowView(store: store)
                 .frame(minWidth: 900, minHeight: 620)
         }
+        .windowStyle(.plain)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Tab") {
@@ -89,6 +96,18 @@ struct MeridianBrowserApp: App {
                     store.toggleSidebar()
                 }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
+
+                Picker("Sidebar Reveal Edge", selection: Binding(
+                    get: { store.sidebarRevealEdge },
+                    set: { edge in
+                        Self.saveSidebarRevealEdge(edge)
+                        store.setSidebarRevealEdge(edge)
+                    }
+                )) {
+                    ForEach(SidebarRevealEdge.allCases) { edge in
+                        Text(edge.displayName).tag(edge)
+                    }
+                }
             }
 
             BrowserNavigationCommandMenu()
@@ -114,6 +133,15 @@ struct MeridianBrowserApp: App {
                 }
             }
         }
+    }
+
+    private static func savedSidebarRevealEdge() -> SidebarRevealEdge {
+        let rawValue = UserDefaults.standard.string(forKey: Preferences.sidebarRevealEdgeKey)
+        return rawValue.flatMap(SidebarRevealEdge.init(rawValue:)) ?? .left
+    }
+
+    private static func saveSidebarRevealEdge(_ edge: SidebarRevealEdge) {
+        UserDefaults.standard.set(edge.rawValue, forKey: Preferences.sidebarRevealEdgeKey)
     }
 }
 
