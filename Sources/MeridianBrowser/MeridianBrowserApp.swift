@@ -38,10 +38,14 @@ struct MeridianBrowserApp: App {
                 .frame(minWidth: 900, minHeight: 620)
         }
         .windowStyle(.plain)
+        .defaultWindowPlacement { _, context in
+            WindowPlacement(size: context.defaultDisplay.visibleRect.size)
+        }
+        .restorationBehavior(.disabled)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Tab") {
-                    store.showCommandBar()
+                    store.beginNewTab()
                 }
                 .keyboardShortcut("t", modifiers: [.command])
 

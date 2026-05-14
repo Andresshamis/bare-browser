@@ -158,6 +158,53 @@ public final class BrowserStore: ObservableObject {
         return space
     }
 
+    public func canDeleteSpace(_ id: SpaceID) -> Bool {
+        guard let space = spaces.first(where: { $0.id == id }) else {
+            return false
+        }
+        return spaces.filter { $0.profileID == space.profileID }.count > 1
+    }
+
+    @discardableResult
+    public func deleteSpace(_ id: SpaceID, date: Date = Date()) -> Bool {
+        guard let deletedSpace = spaces.first(where: { $0.id == id }),
+              canDeleteSpace(id) else {
+            return false
+        }
+
+        let deletedTabIDs = Set(tabs.filter { $0.parentSpaceID == id }.map(\.id))
+        let deletedFolderIDs = Set(folders.filter { $0.parentSpaceID == id }.map(\.id))
+
+        spaces.removeAll { $0.id == id }
+        tabs.removeAll { deletedTabIDs.contains($0.id) }
+        folders.removeAll { deletedFolderIDs.contains($0.id) }
+        splitViews.removeAll { splitView in
+            splitView.tabIDs.contains { deletedTabIDs.contains($0) }
+        }
+
+        for index in spaces.indices {
+            spaces[index].favoriteTabIDs.removeAll { deletedTabIDs.contains($0) }
+            spaces[index].pinnedTabIDs.removeAll { deletedTabIDs.contains($0) }
+            spaces[index].regularTabIDs.removeAll { deletedTabIDs.contains($0) }
+            spaces[index].folderIDs.removeAll { deletedFolderIDs.contains($0) }
+            if let selectedTabID = spaces[index].selectedTabID,
+               deletedTabIDs.contains(selectedTabID) {
+                spaces[index].selectedTabID = self.selectedTabID(in: spaces[index])
+            }
+        }
+
+        if selectedSpaceID == id {
+            selectReplacementSpace(forDeletedProfileID: deletedSpace.profileID, date: date)
+        } else if let selectedTabID,
+                  deletedTabIDs.contains(selectedTabID) {
+            self.selectedTabID = selectedSpace.flatMap { self.selectedTabID(in: $0) }
+        }
+
+        refreshActivePageSecurityStatus()
+        persistSession(date: date)
+        return true
+    }
+
     @discardableResult
     public func createFolder(name: String, in spaceID: SpaceID? = nil) -> BrowserFolder? {
         guard let targetSpaceID = spaceID ?? selectedSpaceID else {
@@ -518,6 +565,15 @@ public final class BrowserStore: ObservableObject {
 
     public func hideCommandBar() {
         isCommandBarPresented = false
+    }
+
+    @discardableResult
+    public func beginNewTab() -> BrowserTab? {
+        let tab = createTab()
+        if tab != nil {
+            showCommandBar()
+        }
+        return tab
     }
 
     public func submitCommandInput(
@@ -1144,6 +1200,30 @@ public final class BrowserStore: ObservableObject {
                     && tab.parentSpaceID == space.id
                     && tab.profileID == space.profileID
             }
+        }
+    }
+
+    private func selectReplacementSpace(forDeletedProfileID profileID: ProfileID, date: Date) {
+        guard let replacementSpace = spaces
+            .filter({ $0.profileID == profileID })
+            .max(by: { $0.lastActiveDate < $1.lastActiveDate }) else {
+            selectedSpaceID = nil
+            selectedTabID = nil
+            return
+        }
+
+        selectedSpaceID = replacementSpace.id
+        if let tabID = selectedTabID(in: replacementSpace) {
+            selectedTabID = tabID
+            updateSpace(replacementSpace.id) { space in
+                space.selectedTabID = tabID
+                space.lastActiveDate = date
+            }
+            updateTab(tabID) { tab in
+                tab.lastActiveDate = date
+            }
+        } else {
+            createStartTab(in: replacementSpace.id, profileID: profileID, date: date)
         }
     }
 

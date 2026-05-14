@@ -20,7 +20,6 @@ public struct StartPageView: View {
                 } label: {
                     Label("Open", systemImage: "magnifyingglass")
                 }
-                .keyboardShortcut("t", modifiers: [.command])
 
                 Button {
                     _ = store.createSpace(name: "New Space")

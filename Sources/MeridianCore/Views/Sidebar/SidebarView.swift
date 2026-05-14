@@ -94,6 +94,14 @@ public struct SidebarView: View {
             ) {
                 webViewState.dispatch(webViewState.isLoading ? .stopLoading : .reload)
             }
+
+            SidebarNavigationButton(
+                systemName: "plus",
+                help: "New Tab",
+                isDisabled: false
+            ) {
+                store.beginNewTab()
+            }
         }
         .padding(.horizontal, 14)
         .padding(.top, 12)
@@ -223,6 +231,23 @@ public struct SidebarView: View {
                     .buttonStyle(.plain)
                     .help(space.name)
                     .accessibilityLabel(space.name)
+                    .contextMenu {
+                        Button {
+                            store.selectSpace(space.id)
+                        } label: {
+                            Label("Switch to Space", systemImage: "arrow.right.circle")
+                        }
+                        .disabled(store.selectedSpaceID == space.id)
+
+                        Divider()
+
+                        Button(role: .destructive) {
+                            _ = store.deleteSpace(space.id)
+                        } label: {
+                            Label("Delete Space", systemImage: "trash")
+                        }
+                        .disabled(!store.canDeleteSpace(space.id))
+                    }
                 }
 
                 Button {
