@@ -1,6 +1,24 @@
 import Combine
 import Foundation
 
+public enum SidebarRevealEdge: String, CaseIterable, Identifiable {
+    case left
+    case right
+
+    public var id: String {
+        rawValue
+    }
+
+    public var displayName: String {
+        switch self {
+        case .left:
+            return "Left Edge"
+        case .right:
+            return "Right Edge"
+        }
+    }
+}
+
 @MainActor
 public final class BrowserStore: ObservableObject {
     @Published public var profiles: [BrowserProfile]
@@ -12,6 +30,8 @@ public final class BrowserStore: ObservableObject {
     @Published public var selectedTabID: TabID?
     @Published public var isCommandBarPresented: Bool
     @Published public var sidebarIsVisible: Bool
+    @Published public var sidebarIsLockedOpen: Bool
+    @Published public var sidebarRevealEdge: SidebarRevealEdge
     @Published public var pendingURLConfirmation: URLConfirmationRequest?
     @Published public var pendingDownloadConfirmation: DownloadConfirmationRequest?
     @Published public private(set) var isChoosingDownloadDestination: Bool
@@ -37,6 +57,7 @@ public final class BrowserStore: ObservableObject {
         sitePermissionPolicy: SitePermissionPolicy = SitePermissionPolicy(),
         sitePermissionSettings: [SitePermissionSetting]? = nil,
         localHistoryStore: LocalHistoryStore = LocalHistoryStore(),
+        sidebarRevealEdge: SidebarRevealEdge = .left,
         lastUserMessage: String? = nil,
         sessionPersistence: SessionSnapshotPersisting? = nil,
         localHistoryPersistence: LocalHistoryPersisting? = nil
@@ -50,6 +71,8 @@ public final class BrowserStore: ObservableObject {
         self.selectedTabID = snapshot.selectedTabID
         self.isCommandBarPresented = false
         self.sidebarIsVisible = true
+        self.sidebarIsLockedOpen = true
+        self.sidebarRevealEdge = sidebarRevealEdge
         self.pendingURLConfirmation = nil
         self.pendingDownloadConfirmation = nil
         self.isChoosingDownloadDestination = false
@@ -258,9 +281,19 @@ public final class BrowserStore: ObservableObject {
     }
 
     public func closeSelectedTab() {
-        guard let tab = activeTab else {
+        guard let selectedTabID else {
             return
         }
+        _ = closeTab(selectedTabID)
+    }
+
+    @discardableResult
+    public func closeTab(_ tabID: TabID) -> Bool {
+        guard let tab = tabs.first(where: { $0.id == tabID }) else {
+            return false
+        }
+        let wasSelected = selectedTabID == tabID
+
         tabs.removeAll { $0.id == tab.id }
         updateSpace(tab.parentSpaceID) { space in
             space.favoriteTabIDs.removeAll { $0 == tab.id }
@@ -273,9 +306,74 @@ public final class BrowserStore: ObservableObject {
         for index in folders.indices {
             folders[index].tabIDs.removeAll { $0 == tab.id }
         }
-        selectedTabID = selectedSpace?.selectedTabID
+        if wasSelected {
+            selectedTabID = selectedSpace?.selectedTabID
+        }
         refreshActivePageSecurityStatus()
         persistSession()
+        return true
+    }
+
+    @discardableResult
+    public func moveTab(_ tabID: TabID, to placement: BrowserTabPlacement, before targetTabID: TabID? = nil) -> Bool {
+        guard tabID != targetTabID,
+              let targetSpaceID = selectedSpaceID,
+              let targetSpace = spaces.first(where: { $0.id == targetSpaceID }),
+              tabs.contains(where: { $0.id == tabID }) else {
+            return false
+        }
+
+        updateTab(tabID) { tab in
+            tab.parentSpaceID = targetSpaceID
+            tab.parentFolderID = nil
+            tab.profileID = targetSpace.profileID
+            tab.isPinned = placement == .pinned
+            tab.isFavorite = placement == .favorite
+        }
+
+        for index in spaces.indices {
+            spaces[index].favoriteTabIDs.removeAll { $0 == tabID }
+            spaces[index].pinnedTabIDs.removeAll { $0 == tabID }
+            spaces[index].regularTabIDs.removeAll { $0 == tabID }
+        }
+
+        for index in folders.indices {
+            folders[index].tabIDs.removeAll { $0 == tabID }
+        }
+
+        updateSpace(targetSpaceID) { space in
+            var tabIDs: [TabID]
+            switch placement {
+            case .regular:
+                tabIDs = space.regularTabIDs
+            case .pinned:
+                tabIDs = space.pinnedTabIDs
+            case .favorite:
+                tabIDs = space.favoriteTabIDs
+            }
+
+            let insertionIndex = targetTabID.flatMap { tabIDs.firstIndex(of: $0) } ?? tabIDs.endIndex
+            tabIDs.insert(tabID, at: insertionIndex)
+
+            switch placement {
+            case .regular:
+                space.regularTabIDs = tabIDs
+            case .pinned:
+                space.pinnedTabIDs = tabIDs
+            case .favorite:
+                space.favoriteTabIDs = tabIDs
+            }
+
+            if space.selectedTabID == nil {
+                space.selectedTabID = tabID
+            }
+        }
+
+        if selectedTabID == nil {
+            selectedTabID = tabID
+        }
+        persistSession()
+        return true
     }
 
     @discardableResult
@@ -385,7 +483,33 @@ public final class BrowserStore: ObservableObject {
     }
 
     public func toggleSidebar() {
-        sidebarIsVisible.toggle()
+        toggleSidebarLock()
+    }
+
+    public func toggleSidebarLock() {
+        if sidebarIsLockedOpen {
+            sidebarIsLockedOpen = false
+            sidebarIsVisible = true
+        } else {
+            sidebarIsLockedOpen = true
+            sidebarIsVisible = true
+        }
+    }
+
+    public func revealSidebar() {
+        if !sidebarIsLockedOpen {
+            sidebarIsVisible = true
+        }
+    }
+
+    public func hideTransientSidebar() {
+        if !sidebarIsLockedOpen {
+            sidebarIsVisible = false
+        }
+    }
+
+    public func setSidebarRevealEdge(_ edge: SidebarRevealEdge) {
+        sidebarRevealEdge = edge
     }
 
     public func showCommandBar() {
@@ -401,6 +525,19 @@ public final class BrowserStore: ObservableObject {
         browserActionHandler: ((CommandRouter.BrowserAction) -> Bool)? = nil
     ) {
         perform(commandRouter.route(input: input), browserActionHandler: browserActionHandler)
+    }
+
+    public func submitAddressInput(
+        _ input: String,
+        browserActionHandler: ((CommandRouter.BrowserAction) -> Bool)? = nil
+    ) {
+        switch commandRouter.route(input: input) {
+        case .openURL(let url), .search(let url, _):
+            navigateActiveTab(to: url)
+            hideCommandBar()
+        case let command:
+            perform(command, browserActionHandler: browserActionHandler)
+        }
     }
 
     public func commandBarResults(
@@ -492,6 +629,32 @@ public final class BrowserStore: ObservableObject {
             let navigationURL = upgradeCandidate ?? url
             _ = createTab(url: navigationURL, pendingHTTPFallbackURL: pendingFallbackURL)
             updatePageSecurityStatus(for: navigationURL)
+        case .requireExternalApplicationConfirmation:
+            requestURLConfirmation(kind: .externalApplication, url: url)
+        case .requireLocalFileConfirmation:
+            requestURLConfirmation(kind: .localFile, url: url)
+        case .block(let reason):
+            lastUserMessage = reason
+        }
+    }
+
+    public func navigateActiveTab(to url: URL) {
+        switch urlSecurityPolicy.decision(for: url) {
+        case .allowInWebView:
+            guard let selectedTabID else {
+                _ = createTab(url: url)
+                updatePageSecurityStatus(for: url)
+                return
+            }
+
+            updateTab(selectedTabID) { tab in
+                tab.title = Self.defaultTitle(for: url)
+                tab.url = url
+                tab.restorationMetadata.lastCommittedURL = url
+                tab.isLoading = true
+            }
+            updatePageSecurityStatus(for: url)
+            persistSession()
         case .requireExternalApplicationConfirmation:
             requestURLConfirmation(kind: .externalApplication, url: url)
         case .requireLocalFileConfirmation:
