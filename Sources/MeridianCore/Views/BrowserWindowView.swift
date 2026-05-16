@@ -7,23 +7,12 @@ public struct BrowserWindowView: View {
     @ObservedObject private var store: BrowserStore
     @StateObject private var webViewState = WebViewState()
     @StateObject private var webViewRegistry = BrowserWebViewRegistry()
-    @State private var sidebarFloatingChromeIsMounted = false
-    @State private var sidebarFloatingChromeProgress: CGFloat = 0
     private let dataStoreProvider = ProfileWebsiteDataStoreProvider()
     private let sidebarWidth: CGFloat = 280
-    private let sidebarOuterPadding: CGFloat = 8
-    private let sidebarCornerRadius: CGFloat = 20
+    private let floatingSidebarInset: CGFloat = 8
+    private let floatingSidebarCornerRadius: CGFloat = 12
     private var sidebarReservedWidth: CGFloat {
-        sidebarWidth + sidebarOuterPadding
-    }
-    private var appCornerRadius: CGFloat {
-        sidebarCornerRadius + sidebarOuterPadding
-    }
-    private var appShape: ConcentricRectangle {
-        ConcentricRectangle(corners: .fixed(appCornerRadius), isUniform: true)
-    }
-    private var appContainerShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: appCornerRadius, style: .continuous)
+        sidebarWidth
     }
 
     public init(store: BrowserStore) {
@@ -32,13 +21,11 @@ public struct BrowserWindowView: View {
 
     public var body: some View {
         browserSurface
-            .background(.background, in: appShape)
-            .containerShape(appContainerShape)
-            .clipShape(appShape)
+            .background(.background)
             .ignoresSafeArea(.container, edges: ignoredContentSafeAreaEdges)
             .toolbar(removing: .title)
             .toolbarVisibility(.hidden, for: .windowToolbar)
-            .background(WindowChromeController(contentCornerRadius: appCornerRadius))
+            .background(WindowChromeController())
             .background(
                 BrowserKeyboardShortcutMonitor(
                     beginNewTab: { store.beginNewTab() }
@@ -72,13 +59,6 @@ public struct BrowserWindowView: View {
             .animation(.snappy(duration: 0.16), value: store.isCommandBarPresented)
             .animation(.snappy(duration: 0.16), value: store.sidebarIsVisible)
             .animation(.snappy(duration: 0.16), value: store.sidebarIsLockedOpen)
-            .onAppear {
-                sidebarFloatingChromeIsMounted = !store.sidebarIsLockedOpen
-                sidebarFloatingChromeProgress = store.sidebarIsLockedOpen ? 0 : 1
-            }
-            .task(id: store.sidebarIsLockedOpen) {
-                await updateSidebarFloatingChrome()
-            }
             .alert(
                 store.pendingURLConfirmation?.confirmationTitle ?? "Open Link?",
                 isPresented: pendingURLConfirmationIsPresented,
@@ -162,48 +142,53 @@ public struct BrowserWindowView: View {
 
     private var sidebarShell: some View {
         sidebar
-            .frame(width: sidebarContentWidth)
-            .background {
-                if store.sidebarIsLockedOpen {
-                    pinnedSidebarChrome
-                }
-            }
-            .padding(.vertical, sidebarCurrentOuterPadding)
-            .padding(sidebarPaddingEdge, sidebarCurrentOuterPadding)
+            .frame(width: sidebarWidth)
+            .padding(.vertical, sidebarOuterInset)
+            .padding(sidebarPaddingEdge, sidebarOuterInset)
     }
 
+    @ViewBuilder
     private var sidebar: some View {
-        let chromeShape = RoundedRectangle(cornerRadius: sidebarCornerRadius, style: .continuous)
-        let clipShape = RoundedRectangle(cornerRadius: sidebarCurrentCornerRadius, style: .continuous)
+        if store.sidebarIsLockedOpen {
+            pinnedSidebar
+        } else {
+            floatingSidebar
+        }
+    }
+
+    private var pinnedSidebar: some View {
+        ZStack {
+            pinnedSidebarChrome
+            SidebarView(store: store, webViewState: webViewState)
+        }
+        .frame(maxHeight: .infinity)
+        .overlay { pinnedSidebarSeparator }
+        .accessibilityIdentifier("BrowserSidebar")
+    }
+
+    private var floatingSidebar: some View {
+        let shape = RoundedRectangle(cornerRadius: floatingSidebarCornerRadius, style: .continuous)
 
         return ZStack {
-            if !store.sidebarIsLockedOpen, sidebarFloatingChromeIsMounted {
-                chromeShape
-                    .fill(.clear)
-                    .glassEffect(.regular, in: chromeShape)
-                    .compositingGroup()
-                    .opacity(Double(sidebarFloatingChromeProgress))
-                    .allowsHitTesting(false)
-            }
+            shape
+                .fill(.clear)
+                .glassEffect(.regular, in: shape)
+                .compositingGroup()
+                .allowsHitTesting(false)
 
             SidebarView(store: store, webViewState: webViewState)
         }
-            .frame(maxHeight: .infinity)
-            .clipShape(clipShape)
-            .overlay {
-                if store.sidebarIsLockedOpen {
-                    pinnedSidebarSeparator
-                } else {
-                    clipShape
-                        .stroke(.separator.opacity(0.42), lineWidth: 0.5)
-                        .opacity(Double(sidebarFloatingChromeProgress))
-                }
-            }
-            .accessibilityIdentifier("BrowserSidebar")
+        .frame(maxHeight: .infinity)
+        .clipShape(shape)
+        .overlay {
+            shape.stroke(.separator.opacity(0.42), lineWidth: 0.5)
+        }
+        .accessibilityIdentifier("BrowserSidebar")
     }
 
     private var pinnedSidebarChrome: some View {
-        PinnedSidebarGlassBackdrop()
+        Rectangle()
+            .fill(.regularMaterial)
             .allowsHitTesting(false)
     }
 
@@ -224,16 +209,8 @@ public struct BrowserWindowView: View {
         .allowsHitTesting(false)
     }
 
-    private var sidebarCurrentOuterPadding: CGFloat {
-        sidebarOuterPadding * sidebarFloatingChromeProgress
-    }
-
-    private var sidebarContentWidth: CGFloat {
-        sidebarWidth + sidebarOuterPadding * (1 - sidebarFloatingChromeProgress)
-    }
-
-    private var sidebarCurrentCornerRadius: CGFloat {
-        sidebarCornerRadius * sidebarFloatingChromeProgress
+    private var sidebarOuterInset: CGFloat {
+        store.sidebarIsLockedOpen ? 0 : floatingSidebarInset
     }
 
     private var sidebarShouldBeMounted: Bool {
@@ -269,36 +246,6 @@ public struct BrowserWindowView: View {
 
     private var ignoredContentSafeAreaEdges: Edge.Set {
         .top
-    }
-
-    @MainActor
-    private func updateSidebarFloatingChrome() async {
-        if store.sidebarIsLockedOpen {
-            guard sidebarFloatingChromeIsMounted || sidebarFloatingChromeProgress > 0 else {
-                return
-            }
-
-            try? await Task.sleep(nanoseconds: 170_000_000)
-            guard !Task.isCancelled else {
-                return
-            }
-
-            withAnimation(.easeInOut(duration: 0.18)) {
-                sidebarFloatingChromeProgress = 0
-            }
-
-            try? await Task.sleep(nanoseconds: 190_000_000)
-            guard !Task.isCancelled, store.sidebarIsLockedOpen else {
-                return
-            }
-
-            sidebarFloatingChromeIsMounted = false
-        } else {
-            sidebarFloatingChromeIsMounted = true
-            withAnimation(.easeInOut(duration: 0.12)) {
-                sidebarFloatingChromeProgress = 1
-            }
-        }
     }
 
     private var browserNavigationCommandContext: BrowserNavigationCommandContext {
@@ -955,48 +902,31 @@ private extension NSEvent {
 }
 
 private struct WindowChromeController: NSViewRepresentable {
-    let contentCornerRadius: CGFloat
-
     func makeNSView(context: Context) -> NSView {
         NSView(frame: .zero)
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         DispatchQueue.main.async {
-            nsView.window?.applyMeridianChrome(contentCornerRadius: contentCornerRadius)
+            nsView.window?.applyMeridianChrome()
         }
     }
 }
 
-private struct PinnedSidebarGlassBackdrop: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView(frame: .zero)
-        view.material = .sidebar
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = .sidebar
-        nsView.blendingMode = .behindWindow
-        nsView.state = .active
-    }
-}
-
 private extension NSWindow {
-    func applyMeridianChrome(contentCornerRadius: CGFloat) {
+    func applyMeridianChrome() {
         title = "Meridian Browser"
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
+        titlebarSeparatorStyle = .none
         styleMask.insert([.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView])
-        isOpaque = false
-        backgroundColor = .clear
+        isOpaque = true
+        backgroundColor = .windowBackgroundColor
         hasShadow = true
         collectionBehavior.insert(.fullScreenPrimary)
 
         setStandardWindowButtonsHidden(true)
-        applyMeridianContentCornerRadius(contentCornerRadius)
+        removeMeridianContentCornerOverrides()
         invalidateShadow()
     }
 
@@ -1006,17 +936,15 @@ private extension NSWindow {
         standardWindowButton(.zoomButton)?.isHidden = isHidden
     }
 
-    func applyMeridianContentCornerRadius(_ cornerRadius: CGFloat) {
+    func removeMeridianContentCornerOverrides() {
         guard let contentView else {
             return
         }
 
         [contentView.superview, contentView].compactMap(\.self).forEach { view in
-            view.wantsLayer = true
-            view.layer?.backgroundColor = NSColor.clear.cgColor
-            view.layer?.cornerRadius = cornerRadius
-            view.layer?.cornerCurve = .continuous
-            view.layer?.masksToBounds = true
+            view.layer?.cornerRadius = 0
+            view.layer?.borderWidth = 0
+            view.layer?.masksToBounds = false
         }
     }
 }

@@ -43,7 +43,7 @@ struct MeridianBrowserApp: App {
                     }
                 }
         }
-        .windowStyle(.plain)
+        .windowStyle(.hiddenTitleBar)
         .defaultWindowPlacement { _, context in
             WindowPlacement(size: context.defaultDisplay.visibleRect.size)
         }
