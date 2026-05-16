@@ -6,6 +6,7 @@ EXECUTABLE_NAME="MeridianBrowser"
 PRODUCT_NAME="Meridian Browser"
 BUNDLE_ID="app.meridianbrowser.MeridianBrowser"
 MIN_SYSTEM_VERSION="26.0"
+SWIFT_CONFIGURATION="debug"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -17,10 +18,16 @@ INFO_PLIST="$APP_CONTENTS/Info.plist"
 
 cd "$ROOT_DIR"
 
+case "$MODE" in
+  --release|release|--verify-release|verify-release|--profile-swiftui|profile-swiftui|--profile-hitches|profile-hitches|--profile-time|profile-time)
+    SWIFT_CONFIGURATION="release"
+    ;;
+esac
+
 pkill -x "$EXECUTABLE_NAME" >/dev/null 2>&1 || true
 
-swift build
-BUILD_BINARY="$(swift build --show-bin-path)/$EXECUTABLE_NAME"
+swift build -c "$SWIFT_CONFIGURATION"
+BUILD_BINARY="$(swift build -c "$SWIFT_CONFIGURATION" --show-bin-path)/$EXECUTABLE_NAME"
 
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS"
@@ -54,8 +61,38 @@ open_app() {
   /usr/bin/open -n "$APP_BUNDLE"
 }
 
+profile_app() {
+  local template="$1"
+  local output_name="$2"
+  local time_limit="${3:-20s}"
+  local output_path="$DIST_DIR/$output_name"
+
+  rm -rf "$output_path"
+  open_app
+  sleep 1
+
+  local pid
+  pid="$(pgrep -x "$EXECUTABLE_NAME" | head -n 1)"
+  if [[ -z "$pid" ]]; then
+    echo "error: $EXECUTABLE_NAME is not running" >&2
+    exit 1
+  fi
+
+  echo "Recording $template for $time_limit. Reproduce the sidebar swipe now."
+  xcrun xctrace record \
+    --template "$template" \
+    --attach "$pid" \
+    --time-limit "$time_limit" \
+    --output "$output_path" \
+    --no-prompt
+  echo "Trace written to $output_path"
+}
+
 case "$MODE" in
   run)
+    open_app
+    ;;
+  --release|release)
     open_app
     ;;
   --debug|debug)
@@ -79,8 +116,22 @@ case "$MODE" in
     sleep 1
     pgrep -x "$EXECUTABLE_NAME" >/dev/null
     ;;
+  --verify-release|verify-release)
+    open_app
+    sleep 1
+    pgrep -x "$EXECUTABLE_NAME" >/dev/null
+    ;;
+  --profile-swiftui|profile-swiftui)
+    profile_app "SwiftUI" "sidebar-swiftui.trace" "20s"
+    ;;
+  --profile-hitches|profile-hitches)
+    profile_app "Animation Hitches" "sidebar-hitches.trace" "20s"
+    ;;
+  --profile-time|profile-time)
+    profile_app "Time Profiler" "sidebar-time-profiler.trace" "20s"
+    ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--subsystem-logs|--verify]" >&2
+    echo "usage: $0 [run|--release|--debug|--logs|--subsystem-logs|--verify|--verify-release|--profile-swiftui|--profile-hitches|--profile-time]" >&2
     exit 2
     ;;
 esac

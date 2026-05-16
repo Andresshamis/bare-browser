@@ -1,11 +1,34 @@
 import AppKit
 import SwiftUI
 
+enum CommandBarMetrics {
+    static let width: CGFloat = 620
+    static var maximumHeight: CGFloat {
+        expandedHeight
+    }
+
+    static let maximumVisibleResults = 6
+    static let searchAreaHeight: CGFloat = 48
+    static let resultRowHeight: CGFloat = 28
+    static let resultRowSpacing: CGFloat = 2
+    static let resultsBottomPadding: CGFloat = 6
+    static let dividerHeight: CGFloat = 1
+    static var resultsAreaHeight: CGFloat {
+        CGFloat(maximumVisibleResults) * resultRowHeight
+            + CGFloat(maximumVisibleResults - 1) * resultRowSpacing
+            + resultsBottomPadding
+    }
+    static let compactHeight = searchAreaHeight
+    static var expandedHeight: CGFloat {
+        searchAreaHeight + dividerHeight + resultsAreaHeight
+    }
+}
+
 public struct CommandBarView: View {
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var webViewState: WebViewState
     @State private var query = ""
-    @State private var focusRequest = 0
+    @Namespace private var glassNamespace
 
     public init(store: BrowserStore, webViewState: WebViewState) {
         self.store = store
@@ -13,9 +36,11 @@ public struct CommandBarView: View {
     }
 
     public var body: some View {
+        let results = visibleCommandBarResults
+        let hasResults = !results.isEmpty
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
 
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -24,7 +49,7 @@ public struct CommandBarView: View {
                 CommandBarTextField(
                     text: $query,
                     placeholder: "Search or enter address",
-                    focusRequest: focusRequest,
+                    focusRequest: store.commandBarFocusRequest,
                     submit: submit,
                     cancel: { store.hideCommandBar() }
                 )
@@ -42,13 +67,14 @@ public struct CommandBarView: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, commandBarResults.isEmpty ? 10 : 2)
+            .frame(height: CommandBarMetrics.searchAreaHeight)
 
-            if !commandBarResults.isEmpty {
+            if hasResults {
                 Divider()
-                VStack(spacing: 2) {
-                    ForEach(commandBarResults) { result in
+                    .frame(height: CommandBarMetrics.dividerHeight)
+
+                VStack(spacing: CommandBarMetrics.resultRowSpacing) {
+                    ForEach(results) { result in
                         Button {
                             store.activateCommandBarResult(result, browserActionHandler: performBrowserAction)
                         } label: {
@@ -69,7 +95,7 @@ public struct CommandBarView: View {
                             }
                             .font(.system(size: 13))
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
+                            .frame(height: CommandBarMetrics.resultRowHeight)
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
@@ -80,12 +106,34 @@ public struct CommandBarView: View {
                             }
                         }
                     }
+
+                    if results.count < CommandBarMetrics.maximumVisibleResults {
+                        Spacer(minLength: 0)
+                    }
                 }
-                .padding(.bottom, 6)
+                .frame(height: CommandBarMetrics.resultsAreaHeight - CommandBarMetrics.resultsBottomPadding, alignment: .top)
+                .padding(.bottom, CommandBarMetrics.resultsBottomPadding)
+                .transition(.opacity)
             }
         }
-        .frame(width: 620)
-        .glassEffect(.regular, in: shape)
+        .frame(
+            width: CommandBarMetrics.width,
+            height: hasResults ? CommandBarMetrics.expandedHeight : CommandBarMetrics.compactHeight,
+            alignment: .topLeading
+        )
+        .contentShape(shape)
+        .background {
+            GlassEffectContainer(spacing: 0) {
+                shape
+                    .fill(.clear)
+                    .glassEffect(.regular.tint(.white.opacity(0.08)).interactive(false), in: shape)
+                    .glassEffectID("commandBarSurface", in: glassNamespace)
+                    .glassEffectTransition(.matchedGeometry)
+                    .compositingGroup()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .overlay(
             shape.stroke(.separator.opacity(0.45), lineWidth: 0.5)
         )
@@ -93,16 +141,21 @@ public struct CommandBarView: View {
         .onAppear {
             prepareInitialQuery()
         }
-        .onChange(of: store.commandBarMode) { _, _ in
+        .onChange(of: store.commandBarFocusRequest) { _, _ in
             prepareInitialQuery()
         }
         .onExitCommand {
             store.hideCommandBar()
         }
+        .animation(.smooth(duration: 0.18), value: hasResults)
     }
 
     private var commandBarResults: [CommandBarResult] {
         store.commandBarResults(for: query, browserActionAvailability: browserActionAvailability)
+    }
+
+    private var visibleCommandBarResults: [CommandBarResult] {
+        Array(commandBarResults.prefix(CommandBarMetrics.maximumVisibleResults))
     }
 
     private func submit() {
@@ -116,7 +169,6 @@ public struct CommandBarView: View {
         case .newTab:
             query = ""
         }
-        focusRequest += 1
     }
 
     private var browserActionAvailability: CommandRouter.BrowserActionAvailability {
@@ -178,6 +230,7 @@ private struct CommandBarTextField: NSViewRepresentable {
         let textField = FocusableCommandBarTextField()
         textField.isBordered = false
         textField.drawsBackground = false
+        textField.backgroundColor = .clear
         textField.focusRingType = .none
         textField.placeholderString = placeholder
         textField.font = .systemFont(ofSize: 18, weight: .medium)
@@ -211,13 +264,26 @@ private struct CommandBarTextField: NSViewRepresentable {
     }
 
     private func focus(_ textField: FocusableCommandBarTextField, selectAll: Bool) {
-        DispatchQueue.main.async {
+        attemptFocus(textField, selectAll: selectAll, remainingAttempts: 8)
+    }
+
+    private func attemptFocus(
+        _ textField: FocusableCommandBarTextField,
+        selectAll: Bool,
+        remainingAttempts: Int
+    ) {
+        let delay = remainingAttempts == 8 ? 0 : 0.03
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             guard let window = textField.window else {
+                retryFocusIfNeeded(textField, selectAll: selectAll, remainingAttempts: remainingAttempts)
                 return
             }
 
-            window.makeKey()
-            window.makeFirstResponder(textField)
+            window.makeKeyAndOrderFront(nil)
+            guard window.makeFirstResponder(textField) else {
+                retryFocusIfNeeded(textField, selectAll: selectAll, remainingAttempts: remainingAttempts)
+                return
+            }
 
             guard selectAll else {
                 return
@@ -226,6 +292,17 @@ private struct CommandBarTextField: NSViewRepresentable {
             textField.selectText(nil)
             textField.currentEditor()?.selectAll(nil)
         }
+    }
+
+    private func retryFocusIfNeeded(
+        _ textField: FocusableCommandBarTextField,
+        selectAll: Bool,
+        remainingAttempts: Int
+    ) {
+        guard remainingAttempts > 0 else {
+            return
+        }
+        attemptFocus(textField, selectAll: selectAll, remainingAttempts: remainingAttempts - 1)
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
