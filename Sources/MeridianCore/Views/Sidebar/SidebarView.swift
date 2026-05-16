@@ -57,8 +57,16 @@ public struct SidebarView: View {
         .sheet(item: $spaceCustomizationDraft) { draft in
             SpaceCustomizationSheet(
                 draft: draft,
-                save: { name, symbolName, colorHex in
-                    if store.customizeSpace(draft.id, name: name, symbolName: symbolName, colorHex: colorHex) {
+                profiles: store.persistentProfiles,
+                save: { name, symbolName, colorHex, profileID, sidebarAppearance in
+                    if store.customizeSpace(
+                        draft.id,
+                        name: name,
+                        symbolName: symbolName,
+                        colorHex: colorHex,
+                        profileID: profileID,
+                        sidebarAppearance: sidebarAppearance
+                    ) {
                         spaceCustomizationDraft = nil
                     }
                 },
@@ -164,20 +172,26 @@ public struct SidebarView: View {
     }
 
     private var profileHeader: some View {
-        HStack(spacing: 10) {
+        let profile = selectedSpaceProfile
+
+        return HStack(spacing: 10) {
             Menu {
-                Section("Profiles") {
-                    ForEach(store.persistentProfiles) { profile in
-                        Button {
-                            _ = store.switchProfile(profile.id)
-                        } label: {
-                            Label(
-                                profile.name,
-                                systemImage: profile.id == store.activeProfile?.id ? "checkmark.circle.fill" : "person.circle"
-                            )
+                Section("Current Space") {
+                    if let profile {
+                        Button {} label: {
+                            Label(profile.name, systemImage: "person.crop.circle")
                         }
-                        .accessibilityLabel("Switch to \(profile.name) profile")
+                        .disabled(true)
                     }
+
+                    Button {
+                        if let space = store.selectedSpace {
+                            beginCustomizing(space)
+                        }
+                    } label: {
+                        Label("Customize Current Space...", systemImage: "slider.horizontal.3")
+                    }
+                    .disabled(store.selectedSpace == nil)
                 }
 
                 Divider()
@@ -191,12 +205,12 @@ public struct SidebarView: View {
             } label: {
                 HStack(spacing: 10) {
                     Circle()
-                        .fill(Color(hex: store.activeProfile?.colorHex ?? "#4F7CAC"))
+                        .fill(Color(hex: profile?.colorHex ?? "#4F7CAC"))
                         .frame(width: 12, height: 12)
                         .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(store.activeProfile?.name ?? "Profile")
+                        Text(profile?.name ?? "Profile")
                             .font(.headline)
                             .lineLimit(1)
                         Text(store.selectedSpace?.name ?? "No Space")
@@ -213,9 +227,9 @@ public struct SidebarView: View {
             }
             .menuStyle(.borderlessButton)
             .buttonStyle(.plain)
-            .help("Switch or create profile")
-            .accessibilityLabel("Profile menu")
-            .accessibilityValue(store.activeProfile?.name ?? "Profile")
+            .help("Manage current space profile")
+            .accessibilityLabel("Current space profile menu")
+            .accessibilityValue(profile?.name ?? "Profile")
 
             Spacer()
         }
@@ -226,7 +240,7 @@ public struct SidebarView: View {
     private var spaceSwitcher: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(store.activeProfileSpaces) { space in
+                ForEach(store.sidebarSpaces) { space in
                     Button {
                         selectSpace(space.id)
                     } label: {
@@ -297,6 +311,7 @@ public struct SidebarView: View {
             moveTabToPlacement: { draggedTabID, placement in
                 store.moveTab(draggedTabID, to: placement)
             },
+            customizeSpace: { beginCustomizing($0) },
             selectAdjacentSpace: { store.selectAdjacentSpace($0) }
         )
     }
@@ -312,7 +327,7 @@ public struct SidebarView: View {
     }
 
     private func makeSpacePagerSnapshot() -> SidebarSpacePagerSnapshot {
-        let activeSpaces = store.activeProfileSpaces
+        let activeSpaces = store.sidebarSpaces
         let selectedIndex = selectedSpaceIndex(in: activeSpaces)
         let visibleIndices = SidebarSpacePagerWindow.visibleIndices(
             selectedIndex: selectedIndex,
@@ -408,8 +423,17 @@ public struct SidebarView: View {
             id: space.id,
             name: space.name,
             symbolName: space.symbolName,
-            colorHex: space.colorHex
+            colorHex: space.colorHex,
+            sidebarAppearance: space.sidebarAppearance,
+            profileID: space.profileID
         )
+    }
+
+    private var selectedSpaceProfile: BrowserProfile? {
+        guard let profileID = store.selectedSpace?.profileID else {
+            return nil
+        }
+        return store.profiles.first { $0.id == profileID }
     }
 
     private var addressText: String {
@@ -596,6 +620,8 @@ private struct SpaceCustomizationDraft: Identifiable {
     var name: String
     var symbolName: String
     var colorHex: String
+    var sidebarAppearance: SidebarAppearance
+    var profileID: ProfileID
 }
 
 private struct SpaceSwitcherButtonLabel: View {
@@ -655,26 +681,64 @@ private struct SpaceIconGlyph: View {
     }
 }
 
+private enum SidebarAppearancePreviewMode: String, CaseIterable, Identifiable {
+    case floating
+    case pinned
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .floating:
+            return "Floating"
+        case .pinned:
+            return "Pinned"
+        }
+    }
+}
+
+private struct SidebarTintPreset: Identifiable {
+    let id: String
+    let name: String
+    let tintSource: SidebarTintSource
+    let tintHex: String
+
+    var usesSpaceColor: Bool {
+        tintSource == .spaceColor
+    }
+}
+
 private struct SpaceCustomizationSheet: View {
     let draft: SpaceCustomizationDraft
-    let save: (String, String, String) -> Void
+    let profiles: [BrowserProfile]
+    let save: (String, String, String, ProfileID, SidebarAppearance) -> Void
     let cancel: () -> Void
 
     @State private var name: String
     @State private var selectedSymbolName: String
     @State private var selectedColorHex: String
+    @State private var selectedProfileID: ProfileID
+    @State private var sidebarAppearance: SidebarAppearance
+    @State private var sidebarPreviewMode: SidebarAppearancePreviewMode = .floating
 
     init(
         draft: SpaceCustomizationDraft,
-        save: @escaping (String, String, String) -> Void,
+        profiles: [BrowserProfile],
+        save: @escaping (String, String, String, ProfileID, SidebarAppearance) -> Void,
         cancel: @escaping () -> Void
     ) {
         self.draft = draft
+        self.profiles = profiles
         self.save = save
         self.cancel = cancel
         _name = State(initialValue: draft.name)
         _selectedSymbolName = State(initialValue: draft.symbolName)
         _selectedColorHex = State(initialValue: draft.colorHex)
+        let initialProfileID = profiles.contains { $0.id == draft.profileID }
+            ? draft.profileID
+            : profiles.first?.id ?? draft.profileID
+        _selectedProfileID = State(initialValue: initialProfileID)
+        _sidebarAppearance = State(initialValue: draft.sidebarAppearance)
     }
 
     var body: some View {
@@ -685,6 +749,19 @@ private struct SpaceCustomizationSheet: View {
 
                     TextField("Name", text: $name)
                         .textFieldStyle(.roundedBorder)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Profile")
+                            .font(.subheadline.weight(.semibold))
+                        Picker("Profile", selection: $selectedProfileID) {
+                            ForEach(profiles) { profile in
+                                Text(profile.name)
+                                    .tag(profile.id)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Icon")
@@ -718,6 +795,8 @@ private struct SpaceCustomizationSheet: View {
                             }
                         }
                     }
+
+                    sidebarAppearanceSection
                 }
                 .padding(22)
             }
@@ -730,14 +809,91 @@ private struct SpaceCustomizationSheet: View {
                 Button("Cancel", action: cancel)
                     .keyboardShortcut(.cancelAction)
                 Button("Save") {
-                    save(name, selectedSymbolName, selectedColorHex)
+                    save(name, selectedSymbolName, selectedColorHex, selectedProfileID, sidebarAppearance)
                 }
                 .keyboardShortcut(.defaultAction)
             }
             .padding(.horizontal, 22)
             .padding(.vertical, 14)
         }
-        .frame(width: 428, height: 540)
+        .frame(width: 540, height: 720)
+    }
+
+    private var sidebarAppearanceSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Sidebar")
+                    .font(.subheadline.weight(.semibold))
+
+                Spacer()
+
+                Picker("Preview", selection: $sidebarPreviewMode) {
+                    ForEach(SidebarAppearancePreviewMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 168)
+            }
+
+            SidebarAppearancePreview(
+                appearance: sidebarAppearance,
+                spaceColorHex: selectedColorHex,
+                mode: sidebarPreviewMode
+            )
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Tint")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                LazyVGrid(columns: tintPresetColumns, alignment: .leading, spacing: 8) {
+                    ForEach(Self.tintPresets) { preset in
+                        SidebarTintPresetButton(
+                            preset: preset,
+                            colorHex: preset.usesSpaceColor ? selectedColorHex : preset.tintHex,
+                            isSelected: isTintPresetSelected(preset)
+                        ) {
+                            applyTintPreset(preset)
+                        }
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 9) {
+                Text("Glass")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                SidebarGlassSlider(title: "Glass", value: settingBinding(\.glassOpacity))
+                SidebarGlassSlider(title: "Tint", value: settingBinding(\.tintOpacity))
+                SidebarGlassSlider(title: "Edge", value: settingBinding(\.edgeOpacity))
+                SidebarGlassSlider(title: "Shadow", value: settingBinding(\.shadowOpacity))
+                SidebarGlassSlider(title: "Highlight", value: settingBinding(\.highlightOpacity))
+            }
+
+            Toggle("Customize pinned appearance", isOn: pinnedOverrideIsEnabled)
+                .toggleStyle(.checkbox)
+
+            if sidebarAppearance.pinnedOverride != nil {
+                VStack(alignment: .leading, spacing: 9) {
+                    SidebarGlassSlider(title: "Pinned Glass", value: pinnedSettingBinding(\.glassOpacity))
+                    SidebarGlassSlider(title: "Pinned Tint", value: pinnedSettingBinding(\.tintOpacity))
+                    SidebarGlassSlider(title: "Pinned Edge", value: pinnedSettingBinding(\.edgeOpacity))
+                    SidebarGlassSlider(title: "Pinned Highlight", value: pinnedSettingBinding(\.highlightOpacity))
+                }
+            }
+        }
+        .padding(14)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.thinMaterial)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(.separator.opacity(0.28), lineWidth: 0.5)
+        }
     }
 
     private var customizationPreview: some View {
@@ -809,6 +965,55 @@ private struct SpaceCustomizationSheet: View {
         Array(repeating: GridItem(.fixed(28), spacing: 8), count: 8)
     }
 
+    private var tintPresetColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 88), spacing: 8)]
+    }
+
+    private var pinnedOverrideIsEnabled: Binding<Bool> {
+        Binding(
+            get: { sidebarAppearance.pinnedOverride != nil },
+            set: { isEnabled in
+                if isEnabled {
+                    sidebarAppearance.pinnedOverride = sidebarAppearance.pinnedOverride ?? sidebarAppearance.base
+                    sidebarPreviewMode = .pinned
+                } else {
+                    sidebarAppearance.pinnedOverride = nil
+                    sidebarPreviewMode = .floating
+                }
+            }
+        )
+    }
+
+    private func settingBinding(_ keyPath: WritableKeyPath<SidebarGlassSettings, Double>) -> Binding<Double> {
+        Binding(
+            get: { sidebarAppearance.base[keyPath: keyPath] },
+            set: { sidebarAppearance.base[keyPath: keyPath] = $0 }
+        )
+    }
+
+    private func pinnedSettingBinding(_ keyPath: WritableKeyPath<SidebarGlassSettings, Double>) -> Binding<Double> {
+        Binding(
+            get: { sidebarAppearance.pinnedOverride?[keyPath: keyPath] ?? sidebarAppearance.base[keyPath: keyPath] },
+            set: { value in
+                sidebarAppearance.pinnedOverride = sidebarAppearance.pinnedOverride ?? sidebarAppearance.base
+                sidebarAppearance.pinnedOverride?[keyPath: keyPath] = value
+            }
+        )
+    }
+
+    private func isTintPresetSelected(_ preset: SidebarTintPreset) -> Bool {
+        if preset.usesSpaceColor {
+            return sidebarAppearance.tintSource == .spaceColor
+        }
+        return sidebarAppearance.tintSource == .custom
+            && sidebarAppearance.tintHex.caseInsensitiveCompare(preset.tintHex) == .orderedSame
+    }
+
+    private func applyTintPreset(_ preset: SidebarTintPreset) {
+        sidebarAppearance.tintSource = preset.tintSource
+        sidebarAppearance.tintHex = preset.tintHex
+    }
+
     private static let symbolOptions = [
         BrowserSpace.defaultSymbolName,
         "sparkles",
@@ -860,6 +1065,159 @@ private struct SpaceCustomizationSheet: View {
         "#AC8E68",
         "#8E8E93"
     ]
+
+    private static let tintPresets = [
+        SidebarTintPreset(id: "space", name: "Space", tintSource: .spaceColor, tintHex: "#4F7CAC"),
+        SidebarTintPreset(id: "crystal", name: "Crystal", tintSource: .custom, tintHex: "#F2F7FF"),
+        SidebarTintPreset(id: "graphite", name: "Graphite", tintSource: .custom, tintHex: "#8E8E93"),
+        SidebarTintPreset(id: "sky", name: "Sky", tintSource: .custom, tintHex: "#64D2FF"),
+        SidebarTintPreset(id: "ocean", name: "Ocean", tintSource: .custom, tintHex: "#0A84FF"),
+        SidebarTintPreset(id: "violet", name: "Violet", tintSource: .custom, tintHex: "#BF5AF2"),
+        SidebarTintPreset(id: "rose", name: "Rose", tintSource: .custom, tintHex: "#FF375F"),
+        SidebarTintPreset(id: "amber", name: "Amber", tintSource: .custom, tintHex: "#FFB340"),
+        SidebarTintPreset(id: "forest", name: "Forest", tintSource: .custom, tintHex: "#30D158")
+    ]
+}
+
+private struct SidebarAppearancePreview: View {
+    let appearance: SidebarAppearance
+    let spaceColorHex: String
+    let mode: SidebarAppearancePreviewMode
+
+    var body: some View {
+        let settings = mode == .floating ? appearance.base : appearance.pinnedSettings
+        let tint = Color(hex: appearance.tintHex(forSpaceColorHex: spaceColorHex))
+        let shape = RoundedRectangle(cornerRadius: mode == .floating ? 14 : 5, style: .continuous)
+
+        ZStack(alignment: .leading) {
+            shape
+                .fill(.clear)
+                .glassEffect(.regular.tint(tint.opacity(settings.tintOpacity)).interactive(false), in: shape)
+                .overlay {
+                    ZStack {
+                        shape.fill(tint.opacity(settings.tintOpacity))
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(settings.highlightOpacity),
+                                tint.opacity(settings.highlightOpacity * 0.42),
+                                .clear
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        .clipShape(shape)
+                    }
+                }
+                .opacity(settings.glassOpacity)
+                .shadow(color: tint.opacity(settings.shadowOpacity), radius: 16, x: 0, y: 8)
+
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 7) {
+                    Circle().fill(.red.opacity(0.9)).frame(width: 8, height: 8)
+                    Circle().fill(.yellow.opacity(0.9)).frame(width: 8, height: 8)
+                    Circle().fill(.green.opacity(0.9)).frame(width: 8, height: 8)
+                    Spacer()
+                    Image(systemName: mode == .floating ? "pin" : "pin.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(.primary.opacity(0.08))
+                    .frame(height: 18)
+
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(tint)
+                        .frame(width: 9, height: 9)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(.primary.opacity(0.18))
+                        .frame(width: 92, height: 8)
+                }
+
+                HStack(spacing: 7) {
+                    ForEach(0..<4, id: \.self) { index in
+                        Circle()
+                            .fill(index == 0 ? tint : .primary.opacity(0.12))
+                            .frame(width: 16, height: 16)
+                    }
+                }
+            }
+            .padding(12)
+        }
+        .frame(height: 116)
+        .clipShape(shape)
+        .overlay {
+            shape.stroke(.separator.opacity(settings.edgeOpacity), lineWidth: 0.6)
+        }
+    }
+}
+
+private struct SidebarTintPresetButton: View {
+    let preset: SidebarTintPreset
+    let colorHex: String
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        let color = Color(hex: colorHex)
+
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 13, height: 13)
+                    .overlay {
+                        Circle()
+                            .stroke(.white.opacity(0.45), lineWidth: 0.8)
+                    }
+
+                Text(preset.name)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(isSelected ? color.opacity(0.28) : isHovered ? Color.primary.opacity(0.08) : .clear)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(
+                        isSelected ? color.opacity(0.65) : Color(nsColor: .separatorColor).opacity(0.22),
+                        lineWidth: 0.6
+                    )
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+}
+
+private struct SidebarGlassSlider: View {
+    let title: String
+    @Binding var value: Double
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 92, alignment: .leading)
+
+            Slider(value: $value, in: 0...1, step: 0.01)
+
+            Text("\(Int((value * 100).rounded()))")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 30, alignment: .trailing)
+        }
+    }
 }
 
 private struct SpaceIconOptionButton: View {
@@ -1101,6 +1459,7 @@ private struct SidebarSpacePagerView: View {
     let moveTab: (TabID, BrowserTabReorderDirection) -> Void
     let moveTabBefore: (TabID, BrowserTabPlacement, TabID) -> Bool
     let moveTabToPlacement: (TabID, BrowserTabPlacement) -> Bool
+    let customizeSpace: (BrowserSpace) -> Void
     let selectAdjacentSpace: (SpaceNavigationDirection) -> Bool
 
     @State private var spaceSwipeDeltaX: CGFloat = 0
@@ -1119,7 +1478,8 @@ private struct SidebarSpacePagerView: View {
                         setTabPlacement: setTabPlacement,
                         moveTab: moveTab,
                         moveTabBefore: moveTabBefore,
-                        moveTabToPlacement: moveTabToPlacement
+                        moveTabToPlacement: moveTabToPlacement,
+                        customizeSpace: customizeSpace
                     )
                     .equatable()
                     .id(page.id)
@@ -1196,6 +1556,7 @@ private struct SidebarSpacePageView: View, Equatable {
     let moveTab: (TabID, BrowserTabReorderDirection) -> Void
     let moveTabBefore: (TabID, BrowserTabPlacement, TabID) -> Bool
     let moveTabToPlacement: (TabID, BrowserTabPlacement) -> Bool
+    let customizeSpace: (BrowserSpace) -> Void
 
     nonisolated static func == (lhs: SidebarSpacePageView, rhs: SidebarSpacePageView) -> Bool {
         lhs.page == rhs.page
@@ -1226,6 +1587,15 @@ private struct SidebarSpacePageView: View, Equatable {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 1, alignment: .topLeading)
+            .contentShape(Rectangle())
+        }
+        .contextMenu {
+            Button {
+                customizeSpace(page.space)
+            } label: {
+                Label("Customize Current Space...", systemImage: "slider.horizontal.3")
+            }
         }
     }
 

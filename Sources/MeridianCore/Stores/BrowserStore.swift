@@ -136,11 +136,9 @@ public final class BrowserStore: ObservableObject {
         profiles.filter { !$0.isEphemeral }
     }
 
-    public var activeProfileSpaces: [BrowserSpace] {
-        guard let activeProfileID = activeProfile?.id else {
-            return []
-        }
-        return spaces.filter { $0.profileID == activeProfileID }
+    public var sidebarSpaces: [BrowserSpace] {
+        let persistentProfileIDs = Set(persistentProfiles.map(\.id))
+        return spaces.filter { persistentProfileIDs.contains($0.profileID) }
     }
 
     public var suggestedPersistentProfileName: String {
@@ -172,7 +170,7 @@ public final class BrowserStore: ObservableObject {
     public func createSpace(name: String, profileID: ProfileID? = nil) -> BrowserSpace {
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedName = cleanedName.isEmpty ? "Untitled Space" : cleanedName
-        let profileID = profileID ?? activeProfile?.id ?? profiles[0].id
+        let profileID = profileID ?? defaultSpaceProfileID
         let space = BrowserSpace(name: resolvedName, profileID: profileID)
         spaces.append(space)
         selectSpace(space.id)
@@ -185,9 +183,15 @@ public final class BrowserStore: ObservableObject {
         _ id: SpaceID,
         name: String,
         symbolName: String,
-        colorHex: String
+        colorHex: String,
+        profileID: ProfileID? = nil,
+        sidebarAppearance: SidebarAppearance? = nil
     ) -> Bool {
         guard spaces.contains(where: { $0.id == id }) else {
+            return false
+        }
+        if let profileID,
+           !persistentProfiles.contains(where: { $0.id == profileID }) {
             return false
         }
 
@@ -201,7 +205,33 @@ public final class BrowserStore: ObservableObject {
             space.name = resolvedName
             space.symbolName = resolvedSymbolName
             space.colorHex = colorHex
+            if let sidebarAppearance {
+                space.sidebarAppearance = sidebarAppearance
+            }
+            if let profileID {
+                space.profileID = profileID
+            }
         }
+        if let profileID {
+            updateTabs(inSpace: id, profileID: profileID)
+            refreshActivePageSecurityStatus()
+        }
+        persistSession()
+        return true
+    }
+
+    @discardableResult
+    public func setProfile(_ profileID: ProfileID, forSpace spaceID: SpaceID) -> Bool {
+        guard persistentProfiles.contains(where: { $0.id == profileID }),
+              spaces.contains(where: { $0.id == spaceID }) else {
+            return false
+        }
+
+        updateSpace(spaceID) { space in
+            space.profileID = profileID
+        }
+        updateTabs(inSpace: spaceID, profileID: profileID)
+        refreshActivePageSecurityStatus()
         persistSession()
         return true
     }
@@ -210,12 +240,15 @@ public final class BrowserStore: ObservableObject {
         guard let space = spaces.first(where: { $0.id == id }) else {
             return false
         }
-        return spaces.filter { $0.profileID == space.profileID }.count > 1
+        if persistentProfiles.contains(where: { $0.id == space.profileID }) {
+            return sidebarSpaces.count > 1
+        }
+        return true
     }
 
     @discardableResult
     public func deleteSpace(_ id: SpaceID, date: Date = Date()) -> Bool {
-        guard let deletedSpace = spaces.first(where: { $0.id == id }),
+        guard spaces.contains(where: { $0.id == id }),
               canDeleteSpace(id) else {
             return false
         }
@@ -242,7 +275,7 @@ public final class BrowserStore: ObservableObject {
         }
 
         if selectedSpaceID == id {
-            selectReplacementSpace(forDeletedProfileID: deletedSpace.profileID, date: date)
+            selectReplacementSpace(date: date)
         } else if let selectedTabID,
                   deletedTabIDs.contains(selectedTabID) {
             self.selectedTabID = selectedSpace.flatMap { self.selectedTabID(in: $0) }
@@ -288,7 +321,6 @@ public final class BrowserStore: ObservableObject {
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let profile = BrowserProfile(name: cleanedName.isEmpty ? suggestedPersistentProfileName : cleanedName)
         profiles.append(profile)
-        selectProfileContext(profile, date: Date())
         persistSession()
         return profile
     }
@@ -360,7 +392,7 @@ public final class BrowserStore: ObservableObject {
 
     @discardableResult
     public func selectAdjacentSpace(_ direction: SpaceNavigationDirection) -> Bool {
-        let spaces = activeProfileSpaces
+        let spaces = sidebarSpaces
         guard let selectedSpaceID,
               let selectedIndex = spaces.firstIndex(where: { $0.id == selectedSpaceID }) else {
             return false
@@ -680,6 +712,7 @@ public final class BrowserStore: ObservableObject {
         historyLimit: Int = 5,
         browserActionAvailability: CommandRouter.BrowserActionAvailability? = nil
     ) -> [CommandBarResult] {
+        _ = profileLimit
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return []
@@ -689,14 +722,12 @@ public final class BrowserStore: ObservableObject {
             commandRouter.browserActionSuggestions(for: trimmed, availability: availability)
                 .map(CommandBarResult.browserAction)
         } ?? []
-        let profileResults = matchingProfiles(for: trimmed, limit: profileLimit)
-            .map(CommandBarResult.profile)
         let tabResults = matchingOpenTabs(for: trimmed, limit: openTabLimit)
             .map(CommandBarResult.openTab)
         let matchedHistory = historyResults(for: trimmed, limit: historyLimit)
             .map(CommandBarResult.history)
 
-        return actionResults + profileResults + tabResults + matchedHistory
+        return actionResults + tabResults + matchedHistory
     }
 
     public func activateCommandBarResult(
@@ -707,8 +738,6 @@ public final class BrowserStore: ObservableObject {
         case .browserAction(let action):
             perform(.browserAction(action.action), browserActionHandler: browserActionHandler)
             return
-        case .profile(let profile):
-            _ = switchProfile(profile.id)
         case .openTab(let tab):
             selectTab(tab.id)
         case .history(let entry):
@@ -742,8 +771,6 @@ public final class BrowserStore: ObservableObject {
             _ = createPersistentProfile(name: name)
         case .switchSpace(let id):
             selectSpace(id)
-        case .switchProfile(let id):
-            _ = switchProfile(id)
         case .browserAction(let action):
             if !performBrowserAction(action, handler: browserActionHandler) {
                 lastUserMessage = Self.unavailableMessage(for: action)
@@ -1253,40 +1280,6 @@ public final class BrowserStore: ObservableObject {
         lastUserMessage = nil
     }
 
-    @discardableResult
-    public func switchProfile(_ id: ProfileID) -> Bool {
-        guard let profile = profiles.first(where: { $0.id == id }) else {
-            return false
-        }
-
-        selectProfileContext(profile, date: Date())
-        persistSession()
-        return true
-    }
-
-    private func selectProfileContext(_ profile: BrowserProfile, date: Date) {
-        if let existingSpace = spaces
-            .filter({ $0.profileID == profile.id })
-            .max(by: { $0.lastActiveDate < $1.lastActiveDate }) {
-            selectedSpaceID = existingSpace.id
-            if let tabID = selectedTabID(in: existingSpace) {
-                selectedTabID = tabID
-                updateSpace(existingSpace.id) { space in
-                    space.selectedTabID = tabID
-                    space.lastActiveDate = date
-                }
-                updateTab(tabID) { tab in
-                    tab.lastActiveDate = date
-                }
-            } else {
-                createStartTab(in: existingSpace.id, profileID: profile.id, date: date)
-            }
-        } else {
-            createDefaultSpaceAndTab(for: profile, date: date)
-        }
-        refreshActivePageSecurityStatus()
-    }
-
     private func selectedTabID(in space: BrowserSpace) -> TabID? {
         let candidateIDs = ([space.selectedTabID].compactMap { $0 })
             + space.favoriteTabIDs
@@ -1302,9 +1295,8 @@ public final class BrowserStore: ObservableObject {
         }
     }
 
-    private func selectReplacementSpace(forDeletedProfileID profileID: ProfileID, date: Date) {
-        guard let replacementSpace = spaces
-            .filter({ $0.profileID == profileID })
+    private func selectReplacementSpace(date: Date) {
+        guard let replacementSpace = sidebarSpaces
             .max(by: { $0.lastActiveDate < $1.lastActiveDate }) else {
             selectedSpaceID = nil
             selectedTabID = nil
@@ -1322,7 +1314,7 @@ public final class BrowserStore: ObservableObject {
                 tab.lastActiveDate = date
             }
         } else {
-            createStartTab(in: replacementSpace.id, profileID: profileID, date: date)
+            createStartTab(in: replacementSpace.id, profileID: replacementSpace.profileID, date: date)
         }
     }
 
@@ -1337,27 +1329,6 @@ public final class BrowserStore: ObservableObject {
             didNormalize = true
         }
         return didNormalize
-    }
-
-    private func createDefaultSpaceAndTab(for profile: BrowserProfile, date: Date) {
-        var space = BrowserSpace(
-            name: profile.isEphemeral ? "Private" : profile.name,
-            profileID: profile.id,
-            lastActiveDate: date
-        )
-        let tab = BrowserTab(
-            title: "Start Page",
-            parentSpaceID: space.id,
-            profileID: profile.id,
-            lastActiveDate: date
-        )
-        space.regularTabIDs = [tab.id]
-        space.selectedTabID = tab.id
-
-        spaces.append(space)
-        tabs.append(tab)
-        selectedSpaceID = space.id
-        selectedTabID = tab.id
     }
 
     private func createStartTab(in spaceID: SpaceID, profileID: ProfileID, date: Date) {
@@ -1566,6 +1537,20 @@ public final class BrowserStore: ObservableObject {
         mutate(&spaces[index])
     }
 
+    private func updateTabs(inSpace spaceID: SpaceID, profileID: ProfileID) {
+        for index in tabs.indices where tabs[index].parentSpaceID == spaceID {
+            tabs[index].profileID = profileID
+        }
+    }
+
+    private var defaultSpaceProfileID: ProfileID {
+        if let selectedProfileID = selectedSpace?.profileID,
+           persistentProfiles.contains(where: { $0.id == selectedProfileID }) {
+            return selectedProfileID
+        }
+        return persistentProfiles.first?.id ?? profiles[0].id
+    }
+
     private func updateFolder(_ id: FolderID, mutate: (inout BrowserFolder) -> Void) {
         guard let index = folders.firstIndex(where: { $0.id == id }) else {
             return
@@ -1647,31 +1632,18 @@ public final class BrowserStore: ObservableObject {
     }
 
     private func matchingOpenTabs(for query: String, limit: Int) -> [BrowserTab] {
-        guard limit > 0,
-              let activeProfileID = activeProfile?.id else {
+        guard limit > 0 else {
             return []
         }
+        let visibleSpaceIDs = Set(sidebarSpaces.map(\.id))
         return Array(
             tabs
                 .filter { tab in
-                    tab.profileID == activeProfileID
+                    visibleSpaceIDs.contains(tab.parentSpaceID)
                         && (
                             tab.title.localizedCaseInsensitiveContains(query)
                                 || (tab.url?.absoluteString.localizedCaseInsensitiveContains(query) ?? false)
                         )
-                }
-                .prefix(limit)
-        )
-    }
-
-    private func matchingProfiles(for query: String, limit: Int) -> [BrowserProfile] {
-        guard limit > 0 else {
-            return []
-        }
-        return Array(
-            persistentProfiles
-                .filter { profile in
-                    profile.name.localizedCaseInsensitiveContains(query)
                 }
                 .prefix(limit)
         )

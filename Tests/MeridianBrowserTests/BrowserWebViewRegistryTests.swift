@@ -115,6 +115,77 @@ final class BrowserWebViewRegistryTests: XCTestCase {
         XCTAssertTrue(registry.containsSession(for: secondTab.id))
         XCTAssertTrue(registry.containsSession(for: thirdTab.id))
     }
+
+    func testRegistryInvalidatesSpecificTabs() {
+        let fixture = RegistryFixture()
+        let registry = BrowserWebViewRegistry(capacity: 8)
+        let firstTab = fixture.tab(title: "First")
+        let secondTab = fixture.tab(title: "Second")
+        let state = WebViewState()
+
+        _ = registry.session(
+            for: firstTab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+        _ = registry.session(
+            for: secondTab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+
+        registry.invalidate(tabIDs: [firstTab.id])
+
+        XCTAssertFalse(registry.containsSession(for: firstTab.id))
+        XCTAssertTrue(registry.containsSession(for: secondTab.id))
+        XCTAssertEqual(registry.liveSessionCount, 1)
+    }
+
+    func testRegistryRecreatesSessionWhenTabProfileChanges() {
+        let fixture = RegistryFixture()
+        let registry = BrowserWebViewRegistry(capacity: 8)
+        let tab = fixture.tab(title: "Example")
+        let workProfile = BrowserProfile(name: "Work")
+        var movedTab = tab
+        movedTab.profileID = workProfile.id
+        let state = WebViewState()
+
+        let firstSession = registry.session(
+            for: tab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+        let secondSession = registry.session(
+            for: movedTab,
+            profile: workProfile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+
+        XCTAssertFalse(firstSession === secondSession)
+        XCTAssertFalse(firstSession.webView === secondSession.webView)
+        XCTAssertEqual(secondSession.profileID, workProfile.id)
+        XCTAssertEqual(registry.liveSessionCount, 1)
+    }
 }
 
 @MainActor

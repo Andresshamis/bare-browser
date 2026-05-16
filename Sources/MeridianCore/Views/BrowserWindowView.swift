@@ -176,16 +176,23 @@ public struct BrowserWindowView: View {
         let shape = RoundedRectangle(cornerRadius: sidebarCornerRadius, style: .continuous)
         let pinnedOpacity = Double(sidebarPinnedProgress)
         let floatingOpacity = Double(sidebarFloatingProgress)
+        let appearance = selectedSidebarAppearance
+        let tintColor = selectedSidebarTintColor
+        let floatingSettings = appearance.base
+        let pinnedSettings = appearance.pinnedSettings
 
         return ZStack {
-            pinnedSidebarChrome
+            pinnedSidebarChrome(settings: pinnedSettings, tintColor: tintColor, shape: shape)
                 .opacity(pinnedOpacity)
 
             shape
                 .fill(.clear)
-                .glassEffect(.regular, in: shape)
+                .glassEffect(.regular.tint(tintColor.opacity(floatingSettings.tintOpacity)).interactive(false), in: shape)
                 .compositingGroup()
-                .opacity(floatingOpacity)
+                .overlay {
+                    sidebarTintOverlay(shape: shape, tintColor: tintColor, settings: floatingSettings)
+                }
+                .opacity(floatingOpacity * floatingSettings.glassOpacity)
                 .allowsHitTesting(false)
 
             SidebarView(store: store, webViewState: webViewState)
@@ -194,37 +201,81 @@ public struct BrowserWindowView: View {
         .clipShape(shape)
         .overlay {
             ZStack {
-                pinnedSidebarSeparator
+                pinnedSidebarSeparator(opacity: pinnedSettings.edgeOpacity)
                     .opacity(pinnedOpacity)
 
-                shape.stroke(.separator.opacity(0.42), lineWidth: 0.5)
+                shape.stroke(.separator.opacity(floatingSettings.edgeOpacity), lineWidth: 0.5)
                     .opacity(floatingOpacity)
             }
         }
+        .shadow(
+            color: tintColor.opacity(floatingSettings.shadowOpacity * floatingOpacity),
+            radius: 18,
+            x: 0,
+            y: 8
+        )
         .overlay(alignment: sidebarResizeHandleAlignment) { sidebarResizeHandle }
         .accessibilityIdentifier("BrowserSidebar")
     }
 
-    private var pinnedSidebarChrome: some View {
-        PinnedSidebarGlassBackdrop()
+    private func pinnedSidebarChrome(
+        settings: SidebarGlassSettings,
+        tintColor: Color,
+        shape: RoundedRectangle
+    ) -> some View {
+        PinnedSidebarGlassBackdrop(opacity: settings.glassOpacity)
+            .overlay {
+                sidebarTintOverlay(shape: shape, tintColor: tintColor, settings: settings)
+            }
             .allowsHitTesting(false)
     }
 
-    private var pinnedSidebarSeparator: some View {
+    private func sidebarTintOverlay(
+        shape: RoundedRectangle,
+        tintColor: Color,
+        settings: SidebarGlassSettings
+    ) -> some View {
+        ZStack {
+            shape
+                .fill(tintColor.opacity(settings.tintOpacity))
+
+            LinearGradient(
+                colors: [
+                    .white.opacity(settings.highlightOpacity),
+                    tintColor.opacity(settings.highlightOpacity * 0.42),
+                    .clear
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .clipShape(shape)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func pinnedSidebarSeparator(opacity: Double) -> some View {
         HStack(spacing: 0) {
             if store.sidebarRevealEdge == .right {
                 Rectangle()
-                    .fill(.separator.opacity(0.34))
+                    .fill(.separator.opacity(opacity))
                     .frame(width: 0.5)
                 Spacer(minLength: 0)
             } else {
                 Spacer(minLength: 0)
                 Rectangle()
-                    .fill(.separator.opacity(0.34))
+                    .fill(.separator.opacity(opacity))
                     .frame(width: 0.5)
             }
         }
         .allowsHitTesting(false)
+    }
+
+    private var selectedSidebarAppearance: SidebarAppearance {
+        store.selectedSpace?.sidebarAppearance ?? .standard
+    }
+
+    private var selectedSidebarTintColor: Color {
+        Color(hex: selectedSidebarAppearance.tintHex(forSpaceColorHex: store.selectedSpace?.colorHex ?? "#4F7CAC"))
     }
 
     private var sidebarOuterInset: CGFloat {
@@ -426,20 +477,24 @@ private struct SidebarResizeHandle: NSViewRepresentable {
 }
 
 private struct PinnedSidebarGlassBackdrop: NSViewRepresentable {
+    let opacity: Double
+
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView(frame: .zero)
         view.material = .sidebar
         view.blendingMode = .behindWindow
-        view.state = .active
-        view.isEmphasized = true
+        view.state = .followsWindowActiveState
+        view.isEmphasized = false
+        view.alphaValue = CGFloat(opacity)
         return view
     }
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
         nsView.material = .sidebar
         nsView.blendingMode = .behindWindow
-        nsView.state = .active
-        nsView.isEmphasized = true
+        nsView.state = .followsWindowActiveState
+        nsView.isEmphasized = false
+        nsView.alphaValue = CGFloat(opacity)
     }
 }
 
