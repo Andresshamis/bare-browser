@@ -12,7 +12,7 @@ public enum SessionSnapshotFactory {
         let space = BrowserSpace(
             id: UUID(uuidString: "E7F390AB-B64B-4E32-944E-B2DD8BC85F2E")!,
             name: "Today",
-            symbolName: "sparkle.magnifyingglass",
+            symbolName: BrowserSpace.defaultSymbolName,
             colorHex: "#4F7CAC",
             profileID: profile.id,
             lastActiveDate: date

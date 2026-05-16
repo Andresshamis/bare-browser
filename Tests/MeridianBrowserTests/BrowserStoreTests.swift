@@ -58,6 +58,59 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.folders.first(where: { $0.id == folder?.id })?.tabIDs, [tab?.id].compactMap { $0 })
     }
 
+    func testCreatedSpacesDefaultToDotSymbol() {
+        let store = BrowserStore()
+
+        let space = store.createSpace(name: "Work")
+
+        XCTAssertEqual(space.symbolName, BrowserSpace.defaultSymbolName)
+    }
+
+    func testCustomizeSpaceUpdatesNameSymbolAndColor() throws {
+        let store = BrowserStore()
+        let space = store.createSpace(name: "Work")
+
+        XCTAssertTrue(store.customizeSpace(
+            space.id,
+            name: " Design ",
+            symbolName: "paintpalette.fill",
+            colorHex: "#FF375F"
+        ))
+
+        let updatedSpace = try XCTUnwrap(store.spaces.first { $0.id == space.id })
+        XCTAssertEqual(updatedSpace.name, "Design")
+        XCTAssertEqual(updatedSpace.symbolName, "paintpalette.fill")
+        XCTAssertEqual(updatedSpace.colorHex, "#FF375F")
+    }
+
+    func testLoadedLegacyDefaultSpaceSymbolsNormalizeToDot() throws {
+        let profile = BrowserProfile(name: "Personal")
+        let legacyGridSpace = BrowserSpace(
+            name: "Legacy",
+            symbolName: "circle.grid.2x2.fill",
+            profileID: profile.id
+        )
+        let legacySeedSpace = BrowserSpace(
+            name: "Today",
+            symbolName: "sparkle.magnifyingglass",
+            profileID: profile.id
+        )
+        let snapshot = BrowserSessionSnapshot(
+            profiles: [profile],
+            spaces: [legacyGridSpace, legacySeedSpace],
+            folders: [],
+            tabs: [],
+            selectedSpaceID: legacyGridSpace.id
+        )
+
+        let store = BrowserStore(snapshot: snapshot)
+
+        let loadedGridSpace = try XCTUnwrap(store.spaces.first { $0.id == legacyGridSpace.id })
+        let loadedSeedSpace = try XCTUnwrap(store.spaces.first { $0.id == legacySeedSpace.id })
+        XCTAssertEqual(loadedGridSpace.symbolName, BrowserSpace.defaultSymbolName)
+        XCTAssertEqual(loadedSeedSpace.symbolName, BrowserSpace.defaultSymbolName)
+    }
+
     func testDeleteSpaceRejectsOnlyProfileSpace() throws {
         let store = BrowserStore()
         let spaceID = try XCTUnwrap(store.selectedSpaceID)
@@ -891,6 +944,30 @@ final class BrowserStoreTests: XCTestCase {
         for sensitiveComponent in ["user", "pass", "private", "auth", "secret", "fragment"] {
             XCTAssertFalse(store.lastUserMessage?.contains(sensitiveComponent) ?? true, sensitiveComponent)
         }
+    }
+
+    func testInactiveWebViewUpdateDoesNotPublishUserFacingStatus() throws {
+        let store = BrowserStore()
+        let activeTabID = try XCTUnwrap(store.selectedTabID)
+        let backgroundTab = try XCTUnwrap(
+            store.createTab(title: "Background", url: URL(string: "https://background.example"))
+        )
+        store.selectTab(activeTabID)
+
+        let backgroundURL = URL(string: "http://background.example/insecure")!
+        store.updateTabFromWebView(
+            tabID: backgroundTab.id,
+            title: "Background HTTP",
+            url: backgroundURL,
+            isLoading: false,
+            securityMessage: URLSecurityPolicy.insecureTransportMessage
+        )
+
+        let updatedTab = try XCTUnwrap(store.tabs.first { $0.id == backgroundTab.id })
+        XCTAssertEqual(updatedTab.title, "Background HTTP")
+        XCTAssertEqual(updatedTab.url, backgroundURL)
+        XCTAssertFalse(updatedTab.isLoading)
+        XCTAssertNil(store.lastUserMessage)
     }
 
     func testWebViewHTTPSUpdateClearsStaleInsecureStatusMessage() {

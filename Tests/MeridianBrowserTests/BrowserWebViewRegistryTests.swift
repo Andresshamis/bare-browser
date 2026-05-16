@@ -1,0 +1,145 @@
+import Foundation
+@testable import MeridianCore
+import XCTest
+
+@MainActor
+final class BrowserWebViewRegistryTests: XCTestCase {
+    func testRegistryReusesSessionForSameTab() {
+        let fixture = RegistryFixture()
+        let registry = BrowserWebViewRegistry(capacity: 8)
+        let tab = fixture.tab(title: "Example")
+        let state = WebViewState()
+
+        let firstSession = registry.session(
+            for: tab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+        let secondSession = registry.session(
+            for: tab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+
+        XCTAssertTrue(firstSession === secondSession)
+        XCTAssertTrue(firstSession.webView === secondSession.webView)
+        XCTAssertEqual(registry.liveSessionCount, 1)
+    }
+
+    func testRegistryEvictsClosedTabsImmediately() {
+        let fixture = RegistryFixture()
+        let registry = BrowserWebViewRegistry(capacity: 8)
+        let firstTab = fixture.tab(title: "First")
+        let secondTab = fixture.tab(title: "Second")
+        let state = WebViewState()
+
+        _ = registry.session(
+            for: firstTab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+        _ = registry.session(
+            for: secondTab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+
+        registry.prune(keeping: [secondTab.id], activeTabID: secondTab.id)
+
+        XCTAssertFalse(registry.containsSession(for: firstTab.id))
+        XCTAssertTrue(registry.containsSession(for: secondTab.id))
+        XCTAssertEqual(registry.liveSessionCount, 1)
+    }
+
+    func testRegistryUsesLRUCapWithoutEvictingActiveTab() {
+        let fixture = RegistryFixture()
+        let registry = BrowserWebViewRegistry(capacity: 2)
+        let firstTab = fixture.tab(title: "First")
+        let secondTab = fixture.tab(title: "Second")
+        let thirdTab = fixture.tab(title: "Third")
+        let state = WebViewState()
+
+        _ = registry.session(
+            for: firstTab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+        _ = registry.session(
+            for: secondTab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+        _ = registry.session(
+            for: thirdTab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+
+        XCTAssertEqual(registry.liveSessionCount, 2)
+        XCTAssertFalse(registry.containsSession(for: firstTab.id))
+        XCTAssertTrue(registry.containsSession(for: secondTab.id))
+        XCTAssertTrue(registry.containsSession(for: thirdTab.id))
+    }
+}
+
+@MainActor
+private struct RegistryFixture {
+    let profile = BrowserProfile.privateBrowsing()
+    let spaceID = UUID()
+    let dataStoreProvider = ProfileWebsiteDataStoreProvider()
+
+    func tab(title: String) -> BrowserTab {
+        BrowserTab(
+            title: title,
+            parentSpaceID: spaceID,
+            profileID: profile.id
+        )
+    }
+
+    func callbacks() -> BrowserWebViewCallbacks {
+        BrowserWebViewCallbacks(
+            onStateChange: { _, _, _, _ in },
+            onSecurityMessage: { _ in },
+            onURLConfirmationRequired: { _, _, _ in },
+            onDownloadConfirmationRequired: { _, completion in completion(nil) },
+            onSitePermissionRequest: { _, _ in
+                .deny(reason: "Test denies site permission requests.")
+            }
+        )
+    }
+}

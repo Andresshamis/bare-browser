@@ -14,18 +14,22 @@ final class WebViewHostHTTPFallbackTests: XCTestCase {
         )
         var fallbackLoadEvents: [URL] = []
         let coordinator = WebViewHost.Coordinator(
+            tabID: UUID(),
             state: state,
             securityPolicy: URLSecurityPolicy(),
             downloadSafetyPolicy: DownloadSafetyPolicy(),
-            onStateChange: { _, url, isLoading in
-                if isLoading, let url {
-                    fallbackLoadEvents.append(url)
-                }
-            },
-            onSecurityMessage: { _ in },
-            onURLConfirmationRequired: { _, _, _ in },
-            onDownloadConfirmationRequired: { _, completion in completion(nil) },
-            onSitePermissionRequest: { _, _ in .deny(reason: "Test denies site permission requests.") }
+            callbacks: BrowserWebViewCallbacks(
+                onStateChange: { _, url, isLoading, _ in
+                    if isLoading, let url {
+                        fallbackLoadEvents.append(url)
+                    }
+                },
+                onSecurityMessage: { _ in },
+                onURLConfirmationRequired: { _, _, _ in },
+                onDownloadConfirmationRequired: { _, completion in completion(nil) },
+                onSitePermissionRequest: { _, _ in .deny(reason: "Test denies site permission requests.") }
+            ),
+            isActive: true
         )
         let webView = WKWebView()
         let error = NSError(

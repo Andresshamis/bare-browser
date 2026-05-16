@@ -6,6 +6,7 @@ private let sidebarRevealHotZoneWidth: CGFloat = 8
 public struct BrowserWindowView: View {
     @ObservedObject private var store: BrowserStore
     @StateObject private var webViewState = WebViewState()
+    @StateObject private var webViewRegistry = BrowserWebViewRegistry()
     @State private var sidebarFloatingChromeIsMounted = false
     @State private var sidebarFloatingChromeProgress: CGFloat = 0
     private let dataStoreProvider = ProfileWebsiteDataStoreProvider()
@@ -138,6 +139,7 @@ public struct BrowserWindowView: View {
         BrowserContentView(
             store: store,
             webViewState: webViewState,
+            webViewRegistry: webViewRegistry,
             dataStoreProvider: dataStoreProvider
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -987,8 +989,7 @@ private extension NSWindow {
         title = "Meridian Browser"
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
-        styleMask.insert([.closable, .miniaturizable, .resizable, .fullSizeContentView])
-        styleMask.remove(.titled)
+        styleMask.insert([.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView])
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true

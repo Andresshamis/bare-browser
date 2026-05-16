@@ -3,15 +3,18 @@ import SwiftUI
 public struct BrowserContentView: View {
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var webViewState: WebViewState
+    private let webViewRegistry: BrowserWebViewRegistry
     private let dataStoreProvider: ProfileWebsiteDataStoreProvider
 
     public init(
         store: BrowserStore,
         webViewState: WebViewState,
+        webViewRegistry: BrowserWebViewRegistry,
         dataStoreProvider: ProfileWebsiteDataStoreProvider
     ) {
         self.store = store
         self.webViewState = webViewState
+        self.webViewRegistry = webViewRegistry
         self.dataStoreProvider = dataStoreProvider
     }
 
@@ -38,12 +41,19 @@ public struct BrowserContentView: View {
         } message: { request in
             Text(request.promptMessage)
         }
-        .onAppear(perform: syncWebViewState)
+        .onAppear {
+            syncWebViewState()
+            pruneWebViewRegistry()
+        }
         .onChange(of: store.selectedTabID) { _, _ in
             syncWebViewState()
+            webViewRegistry.markActive(store.selectedTabID)
         }
         .onChange(of: store.activeTab?.url) { _, _ in
             syncWebViewState()
+        }
+        .onChange(of: store.tabs.map(\.id)) { _, _ in
+            pruneWebViewRegistry()
         }
     }
 
@@ -54,23 +64,43 @@ public struct BrowserContentView: View {
            tab.url != nil {
             WebViewHost(
                 state: webViewState,
+                tab: tab,
                 profile: profile,
+                registry: webViewRegistry,
                 dataStoreProvider: dataStoreProvider,
                 securityPolicy: store.urlSecurityPolicy,
                 downloadSafetyPolicy: store.downloadSafetyPolicy,
                 sitePermissionPolicy: store.sitePermissionPolicy
-            ) { title, url, isLoading in
-                store.updateActiveTabFromWebView(title: title, url: url, isLoading: isLoading)
+            ) { title, url, isLoading, securityMessage in
+                store.updateTabFromWebView(
+                    tabID: tab.id,
+                    title: title,
+                    url: url,
+                    isLoading: isLoading,
+                    securityMessage: securityMessage
+                )
             } onSecurityMessage: { message in
+                guard tab.id == store.selectedTabID else {
+                    return
+                }
                 store.publishStatusMessage(message)
             } onURLConfirmationRequired: { kind, url, sourceContext in
+                guard tab.id == store.selectedTabID else {
+                    return
+                }
                 store.requestURLConfirmation(kind: kind, url: url, sourceContext: sourceContext)
             } onDownloadConfirmationRequired: { request, completion in
+                guard tab.id == store.selectedTabID else {
+                    completion(nil)
+                    return
+                }
                 store.requestDownloadConfirmation(request, completion: completion)
             } onSitePermissionRequest: { kind, origin in
-                store.requestSitePermission(kind: kind, origin: origin, profileID: profile.id)
+                guard tab.id == store.selectedTabID else {
+                    return .deny(reason: "Site permission request was blocked because the tab is not active.")
+                }
+                return store.requestSitePermission(kind: kind, origin: origin, profileID: profile.id)
             }
-            .id(tab.id)
         } else {
             StartPageView(store: store)
         }
@@ -120,6 +150,13 @@ public struct BrowserContentView: View {
         webViewState.request(
             store.activeTab?.url,
             pendingHTTPFallbackURL: store.activeTab?.restorationMetadata.pendingHTTPFallbackURL
+        )
+    }
+
+    private func pruneWebViewRegistry() {
+        webViewRegistry.prune(
+            keeping: Set(store.tabs.map(\.id)),
+            activeTabID: store.selectedTabID
         )
     }
 
