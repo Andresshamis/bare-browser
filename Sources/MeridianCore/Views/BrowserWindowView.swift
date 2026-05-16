@@ -27,6 +27,9 @@ public struct BrowserWindowView: View {
     private let dataStoreProvider = ProfileWebsiteDataStoreProvider()
     private let floatingSidebarInset: CGFloat = 8
     private let floatingSidebarCornerRadius: CGFloat = 12
+    private var sidebarPinnedStateAnimation: Animation {
+        .smooth(duration: 0.24, extraBounce: 0)
+    }
     private var sidebarWidth: CGFloat {
         sidebarResizeLiveWidth ?? BrowserSidebarSizing.clamped(CGFloat(storedSidebarWidth))
     }
@@ -77,7 +80,7 @@ public struct BrowserWindowView: View {
             }
             .animation(.snappy(duration: 0.16), value: store.isCommandBarPresented)
             .animation(.snappy(duration: 0.16), value: store.sidebarIsVisible)
-            .animation(.snappy(duration: 0.16), value: store.sidebarIsLockedOpen)
+            .animation(sidebarPinnedStateAnimation, value: store.sidebarIsLockedOpen)
             .onAppear {
                 normalizeStoredSidebarWidth()
             }
@@ -169,34 +172,20 @@ public struct BrowserWindowView: View {
             .padding(sidebarPaddingEdge, sidebarOuterInset)
     }
 
-    @ViewBuilder
     private var sidebar: some View {
-        if store.sidebarIsLockedOpen {
-            pinnedSidebar
-        } else {
-            floatingSidebar
-        }
-    }
-
-    private var pinnedSidebar: some View {
-        ZStack {
-            pinnedSidebarChrome
-            SidebarView(store: store, webViewState: webViewState)
-        }
-        .frame(maxHeight: .infinity)
-        .overlay { pinnedSidebarSeparator }
-        .overlay(alignment: sidebarResizeHandleAlignment) { sidebarResizeHandle }
-        .accessibilityIdentifier("BrowserSidebar")
-    }
-
-    private var floatingSidebar: some View {
-        let shape = RoundedRectangle(cornerRadius: floatingSidebarCornerRadius, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: sidebarCornerRadius, style: .continuous)
+        let pinnedOpacity = Double(sidebarPinnedProgress)
+        let floatingOpacity = Double(sidebarFloatingProgress)
 
         return ZStack {
+            pinnedSidebarChrome
+                .opacity(pinnedOpacity)
+
             shape
                 .fill(.clear)
                 .glassEffect(.regular, in: shape)
                 .compositingGroup()
+                .opacity(floatingOpacity)
                 .allowsHitTesting(false)
 
             SidebarView(store: store, webViewState: webViewState)
@@ -204,7 +193,13 @@ public struct BrowserWindowView: View {
         .frame(maxHeight: .infinity)
         .clipShape(shape)
         .overlay {
-            shape.stroke(.separator.opacity(0.42), lineWidth: 0.5)
+            ZStack {
+                pinnedSidebarSeparator
+                    .opacity(pinnedOpacity)
+
+                shape.stroke(.separator.opacity(0.42), lineWidth: 0.5)
+                    .opacity(floatingOpacity)
+            }
         }
         .overlay(alignment: sidebarResizeHandleAlignment) { sidebarResizeHandle }
         .accessibilityIdentifier("BrowserSidebar")
@@ -234,6 +229,18 @@ public struct BrowserWindowView: View {
 
     private var sidebarOuterInset: CGFloat {
         store.sidebarIsLockedOpen ? 0 : floatingSidebarInset
+    }
+
+    private var sidebarCornerRadius: CGFloat {
+        store.sidebarIsLockedOpen ? 0 : floatingSidebarCornerRadius
+    }
+
+    private var sidebarPinnedProgress: CGFloat {
+        store.sidebarIsLockedOpen ? 1 : 0
+    }
+
+    private var sidebarFloatingProgress: CGFloat {
+        1 - sidebarPinnedProgress
     }
 
     private var sidebarResizeHandleAlignment: Alignment {

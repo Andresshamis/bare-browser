@@ -7,6 +7,8 @@ private let sidebarPerformanceLog = OSLog(
     category: "SidebarPerformance"
 )
 
+private let sidebarLockControlAnimation = Animation.smooth(duration: 0.24, extraBounce: 0)
+
 public struct SidebarView: View {
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var webViewState: WebViewState
@@ -71,16 +73,11 @@ public struct SidebarView: View {
         HStack(spacing: 8) {
             WindowTrafficLightGroup(window: window)
 
-            Button {
-                store.toggleSidebarLock()
-            } label: {
-                Image(systemName: store.sidebarIsLockedOpen ? "pin.fill" : "pin")
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 20, height: 20)
+            SidebarPinButton(isLockedOpen: store.sidebarIsLockedOpen) {
+                withAnimation(sidebarLockControlAnimation) {
+                    store.toggleSidebarLock()
+                }
             }
-            .buttonStyle(.plain)
-            .help(store.sidebarIsLockedOpen ? "Use auto-hide sidebar" : "Pin sidebar open")
-            .accessibilityLabel(store.sidebarIsLockedOpen ? "Use auto-hide sidebar" : "Pin sidebar open")
 
             Spacer(minLength: 0)
 
@@ -836,6 +833,40 @@ private struct WindowTrafficLightButton: View {
         .help(help)
         .accessibilityLabel(help)
         .onHover { isHovered = $0 }
+    }
+}
+
+private struct SidebarPinButton: View {
+    let isLockedOpen: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    private var label: String {
+        isLockedOpen ? "Use auto-hide sidebar" : "Pin sidebar open"
+    }
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Image(systemName: "pin")
+                    .opacity(isLockedOpen ? 0 : 1)
+                Image(systemName: "pin.fill")
+                    .opacity(isLockedOpen ? 1 : 0)
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: 26, height: 24)
+            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHovered ? Color.primary.opacity(0.08) : .clear)
+            }
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
+        .onHover { isHovered = $0 }
+        .animation(sidebarLockControlAnimation, value: isLockedOpen)
     }
 }
 
