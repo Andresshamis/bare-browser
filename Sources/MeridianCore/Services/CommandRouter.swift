@@ -9,7 +9,6 @@ public struct CommandRouter: Sendable {
         case createFolder(String)
         case createProfile(String)
         case switchSpace(SpaceID)
-        case switchProfile(ProfileID)
         case browserAction(BrowserAction)
         case noOp
     }

@@ -66,6 +66,17 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(space.symbolName, BrowserSpace.defaultSymbolName)
     }
 
+    func testCreatedSpacesDefaultToSelectedSpaceProfile() throws {
+        let store = BrowserStore()
+        let workProfile = store.createPersistentProfile(name: "Work")
+        let workSpace = store.createSpace(name: "Work", profileID: workProfile.id)
+        store.selectSpace(workSpace.id)
+
+        let projectSpace = store.createSpace(name: "Project")
+
+        XCTAssertEqual(projectSpace.profileID, workProfile.id)
+    }
+
     func testCustomizeSpaceUpdatesNameSymbolAndColor() throws {
         let store = BrowserStore()
         let space = store.createSpace(name: "Work")
@@ -81,6 +92,151 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(updatedSpace.name, "Design")
         XCTAssertEqual(updatedSpace.symbolName, "paintpalette.fill")
         XCTAssertEqual(updatedSpace.colorHex, "#FF375F")
+    }
+
+    func testCustomizeSpaceUpdatesProfileAndTabs() throws {
+        let store = BrowserStore()
+        let space = store.createSpace(name: "Work")
+        let tab = try XCTUnwrap(store.createTab(title: "Docs", in: space.id))
+        let workProfile = store.createPersistentProfile(name: "Work")
+
+        XCTAssertTrue(store.customizeSpace(
+            space.id,
+            name: space.name,
+            symbolName: space.symbolName,
+            colorHex: space.colorHex,
+            profileID: workProfile.id
+        ))
+
+        XCTAssertEqual(store.spaces.first { $0.id == space.id }?.profileID, workProfile.id)
+        XCTAssertEqual(store.tabs.first { $0.id == tab.id }?.profileID, workProfile.id)
+        XCTAssertEqual(store.activeProfile?.id, workProfile.id)
+    }
+
+    func testCustomizeSpaceUpdatesSidebarAppearanceWithoutChangingTabsOrProfile() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+        let space = store.createSpace(name: "Work")
+        let tab = try XCTUnwrap(store.createTab(title: "Docs", in: space.id))
+        let originalProfileID = space.profileID
+        let appearance = SidebarAppearance(
+            tintSource: .custom,
+            tintHex: "#BF5AF2",
+            base: SidebarGlassSettings(
+                glassOpacity: 0.84,
+                tintOpacity: 0.32,
+                edgeOpacity: 0.52,
+                shadowOpacity: 0.28,
+                highlightOpacity: 0.24
+            ),
+            pinnedOverride: SidebarGlassSettings(
+                glassOpacity: 0.72,
+                tintOpacity: 0.18,
+                edgeOpacity: 0.36,
+                shadowOpacity: 0.06,
+                highlightOpacity: 0.14
+            )
+        )
+
+        XCTAssertTrue(store.customizeSpace(
+            space.id,
+            name: space.name,
+            symbolName: space.symbolName,
+            colorHex: space.colorHex,
+            sidebarAppearance: appearance
+        ))
+
+        let updatedSpace = try XCTUnwrap(store.spaces.first { $0.id == space.id })
+        let updatedTab = try XCTUnwrap(store.tabs.first { $0.id == tab.id })
+        XCTAssertEqual(updatedSpace.sidebarAppearance, appearance)
+        XCTAssertEqual(updatedSpace.profileID, originalProfileID)
+        XCTAssertEqual(updatedTab.profileID, originalProfileID)
+        XCTAssertEqual(spy.savedSnapshots.last?.spaces.first { $0.id == space.id }?.sidebarAppearance, appearance)
+    }
+
+    func testSidebarAppearancePinnedSettingsFallsBackToBase() {
+        let base = SidebarGlassSettings(
+            glassOpacity: 0.8,
+            tintOpacity: 0.2,
+            edgeOpacity: 0.3,
+            shadowOpacity: 0.4,
+            highlightOpacity: 0.5
+        )
+        let appearance = SidebarAppearance(base: base, pinnedOverride: nil)
+
+        XCTAssertEqual(appearance.pinnedSettings, base)
+    }
+
+    func testLegacySpaceWithoutSidebarAppearanceDecodesDefault() throws {
+        let data = Data("""
+        {
+          "id": "E7F390AB-B64B-4E32-944E-B2DD8BC85F2E",
+          "name": "Legacy",
+          "symbolName": "circle.fill",
+          "colorHex": "#FF375F",
+          "profileID": "A0B97C4C-0E21-4B4E-A09C-B7C8B37C2601",
+          "favoriteTabIDs": [],
+          "pinnedTabIDs": [],
+          "folderIDs": [],
+          "regularTabIDs": [],
+          "selectedTabID": null,
+          "lastActiveDate": 0
+        }
+        """.utf8)
+
+        let space = try JSONDecoder().decode(BrowserSpace.self, from: data)
+
+        XCTAssertEqual(space.sidebarAppearance, .standard)
+    }
+
+    func testSidebarAppearanceRoundTripsThroughSessionSnapshot() throws {
+        let profile = BrowserProfile(name: "Personal")
+        let appearance = SidebarAppearance(
+            tintSource: .custom,
+            tintHex: "#FFB340",
+            base: SidebarGlassSettings(
+                glassOpacity: 0.91,
+                tintOpacity: 0.27,
+                edgeOpacity: 0.48,
+                shadowOpacity: 0.19,
+                highlightOpacity: 0.22
+            ),
+            pinnedOverride: SidebarGlassSettings(
+                glassOpacity: 0.82,
+                tintOpacity: 0.21,
+                edgeOpacity: 0.31,
+                shadowOpacity: 0.08,
+                highlightOpacity: 0.18
+            )
+        )
+        let space = BrowserSpace(
+            name: "Design",
+            sidebarAppearance: appearance,
+            profileID: profile.id
+        )
+        let snapshot = BrowserSessionSnapshot(
+            profiles: [profile],
+            spaces: [space],
+            folders: [],
+            tabs: [],
+            selectedSpaceID: space.id
+        )
+
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(BrowserSessionSnapshot.self, from: data)
+
+        XCTAssertEqual(decoded.spaces.first?.sidebarAppearance, appearance)
+    }
+
+    func testSetProfileRejectsPrivateProfiles() throws {
+        let store = BrowserStore()
+        let spaceID = try XCTUnwrap(store.selectedSpaceID)
+        let originalProfileID = try XCTUnwrap(store.selectedSpace?.profileID)
+        let privateProfile = store.createProfile(name: "Private", ephemeral: true)
+
+        XCTAssertFalse(store.setProfile(privateProfile.id, forSpace: spaceID))
+
+        XCTAssertEqual(store.selectedSpace?.profileID, originalProfileID)
     }
 
     func testLoadedLegacyDefaultSpaceSymbolsNormalizeToDot() throws {
@@ -149,7 +305,21 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedTabID, originalTabID)
     }
 
-    func testSelectAdjacentSpaceMovesWithinActiveProfileSpaces() throws {
+    func testDeleteSpaceUsesGlobalSidebarSpaceCount() throws {
+        let store = BrowserStore()
+        let personalSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let workProfile = store.createPersistentProfile(name: "Work")
+        let workSpace = store.createSpace(name: "Work", profileID: workProfile.id)
+
+        XCTAssertTrue(store.canDeleteSpace(personalSpaceID))
+        XCTAssertTrue(store.deleteSpace(personalSpaceID))
+
+        XCTAssertFalse(store.spaces.contains { $0.id == personalSpaceID })
+        XCTAssertEqual(store.selectedSpaceID, workSpace.id)
+        XCTAssertFalse(store.canDeleteSpace(workSpace.id))
+    }
+
+    func testSelectAdjacentSpaceMovesWithinSidebarSpaces() throws {
         let store = BrowserStore()
         let firstSpaceID = try XCTUnwrap(store.selectedSpaceID)
         let secondSpace = store.createSpace(name: "Second")
@@ -173,15 +343,19 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedSpaceID, secondSpace.id)
     }
 
-    func testSelectAdjacentSpaceDoesNotCrossProfiles() throws {
+    func testSelectAdjacentSpaceCrossesPersistentProfileBoundaries() throws {
         let store = BrowserStore()
         let firstPersonalSpaceID = try XCTUnwrap(store.selectedSpaceID)
         let secondPersonalSpace = store.createSpace(name: "Personal Research")
-        _ = store.createPersistentProfile(name: "Work")
+        let workProfile = store.createPersistentProfile(name: "Work")
+        let workSpace = store.createSpace(name: "Work", profileID: workProfile.id)
 
         store.selectSpace(secondPersonalSpace.id)
 
-        XCTAssertFalse(store.selectAdjacentSpace(.next))
+        XCTAssertTrue(store.selectAdjacentSpace(.next))
+        XCTAssertEqual(store.selectedSpaceID, workSpace.id)
+
+        XCTAssertTrue(store.selectAdjacentSpace(.previous))
         XCTAssertEqual(store.selectedSpaceID, secondPersonalSpace.id)
 
         XCTAssertTrue(store.selectAdjacentSpace(.previous))
@@ -617,30 +791,28 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.historyResults(for: "portal", profileID: workProfile.id).map(\.title), ["Work Portal"])
     }
 
-    func testPersistentProfileCreationSelectsDefaultContextAndPersistsPublicState() throws {
+    func testPersistentProfileCreationDoesNotCreateOrSelectSpace() throws {
         let spy = BrowserStoreSessionPersistenceSpy()
         let store = BrowserStore(sessionPersistence: spy)
+        let selectedSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let selectedTabID = try XCTUnwrap(store.selectedTabID)
+        let spaceCount = store.spaces.count
+        let tabCount = store.tabs.count
 
         let profile = store.createPersistentProfile(name: "  Work  ")
 
         XCTAssertEqual(profile.name, "Work")
         XCTAssertFalse(profile.isEphemeral)
         XCTAssertNotNil(profile.persistentWebsiteDataStoreID)
-        XCTAssertEqual(store.activeProfile?.id, profile.id)
-
-        let selectedSpace = try XCTUnwrap(store.selectedSpace)
-        XCTAssertEqual(selectedSpace.name, "Work")
-        XCTAssertEqual(selectedSpace.profileID, profile.id)
-
-        let selectedTab = try XCTUnwrap(store.activeTab)
-        XCTAssertEqual(selectedTab.profileID, profile.id)
-        XCTAssertEqual(selectedTab.parentSpaceID, selectedSpace.id)
-        XCTAssertNil(selectedTab.url)
+        XCTAssertEqual(store.selectedSpaceID, selectedSpaceID)
+        XCTAssertEqual(store.selectedTabID, selectedTabID)
+        XCTAssertEqual(store.spaces.count, spaceCount)
+        XCTAssertEqual(store.tabs.count, tabCount)
 
         let savedSnapshot = try XCTUnwrap(spy.savedSnapshots.last)
         XCTAssertTrue(savedSnapshot.profiles.contains { $0.id == profile.id })
-        XCTAssertTrue(savedSnapshot.spaces.contains { $0.id == selectedSpace.id })
-        XCTAssertTrue(savedSnapshot.tabs.contains { $0.id == selectedTab.id })
+        XCTAssertEqual(savedSnapshot.spaces.count, spaceCount)
+        XCTAssertEqual(savedSnapshot.tabs.count, tabCount)
     }
 
     func testPersistentSnapshotIncludesPersistentProfilesAndExcludesPrivateProfiles() throws {
@@ -657,10 +829,11 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(persisted.tabs.contains { $0.profileID == privateProfile.id })
     }
 
-    func testSwitchingProfilesKeepsHistoryAndSitePermissionsScoped() throws {
+    func testSpaceProfileKeepsHistoryAndSitePermissionsScoped() throws {
         let store = BrowserStore()
         let personalProfileID = try XCTUnwrap(store.activeProfile?.id)
         let workProfile = store.createPersistentProfile(name: "Work")
+        let workSpace = store.createSpace(name: "Work", profileID: workProfile.id)
         let origin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://camera.example")!))
 
         store.recordHistoryVisit(
@@ -682,14 +855,14 @@ final class BrowserStoreTests: XCTestCase {
             requestID: try XCTUnwrap(store.pendingSitePermissionRequest?.id)
         )
 
-        XCTAssertTrue(store.switchProfile(personalProfileID))
+        store.selectSpace(try XCTUnwrap(store.spaces.first { $0.profileID == personalProfileID }?.id))
         XCTAssertEqual(store.historyResults(for: "portal").map(\.title), ["Personal Portal"])
         XCTAssertEqual(
             store.requestSitePermission(kind: .camera, origin: origin, profileID: personalProfileID),
             .allow
         )
 
-        XCTAssertTrue(store.switchProfile(workProfile.id))
+        store.selectSpace(workSpace.id)
         XCTAssertEqual(store.historyResults(for: "portal").map(\.title), ["Work Portal"])
         XCTAssertEqual(
             store.requestSitePermission(kind: .camera, origin: origin, profileID: workProfile.id),
@@ -697,7 +870,7 @@ final class BrowserStoreTests: XCTestCase {
         )
     }
 
-    func testActiveProfileSpacesExcludeOtherProfilesAndPrivateSpaces() throws {
+    func testSidebarSpacesIncludePersistentProfilesAndExcludePrivateSpaces() throws {
         let store = BrowserStore()
         let personalProfileID = try XCTUnwrap(store.activeProfile?.id)
         let personalSpaceID = try XCTUnwrap(store.selectedSpaceID)
@@ -705,92 +878,60 @@ final class BrowserStoreTests: XCTestCase {
         let privateProfile = store.createProfile(name: "Private", ephemeral: true)
         let privateSpace = store.createSpace(name: "Private Vault", profileID: privateProfile.id)
         let workProfile = store.createPersistentProfile(name: "Work")
-        let workSpaceID = try XCTUnwrap(store.selectedSpaceID)
-
-        XCTAssertTrue(store.switchProfile(personalProfileID))
+        let workSpace = store.createSpace(name: "Work", profileID: workProfile.id)
 
         XCTAssertEqual(
-            Set(store.activeProfileSpaces.map(\.id)),
-            Set([personalSpaceID, personalResearchSpace.id])
+            Set(store.sidebarSpaces.map(\.id)),
+            Set([personalSpaceID, personalResearchSpace.id, workSpace.id])
         )
-        XCTAssertFalse(store.activeProfileSpaces.contains { $0.id == privateSpace.id })
-        XCTAssertFalse(store.activeProfileSpaces.contains { $0.id == workSpaceID })
-
-        XCTAssertTrue(store.switchProfile(workProfile.id))
-        XCTAssertEqual(store.activeProfileSpaces.map(\.id), [workSpaceID])
-        XCTAssertFalse(store.activeProfileSpaces.contains { $0.profileID == privateProfile.id })
+        XCTAssertFalse(store.sidebarSpaces.contains { $0.id == privateSpace.id })
+        XCTAssertFalse(store.sidebarSpaces.contains { $0.profileID == privateProfile.id })
     }
 
-    func testCommandBarProfileResultSwitchesPersistentProfiles() throws {
+    func testCommandBarDoesNotReturnProfileSwitchResults() throws {
         let store = BrowserStore()
-        let personalProfileID = try XCTUnwrap(store.activeProfile?.id)
-        let workProfile = store.createPersistentProfile(name: "Work")
-        let privateProfile = store.createProfile(name: "Private", ephemeral: true)
-        XCTAssertTrue(store.switchProfile(personalProfileID))
+        _ = store.createPersistentProfile(name: "Work")
+        _ = store.createProfile(name: "Private", ephemeral: true)
 
-        let results = store.commandBarResults(
+        XCTAssertTrue(store.commandBarResults(
             for: "work",
             openTabLimit: 0,
             profileLimit: 5,
             historyLimit: 0
-        )
-        let result = try XCTUnwrap(results.first)
-        guard case .profile(let matchedProfile) = result else {
-            return XCTFail("Expected a profile command bar result.")
-        }
-        XCTAssertEqual(matchedProfile.id, workProfile.id)
-        let privateResults = store.commandBarResults(
+        ).isEmpty)
+        XCTAssertTrue(store.commandBarResults(
             for: "private",
             openTabLimit: 0,
             profileLimit: 5,
             historyLimit: 0
-        )
-        XCTAssertFalse(privateResults.contains { result in
-            if case .profile(let profile) = result {
-                return profile.id == privateProfile.id
-            }
-            return false
-        })
-
-        store.showCommandBar()
-        store.activateCommandBarResult(result)
-
-        XCTAssertEqual(store.activeProfile?.id, workProfile.id)
-        XCTAssertFalse(store.isCommandBarPresented)
+        ).isEmpty)
     }
 
-    func testCommandBarOpenTabResultsFollowActiveProfile() throws {
+    func testCommandBarOpenTabResultsIncludeAllSidebarSpaces() throws {
         let store = BrowserStore()
-        let personalProfileID = try XCTUnwrap(store.activeProfile?.id)
         let personalTab = try XCTUnwrap(store.createTab(
             title: "Shared Docs",
             url: URL(string: "https://personal.example/docs")
         ))
         let workProfile = store.createPersistentProfile(name: "Work")
+        let workSpace = store.createSpace(name: "Work", profileID: workProfile.id)
         let workTab = try XCTUnwrap(store.createTab(
             title: "Shared Docs",
-            url: URL(string: "https://work.example/docs")
+            url: URL(string: "https://work.example/docs"),
+            in: workSpace.id
         ))
 
-        XCTAssertTrue(store.switchProfile(personalProfileID))
-        let personalResults = store.commandBarResults(
+        let results = store.commandBarResults(
             for: "docs",
             openTabLimit: 5,
             profileLimit: 0,
             historyLimit: 0
         )
 
-        XCTAssertEqual(personalResults.map(\.id), ["tab-\(personalTab.id.uuidString)"])
-
-        XCTAssertTrue(store.switchProfile(workProfile.id))
-        let workResults = store.commandBarResults(
-            for: "docs",
-            openTabLimit: 5,
-            profileLimit: 0,
-            historyLimit: 0
+        XCTAssertEqual(
+            Set(results.map(\.id)),
+            Set(["tab-\(personalTab.id.uuidString)", "tab-\(workTab.id.uuidString)"])
         )
-
-        XCTAssertEqual(workResults.map(\.id), ["tab-\(workTab.id.uuidString)"])
     }
 
     func testCommandBarHistoryResultOpensThroughStoreOpenPath() throws {

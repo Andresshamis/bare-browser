@@ -21,12 +21,20 @@ struct BrowserWebViewCallbacks {
 @MainActor
 final class BrowserWebViewSession {
     let tabID: TabID
+    let profileID: ProfileID
     let webView: WKWebView
     let coordinator: WebViewHost.Coordinator
     fileprivate var lastUsedSequence: UInt64
 
-    init(tabID: TabID, webView: WKWebView, coordinator: WebViewHost.Coordinator, lastUsedSequence: UInt64) {
+    init(
+        tabID: TabID,
+        profileID: ProfileID,
+        webView: WKWebView,
+        coordinator: WebViewHost.Coordinator,
+        lastUsedSequence: UInt64
+    ) {
         self.tabID = tabID
+        self.profileID = profileID
         self.webView = webView
         self.coordinator = coordinator
         self.lastUsedSequence = lastUsedSequence
@@ -67,6 +75,21 @@ public final class BrowserWebViewRegistry: ObservableObject {
     ) -> BrowserWebViewSession {
         let sequence = nextUsageSequence()
         if let session = sessions[tab.id] {
+            guard session.profileID == profile.id else {
+                detach(session.webView)
+                sessions.removeValue(forKey: tab.id)
+                return makeSession(
+                    for: tab,
+                    profile: profile,
+                    state: state,
+                    dataStoreProvider: dataStoreProvider,
+                    securityPolicy: securityPolicy,
+                    downloadSafetyPolicy: downloadSafetyPolicy,
+                    sitePermissionPolicy: sitePermissionPolicy,
+                    callbacks: callbacks,
+                    sequence: sequence
+                )
+            }
             session.lastUsedSequence = sequence
             session.coordinator.update(
                 state: state,
@@ -80,6 +103,30 @@ public final class BrowserWebViewRegistry: ObservableObject {
             return session
         }
 
+        return makeSession(
+            for: tab,
+            profile: profile,
+            state: state,
+            dataStoreProvider: dataStoreProvider,
+            securityPolicy: securityPolicy,
+            downloadSafetyPolicy: downloadSafetyPolicy,
+            sitePermissionPolicy: sitePermissionPolicy,
+            callbacks: callbacks,
+            sequence: sequence
+        )
+    }
+
+    private func makeSession(
+        for tab: BrowserTab,
+        profile: BrowserProfile,
+        state: WebViewState,
+        dataStoreProvider: ProfileWebsiteDataStoreProvider,
+        securityPolicy: URLSecurityPolicy,
+        downloadSafetyPolicy: DownloadSafetyPolicy,
+        sitePermissionPolicy: SitePermissionPolicy,
+        callbacks: BrowserWebViewCallbacks,
+        sequence: UInt64
+    ) -> BrowserWebViewSession {
         let coordinator = WebViewHost.Coordinator(
             tabID: tab.id,
             state: state,
@@ -96,6 +143,7 @@ public final class BrowserWebViewRegistry: ObservableObject {
         )
         let session = BrowserWebViewSession(
             tabID: tab.id,
+            profileID: profile.id,
             webView: webView,
             coordinator: coordinator,
             lastUsedSequence: sequence
@@ -120,6 +168,15 @@ public final class BrowserWebViewRegistry: ObservableObject {
         }
         markActive(activeTabID)
         enforceCapacity(activeTabID: activeTabID)
+    }
+
+    public func invalidate(tabIDs: Set<TabID>) {
+        for tabID in tabIDs {
+            guard let session = sessions.removeValue(forKey: tabID) else {
+                continue
+            }
+            detach(session.webView)
+        }
     }
 
     private func nextUsageSequence() -> UInt64 {

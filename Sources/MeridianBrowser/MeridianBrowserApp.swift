@@ -126,15 +126,6 @@ struct MeridianBrowserApp: App {
                 Button("New Profile") {
                     _ = store.createPersistentProfile(name: store.suggestedPersistentProfileName)
                 }
-
-                Divider()
-
-                ForEach(store.persistentProfiles) { profile in
-                    Button(profile.name) {
-                        _ = store.switchProfile(profile.id)
-                    }
-                    .disabled(profile.id == store.activeProfile?.id)
-                }
             }
 
             CommandMenu("History") {

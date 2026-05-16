@@ -55,6 +55,12 @@ public struct BrowserContentView: View {
         .onChange(of: store.tabs.map(\.id)) { _, _ in
             pruneWebViewRegistry()
         }
+        .onChange(of: tabProfileIDsByID) { oldValue, newValue in
+            let changedTabIDs = Set(newValue.keys.filter { tabID in
+                oldValue[tabID] != nil && oldValue[tabID] != newValue[tabID]
+            })
+            webViewRegistry.invalidate(tabIDs: changedTabIDs)
+        }
     }
 
     @ViewBuilder
@@ -158,6 +164,10 @@ public struct BrowserContentView: View {
             keeping: Set(store.tabs.map(\.id)),
             activeTabID: store.selectedTabID
         )
+    }
+
+    private var tabProfileIDsByID: [TabID: ProfileID] {
+        Dictionary(uniqueKeysWithValues: store.tabs.map { ($0.id, $0.profileID) })
     }
 
 }
