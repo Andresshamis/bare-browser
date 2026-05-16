@@ -65,47 +65,64 @@ public struct BrowserContentView: View {
 
     @ViewBuilder
     private var webSurface: some View {
-        if let tab = store.activeTab,
-           let profile = store.profiles.first(where: { $0.id == tab.profileID }),
-           tab.url != nil {
-            WebViewHost(
-                state: webViewState,
-                tab: tab,
-                profile: profile,
-                registry: webViewRegistry,
-                dataStoreProvider: dataStoreProvider,
-                securityPolicy: store.urlSecurityPolicy,
-                downloadSafetyPolicy: store.downloadSafetyPolicy,
-                sitePermissionPolicy: store.sitePermissionPolicy
-            ) { title, url, isLoading, securityMessage in
-                store.updateTabFromWebView(
-                    tabID: tab.id,
-                    title: title,
-                    url: url,
-                    isLoading: isLoading,
-                    securityMessage: securityMessage
-                )
-            } onSecurityMessage: { message in
-                guard tab.id == store.selectedTabID else {
-                    return
+        if let tab = store.activeTab {
+            switch tab.content {
+            case .spaceCustomization(let spaceID):
+                if let space = store.spaces.first(where: { $0.id == spaceID }) {
+                    SpaceCustomizationView(
+                        store: store,
+                        space: space,
+                        profiles: store.persistentProfiles
+                    )
+                    .id(space.id)
+                } else {
+                    StartPageView(store: store)
                 }
-                store.publishStatusMessage(message)
-            } onURLConfirmationRequired: { kind, url, sourceContext in
-                guard tab.id == store.selectedTabID else {
-                    return
+            case .web:
+                if let profile = store.profiles.first(where: { $0.id == tab.profileID }),
+                   tab.url != nil {
+                    WebViewHost(
+                        state: webViewState,
+                        tab: tab,
+                        profile: profile,
+                        registry: webViewRegistry,
+                        dataStoreProvider: dataStoreProvider,
+                        securityPolicy: store.urlSecurityPolicy,
+                        downloadSafetyPolicy: store.downloadSafetyPolicy,
+                        sitePermissionPolicy: store.sitePermissionPolicy
+                    ) { title, url, isLoading, securityMessage in
+                        store.updateTabFromWebView(
+                            tabID: tab.id,
+                            title: title,
+                            url: url,
+                            isLoading: isLoading,
+                            securityMessage: securityMessage
+                        )
+                    } onSecurityMessage: { message in
+                        guard tab.id == store.selectedTabID else {
+                            return
+                        }
+                        store.publishStatusMessage(message)
+                    } onURLConfirmationRequired: { kind, url, sourceContext in
+                        guard tab.id == store.selectedTabID else {
+                            return
+                        }
+                        store.requestURLConfirmation(kind: kind, url: url, sourceContext: sourceContext)
+                    } onDownloadConfirmationRequired: { request, completion in
+                        guard tab.id == store.selectedTabID else {
+                            completion(nil)
+                            return
+                        }
+                        store.requestDownloadConfirmation(request, completion: completion)
+                    } onSitePermissionRequest: { kind, origin in
+                        guard tab.id == store.selectedTabID else {
+                            return .deny(reason: "Site permission request was blocked because the tab is not active.")
+                        }
+                        return store.requestSitePermission(kind: kind, origin: origin, profileID: profile.id)
+                    }
+                } else {
+                    StartPageView(store: store)
                 }
-                store.requestURLConfirmation(kind: kind, url: url, sourceContext: sourceContext)
-            } onDownloadConfirmationRequired: { request, completion in
-                guard tab.id == store.selectedTabID else {
-                    completion(nil)
-                    return
-                }
-                store.requestDownloadConfirmation(request, completion: completion)
-            } onSitePermissionRequest: { kind, origin in
-                guard tab.id == store.selectedTabID else {
-                    return .deny(reason: "Site permission request was blocked because the tab is not active.")
-                }
-                return store.requestSitePermission(kind: kind, origin: origin, profileID: profile.id)
             }
         } else {
             StartPageView(store: store)
@@ -153,6 +170,13 @@ public struct BrowserContentView: View {
 
     private func syncWebViewState() {
         webViewState.title = store.activeTab?.title ?? "New Tab"
+        guard store.activeTab?.content.isWeb == true else {
+            webViewState.request(nil)
+            webViewState.isLoading = false
+            webViewState.canGoBack = false
+            webViewState.canGoForward = false
+            return
+        }
         webViewState.request(
             store.activeTab?.url,
             pendingHTTPFallbackURL: store.activeTab?.restorationMetadata.pendingHTTPFallbackURL

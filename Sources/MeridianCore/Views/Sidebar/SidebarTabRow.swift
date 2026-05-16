@@ -127,6 +127,9 @@ public struct SidebarTabRow: View {
     }
 
     private var iconName: String {
+        if case .spaceCustomization = tab.content {
+            return "slider.horizontal.3"
+        }
         if tab.isFavorite {
             return "sparkle"
         }

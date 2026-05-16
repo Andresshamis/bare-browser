@@ -185,7 +185,8 @@ public final class BrowserStore: ObservableObject {
         symbolName: String,
         colorHex: String,
         profileID: ProfileID? = nil,
-        sidebarAppearance: SidebarAppearance? = nil
+        sidebarAppearance: SidebarAppearance? = nil,
+        persistImmediately: Bool = true
     ) -> Bool {
         guard spaces.contains(where: { $0.id == id }) else {
             return false
@@ -216,7 +217,11 @@ public final class BrowserStore: ObservableObject {
             updateTabs(inSpace: id, profileID: profileID)
             refreshActivePageSecurityStatus()
         }
-        persistSession()
+        if persistImmediately {
+            persistSession()
+        } else {
+            schedulePersistSession()
+        }
         return true
     }
 
@@ -287,19 +292,38 @@ public final class BrowserStore: ObservableObject {
     }
 
     @discardableResult
-    public func createFolder(name: String, in spaceID: SpaceID? = nil) -> BrowserFolder? {
-        guard let targetSpaceID = spaceID ?? selectedSpaceID else {
+    public func createFolder(
+        name: String,
+        in spaceID: SpaceID? = nil,
+        parentFolderID: FolderID? = nil
+    ) -> BrowserFolder? {
+        let parentFolder = parentFolderID.flatMap { parentID in
+            folders.first { $0.id == parentID }
+        }
+        guard parentFolderID == nil || parentFolder != nil else {
+            return nil
+        }
+
+        let targetSpaceID = parentFolder?.parentSpaceID ?? spaceID ?? selectedSpaceID
+        guard let targetSpaceID else {
             return nil
         }
 
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let folder = BrowserFolder(
             name: cleanedName.isEmpty ? "Untitled Folder" : cleanedName,
-            parentSpaceID: targetSpaceID
+            parentSpaceID: targetSpaceID,
+            parentFolderID: parentFolderID
         )
         folders.append(folder)
-        updateSpace(targetSpaceID) { space in
-            space.folderIDs.append(folder.id)
+        if let parentFolderID {
+            updateFolder(parentFolderID) { parent in
+                parent.childFolderIDs.append(folder.id)
+            }
+        } else {
+            updateSpace(targetSpaceID) { space in
+                space.folderIDs.append(folder.id)
+            }
         }
         persistSession()
         return folder
@@ -333,6 +357,7 @@ public final class BrowserStore: ObservableObject {
         folderID: FolderID? = nil,
         pinned: Bool = false,
         favorite: Bool = false,
+        content: BrowserTabContent = .web,
         pendingHTTPFallbackURL: URL? = nil
     ) -> BrowserTab? {
         guard let targetSpaceID = spaceID ?? selectedSpaceID,
@@ -344,6 +369,7 @@ public final class BrowserStore: ObservableObject {
         let tab = BrowserTab(
             title: title ?? Self.defaultTitle(for: url),
             url: url,
+            content: content,
             parentSpaceID: targetSpaceID,
             parentFolderID: folderID,
             isPinned: pinned,
@@ -375,6 +401,33 @@ public final class BrowserStore: ObservableObject {
 
         selectTab(tab.id)
         return tab
+    }
+
+    @discardableResult
+    public func openSpaceCustomizer(for spaceID: SpaceID? = nil) -> BrowserTab? {
+        guard let targetSpaceID = spaceID ?? selectedSpaceID,
+              spaces.contains(where: { $0.id == targetSpaceID }) else {
+            return nil
+        }
+
+        if let existingTab = tabs.first(where: { tab in
+            guard tab.parentSpaceID == targetSpaceID else {
+                return false
+            }
+            if case .spaceCustomization(let customizedSpaceID) = tab.content {
+                return customizedSpaceID == targetSpaceID
+            }
+            return false
+        }) {
+            selectTab(existingTab.id)
+            return existingTab
+        }
+
+        return createTab(
+            title: "Customize Space",
+            in: targetSpaceID,
+            content: .spaceCustomization(targetSpaceID)
+        )
     }
 
     public func selectSpace(_ id: SpaceID) {
@@ -515,6 +568,56 @@ public final class BrowserStore: ObservableObject {
                 space.favoriteTabIDs = tabIDs
             }
 
+            if space.selectedTabID == nil {
+                space.selectedTabID = tabID
+            }
+        }
+
+        if selectedTabID == nil {
+            selectedTabID = tabID
+        }
+        persistSession()
+        return true
+    }
+
+    @discardableResult
+    public func moveTab(_ tabID: TabID, toFolder folderID: FolderID, before targetTabID: TabID? = nil) -> Bool {
+        guard tabID != targetTabID,
+              let folder = folders.first(where: { $0.id == folderID }),
+              let targetSpace = spaces.first(where: { $0.id == folder.parentSpaceID }),
+              tabs.contains(where: { $0.id == tabID }) else {
+            return false
+        }
+
+        if let targetTabID,
+           !folder.tabIDs.contains(targetTabID) {
+            return false
+        }
+
+        updateTab(tabID) { tab in
+            tab.parentSpaceID = folder.parentSpaceID
+            tab.parentFolderID = folderID
+            tab.profileID = targetSpace.profileID
+            tab.isPinned = false
+            tab.isFavorite = false
+        }
+
+        for index in spaces.indices {
+            spaces[index].favoriteTabIDs.removeAll { $0 == tabID }
+            spaces[index].pinnedTabIDs.removeAll { $0 == tabID }
+            spaces[index].regularTabIDs.removeAll { $0 == tabID }
+        }
+
+        for index in folders.indices {
+            folders[index].tabIDs.removeAll { $0 == tabID }
+        }
+
+        updateFolder(folderID) { folder in
+            let insertionIndex = targetTabID.flatMap { folder.tabIDs.firstIndex(of: $0) } ?? folder.tabIDs.endIndex
+            folder.tabIDs.insert(tabID, at: insertionIndex)
+        }
+
+        updateSpace(targetSpace.id) { space in
             if space.selectedTabID == nil {
                 space.selectedTabID = tabID
             }
@@ -808,6 +911,7 @@ public final class BrowserStore: ObservableObject {
             }
 
             updateTab(selectedTabID) { tab in
+                tab.content = .web
                 tab.title = Self.defaultTitle(for: url)
                 tab.url = url
                 tab.restorationMetadata.lastCommittedURL = url
@@ -1240,6 +1344,9 @@ public final class BrowserStore: ObservableObject {
         var visitURL: URL?
         var visitTitle: String?
         updateTab(tabID) { tab in
+            guard tab.content.isWeb else {
+                return
+            }
             if let title, !title.isEmpty {
                 tab.title = title
             }
@@ -1281,10 +1388,14 @@ public final class BrowserStore: ObservableObject {
     }
 
     private func selectedTabID(in space: BrowserSpace) -> TabID? {
+        let folderTabIDs = folders
+            .filter { $0.parentSpaceID == space.id }
+            .flatMap(\.tabIDs)
         let candidateIDs = ([space.selectedTabID].compactMap { $0 })
             + space.favoriteTabIDs
             + space.pinnedTabIDs
             + space.regularTabIDs
+            + folderTabIDs
 
         return candidateIDs.first { candidateID in
             tabs.contains { tab in
@@ -1774,7 +1885,8 @@ public final class BrowserStore: ObservableObject {
     }
 
     private static func isStaleEmptyTab(_ tab: BrowserTab) -> Bool {
-        tab.url == nil
+        tab.content.isWeb
+            && tab.url == nil
             && tab.title == defaultTitle(for: nil)
             && tab.restorationMetadata.lastCommittedURL == nil
             && tab.restorationMetadata.pendingHTTPFallbackURL == nil

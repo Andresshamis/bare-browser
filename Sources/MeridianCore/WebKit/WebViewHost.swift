@@ -234,11 +234,20 @@ public final class BrowserWebViewRegistry: ObservableObject {
 }
 
 private final class BrowserWebViewContainerView: NSView {
-    private weak var attachedWebView: WKWebView?
-    private var attachedConstraints: [NSLayoutConstraint] = []
+    private weak var activeWebView: WKWebView?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+    }
 
     func attach(_ webView: WKWebView) {
-        guard attachedWebView !== webView || webView.superview !== self else {
+        guard activeWebView !== webView || webView.superview !== self || webView.alphaValue < 1 else {
             return
         }
 
@@ -248,35 +257,51 @@ private final class BrowserWebViewContainerView: NSView {
 
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            detachCurrentWebView()
 
             if webView.superview !== self {
                 webView.removeFromSuperview()
+                webView.translatesAutoresizingMaskIntoConstraints = true
+                webView.autoresizingMask = [.width, .height]
+                webView.frame = bounds
+                webView.isHidden = false
+                webView.alphaValue = 0
+                addSubview(webView)
             }
-            webView.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(webView)
-            attachedWebView = webView
-            attachedConstraints = [
-                webView.leadingAnchor.constraint(equalTo: leadingAnchor),
-                webView.trailingAnchor.constraint(equalTo: trailingAnchor),
-                webView.topAnchor.constraint(equalTo: topAnchor),
-                webView.bottomAnchor.constraint(equalTo: bottomAnchor)
-            ]
-            NSLayoutConstraint.activate(attachedConstraints)
+
+            for subview in subviews {
+                subview.isHidden = false
+                subview.alphaValue = subview === webView ? 1 : 0
+                subview.layer?.opacity = subview === webView ? 1 : 0
+            }
+            webView.frame = bounds
+            activeWebView = webView
             layoutSubtreeIfNeeded()
             CATransaction.commit()
         }
     }
 
     func detachCurrentWebView() {
-        guard let attachedWebView else {
-            return
+        for subview in subviews {
+            subview.removeFromSuperview()
+        }
+        activeWebView = nil
+    }
+
+    override func layout() {
+        super.layout()
+        for subview in subviews {
+            subview.frame = bounds
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard bounds.contains(point),
+              let activeWebView,
+              activeWebView.superview === self else {
+            return nil
         }
 
-        NSLayoutConstraint.deactivate(attachedConstraints)
-        attachedConstraints.removeAll()
-        attachedWebView.removeFromSuperview()
-        self.attachedWebView = nil
+        return activeWebView.hitTest(convert(point, to: activeWebView))
     }
 }
 
@@ -428,6 +453,7 @@ public struct WebViewHost: NSViewRepresentable {
 
         fileprivate func applyPendingState(to webView: WKWebView) {
             if let commandRequest = state.pendingCommand,
+               commandRequest.targetTabID == nil || commandRequest.targetTabID == tabID,
                lastHandledCommandID != commandRequest.id {
                 lastHandledCommandID = commandRequest.id
                 switch commandRequest.command {
@@ -441,6 +467,9 @@ public struct WebViewHost: NSViewRepresentable {
                     webView.stopLoading()
                 default:
                     break
+                }
+                Task { @MainActor in
+                    self.state.clearPendingCommand(id: commandRequest.id)
                 }
             }
 

@@ -7,15 +7,19 @@ public enum SidebarTintSource: String, Codable, Hashable, Sendable {
 
 public struct SidebarGlassSettings: Hashable, Codable, Sendable {
     public static let standard = SidebarGlassSettings(
-        glassOpacity: 1,
-        tintOpacity: 0.14,
-        edgeOpacity: 0.42,
-        shadowOpacity: 0.18,
-        highlightOpacity: 0.16
+        glassOpacity: 0.60,
+        tintOpacity: 0,
+        colorNoiseLevel: 0,
+        colorNoiseScale: 0.30,
+        edgeOpacity: 0.40,
+        shadowOpacity: 0.20,
+        highlightOpacity: 0.20
     )
 
     public var glassOpacity: Double
     public var tintOpacity: Double
+    public var colorNoiseLevel: Double
+    public var colorNoiseScale: Double
     public var edgeOpacity: Double
     public var shadowOpacity: Double
     public var highlightOpacity: Double
@@ -23,12 +27,16 @@ public struct SidebarGlassSettings: Hashable, Codable, Sendable {
     public init(
         glassOpacity: Double,
         tintOpacity: Double,
+        colorNoiseLevel: Double = 0,
+        colorNoiseScale: Double = 0.30,
         edgeOpacity: Double,
         shadowOpacity: Double,
         highlightOpacity: Double
     ) {
         self.glassOpacity = Self.clamped(glassOpacity)
         self.tintOpacity = Self.clamped(tintOpacity)
+        self.colorNoiseLevel = Self.clamped(colorNoiseLevel)
+        self.colorNoiseScale = Self.clamped(colorNoiseScale)
         self.edgeOpacity = Self.clamped(edgeOpacity)
         self.shadowOpacity = Self.clamped(shadowOpacity)
         self.highlightOpacity = Self.clamped(highlightOpacity)
@@ -41,6 +49,8 @@ public struct SidebarGlassSettings: Hashable, Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case glassOpacity
         case tintOpacity
+        case colorNoiseLevel
+        case colorNoiseScale
         case edgeOpacity
         case shadowOpacity
         case highlightOpacity
@@ -51,6 +61,8 @@ public struct SidebarGlassSettings: Hashable, Codable, Sendable {
         self.init(
             glassOpacity: try container.decodeIfPresent(Double.self, forKey: .glassOpacity) ?? Self.standard.glassOpacity,
             tintOpacity: try container.decodeIfPresent(Double.self, forKey: .tintOpacity) ?? Self.standard.tintOpacity,
+            colorNoiseLevel: try container.decodeIfPresent(Double.self, forKey: .colorNoiseLevel) ?? Self.standard.colorNoiseLevel,
+            colorNoiseScale: try container.decodeIfPresent(Double.self, forKey: .colorNoiseScale) ?? Self.standard.colorNoiseScale,
             edgeOpacity: try container.decodeIfPresent(Double.self, forKey: .edgeOpacity) ?? Self.standard.edgeOpacity,
             shadowOpacity: try container.decodeIfPresent(Double.self, forKey: .shadowOpacity) ?? Self.standard.shadowOpacity,
             highlightOpacity: try container.decodeIfPresent(Double.self, forKey: .highlightOpacity) ?? Self.standard.highlightOpacity

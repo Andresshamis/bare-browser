@@ -13,10 +13,12 @@ public final class WebViewState: ObservableObject {
     public struct CommandRequest: Equatable, Sendable {
         public var id: UUID
         public var command: Command
+        public var targetTabID: TabID?
 
-        public init(id: UUID = UUID(), command: Command) {
+        public init(id: UUID = UUID(), command: Command, targetTabID: TabID? = nil) {
             self.id = id
             self.command = command
+            self.targetTabID = targetTabID
         }
     }
 
@@ -59,7 +61,14 @@ public final class WebViewState: ObservableObject {
         self.pendingHTTPFallbackURL = pendingHTTPFallbackURL
     }
 
-    public func dispatch(_ command: Command) {
-        pendingCommand = CommandRequest(command: command)
+    public func dispatch(_ command: Command, targetTabID: TabID? = nil) {
+        pendingCommand = CommandRequest(command: command, targetTabID: targetTabID)
+    }
+
+    public func clearPendingCommand(id: UUID) {
+        guard pendingCommand?.id == id else {
+            return
+        }
+        pendingCommand = nil
     }
 }
