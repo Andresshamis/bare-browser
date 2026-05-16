@@ -269,14 +269,10 @@ public struct SidebarView: View {
                     _ = store.createSpace(name: "New Space")
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 32, height: 32)
-                        .background(Circle().fill(.primary.opacity(0.05)))
-                        .overlay {
-                            Circle()
-                                .stroke(.separator.opacity(0.55), lineWidth: 0.8)
-                        }
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("New space")
@@ -610,24 +606,30 @@ private struct SpaceSwitcherButtonLabel: View {
         let color = Color(hex: space.colorHex)
 
         ZStack {
-            Circle()
-                .fill(isSelected ? color.opacity(0.18) : .primary.opacity(0.045))
-
-            Circle()
-                .stroke(
-                    isSelected ? color.opacity(0.95) : Color(nsColor: .separatorColor).opacity(0.45),
-                    lineWidth: isSelected ? 1.4 : 0.8
+            if isSelected {
+                SpaceIconGlyph(
+                    symbolName: space.symbolName,
+                    colorHex: space.colorHex,
+                    size: 32,
+                    foregroundColor: color
                 )
+                .scaleEffect(1.45)
+                .blur(radius: 6)
+                .opacity(0.72)
+            }
 
             SpaceIconGlyph(
                 symbolName: space.symbolName,
                 colorHex: space.colorHex,
                 size: 32,
-                usesMutedIcon: !isSelected
+                foregroundColor: isSelected ? .white : color
             )
+            .opacity(isSelected ? 1 : 0.74)
+            .scaleEffect(isSelected ? 1.08 : 1)
+            .frame(width: 24, height: 24)
         }
         .frame(width: 32, height: 32)
-        .contentShape(Circle())
+        .contentShape(Rectangle())
     }
 }
 
@@ -635,17 +637,20 @@ private struct SpaceIconGlyph: View {
     let symbolName: String
     let colorHex: String
     let size: CGFloat
+    var foregroundColor: Color? = nil
     var usesMutedIcon = false
 
     var body: some View {
+        let color = foregroundColor ?? (usesMutedIcon ? Color.secondary : Color(hex: colorHex))
+
         if symbolName == BrowserSpace.defaultSymbolName {
             Circle()
-                .fill(Color(hex: colorHex))
+                .fill(color)
                 .frame(width: size * 0.34, height: size * 0.34)
         } else {
             Image(systemName: symbolName)
                 .font(.system(size: size * 0.45, weight: .semibold))
-                .foregroundStyle(usesMutedIcon ? Color.secondary : Color(hex: colorHex))
+                .foregroundStyle(color)
         }
     }
 }
@@ -673,64 +678,52 @@ private struct SpaceCustomizationSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Customize Space")
-                .font(.headline)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    customizationPreview
 
-            TextField("Name", text: $name)
-                .textFieldStyle(.roundedBorder)
+                    TextField("Name", text: $name)
+                        .textFieldStyle(.roundedBorder)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Icon")
-                    .font(.subheadline.weight(.semibold))
-                LazyVGrid(columns: iconColumns, alignment: .leading, spacing: 8) {
-                    ForEach(Self.symbolOptions.indices, id: \.self) { index in
-                        let symbolName = Self.symbolOptions[index]
-                        Button {
-                            selectedSymbolName = symbolName
-                        } label: {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(symbolName == selectedSymbolName ? Color(hex: selectedColorHex).opacity(0.16) : .clear)
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(
-                                        symbolName == selectedSymbolName ? Color(hex: selectedColorHex) : Color(nsColor: .separatorColor).opacity(0.35),
-                                        lineWidth: symbolName == selectedSymbolName ? 1.2 : 0.7
-                                    )
-                                SpaceIconGlyph(
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Icon")
+                            .font(.subheadline.weight(.semibold))
+                        LazyVGrid(columns: iconColumns, alignment: .leading, spacing: 8) {
+                            ForEach(Self.symbolOptions.indices, id: \.self) { index in
+                                let symbolName = Self.symbolOptions[index]
+                                SpaceIconOptionButton(
                                     symbolName: symbolName,
                                     colorHex: selectedColorHex,
-                                    size: 34
-                                )
-                            }
-                            .frame(width: 38, height: 38)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Color")
-                    .font(.subheadline.weight(.semibold))
-                HStack(spacing: 8) {
-                    ForEach(Self.colorOptions.indices, id: \.self) { index in
-                        let colorHex = Self.colorOptions[index]
-                        Button {
-                            selectedColorHex = colorHex
-                        } label: {
-                            Circle()
-                                .fill(Color(hex: colorHex))
-                                .frame(width: 26, height: 26)
-                                .overlay {
-                                    Circle()
-                                        .stroke(.primary.opacity(colorHex == selectedColorHex ? 0.75 : 0.14), lineWidth: colorHex == selectedColorHex ? 2 : 0.8)
+                                    isSelected: symbolName == selectedSymbolName
+                                ) {
+                                    selectedSymbolName = symbolName
                                 }
+                            }
                         }
-                        .buttonStyle(.plain)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Color")
+                            .font(.subheadline.weight(.semibold))
+                        LazyVGrid(columns: colorColumns, alignment: .leading, spacing: 8) {
+                            ForEach(Self.colorOptions.indices, id: \.self) { index in
+                                let colorHex = Self.colorOptions[index]
+                                SpaceColorSwatchButton(
+                                    colorHex: colorHex,
+                                    isSelected: colorHex == selectedColorHex
+                                ) {
+                                    selectedColorHex = colorHex
+                                }
+                            }
+                        }
                     }
                 }
+                .padding(22)
             }
+            .scrollIndicators(.visible)
+
+            Divider()
 
             HStack {
                 Spacer()
@@ -741,40 +734,204 @@ private struct SpaceCustomizationSheet: View {
                 }
                 .keyboardShortcut(.defaultAction)
             }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 14)
         }
-        .padding(20)
-        .frame(width: 360)
+        .frame(width: 428, height: 540)
+    }
+
+    private var customizationPreview: some View {
+        let color = Color(hex: selectedColorHex)
+        let displayName = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "New Space" : name
+
+        return HStack(spacing: 14) {
+            ZStack {
+                SpaceIconGlyph(
+                    symbolName: selectedSymbolName,
+                    colorHex: selectedColorHex,
+                    size: 44,
+                    foregroundColor: color
+                )
+                .scaleEffect(1.45)
+                .blur(radius: 8)
+                .opacity(0.72)
+
+                SpaceIconGlyph(
+                    symbolName: selectedSymbolName,
+                    colorHex: selectedColorHex,
+                    size: 44,
+                    foregroundColor: .white
+                )
+            }
+            .frame(width: 54, height: 54)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(displayName)
+                    .font(.headline)
+                    .lineLimit(1)
+
+                Text("Selected space")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.thinMaterial)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(
+                            LinearGradient(
+                                colors: [color.opacity(0.58), color.opacity(0.08), .clear],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: 190)
+                        .allowsHitTesting(false)
+                }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(.separator.opacity(0.34), lineWidth: 0.5)
+        }
     }
 
     private var iconColumns: [GridItem] {
-        Array(repeating: GridItem(.fixed(38), spacing: 8), count: 6)
+        Array(repeating: GridItem(.fixed(40), spacing: 8), count: 8)
+    }
+
+    private var colorColumns: [GridItem] {
+        Array(repeating: GridItem(.fixed(28), spacing: 8), count: 8)
     }
 
     private static let symbolOptions = [
         BrowserSpace.defaultSymbolName,
-        "house.fill",
-        "briefcase.fill",
+        "sparkles",
+        "bolt.fill",
+        "flame.fill",
+        "moon.stars.fill",
+        "sun.max.fill",
+        "leaf.fill",
+        "drop.fill",
+        "waveform",
+        "globe.americas.fill",
+        "paperplane.fill",
+        "map.fill",
+        "location.fill",
         "book.closed.fill",
+        "graduationcap.fill",
+        "terminal.fill",
+        "curlybraces",
+        "paintbrush.pointed.fill",
         "paintpalette.fill",
         "camera.fill",
-        "cart.fill",
+        "music.note",
+        "headphones",
         "gamecontroller.fill",
+        "cart.fill",
+        "creditcard.fill",
         "heart.fill",
-        "bolt.fill",
-        "leaf.fill",
-        "sparkles"
+        "star.fill",
+        "flag.fill",
+        "shield.fill",
+        "lock.fill",
+        "hammer.fill",
+        "wrench.and.screwdriver.fill",
+        "folder.fill"
     ]
 
     private static let colorOptions = [
-        "#4F7CAC",
-        "#5E5CE6",
-        "#34C759",
+        "#0A84FF",
+        "#64D2FF",
+        "#30D158",
+        "#FFD60A",
+        "#FFB340",
         "#FF9F0A",
+        "#FF453A",
         "#FF375F",
         "#BF5AF2",
-        "#64D2FF",
-        "#FFD60A"
+        "#5E5CE6",
+        "#7D7AFF",
+        "#AC8E68",
+        "#8E8E93"
     ]
+}
+
+private struct SpaceIconOptionButton: View {
+    let symbolName: String
+    let colorHex: String
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        let color = Color(hex: colorHex)
+
+        Button(action: action) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? color.opacity(0.92) : isHovered ? color.opacity(0.12) : .clear)
+
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(.white.opacity(0.36), lineWidth: 0.8)
+                } else if isHovered {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(color.opacity(0.34), lineWidth: 0.7)
+                }
+
+                SpaceIconGlyph(
+                    symbolName: symbolName,
+                    colorHex: colorHex,
+                    size: 34,
+                    foregroundColor: isSelected ? .white : color
+                )
+                .opacity(isSelected ? 1 : 0.86)
+            }
+            .frame(width: 40, height: 40)
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+}
+
+private struct SpaceColorSwatchButton: View {
+    let colorHex: String
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        let color = Color(hex: colorHex)
+
+        Button(action: action) {
+            Circle()
+                .fill(color)
+                .frame(width: 28, height: 28)
+                .overlay {
+                    Circle()
+                        .stroke(.white.opacity(isSelected ? 0.95 : 0), lineWidth: 2)
+                        .padding(3)
+                }
+                .overlay {
+                    Circle()
+                        .stroke(
+                            isSelected ? color.opacity(0.86) : Color(nsColor: .separatorColor).opacity(isHovered ? 0.7 : 0.28),
+                            lineWidth: isSelected ? 2 : 0.8
+                        )
+                }
+                .shadow(color: isSelected ? color.opacity(0.42) : .clear, radius: 6)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
 }
 
 private struct WindowTrafficLightGroup: View {
