@@ -176,7 +176,7 @@ public struct CommandBarView: View {
         return CommandRouter.BrowserActionAvailability(
             canGoBack: webViewState.canGoBack,
             canGoForward: webViewState.canGoForward,
-            canReload: activeTab?.url != nil,
+            canReload: activeTab?.content.isWeb == true && activeTab?.url != nil,
             canCloseTab: activeTab != nil,
             canPinTab: activeTab.map { !$0.isPinned || $0.isFavorite || $0.parentFolderID != nil } ?? false,
             canAddTabToEssentials: activeTab.map { !$0.isFavorite || $0.isPinned || $0.parentFolderID != nil } ?? false,
@@ -190,28 +190,28 @@ public struct CommandBarView: View {
     private func performBrowserAction(_ action: CommandRouter.BrowserAction) -> Bool {
         switch action {
         case .reload:
-            guard store.activeTab?.url != nil else {
+            guard store.activeTab?.content.isWeb == true, store.activeTab?.url != nil else {
                 return false
             }
-            webViewState.dispatch(webViewState.isLoading ? .stopLoading : .reload)
+            webViewState.dispatch(webViewState.isLoading ? .stopLoading : .reload, targetTabID: store.selectedTabID)
             return true
         case .stopLoading:
-            guard store.activeTab?.url != nil, webViewState.isLoading else {
+            guard store.activeTab?.content.isWeb == true, store.activeTab?.url != nil, webViewState.isLoading else {
                 return false
             }
-            webViewState.dispatch(.stopLoading)
+            webViewState.dispatch(.stopLoading, targetTabID: store.selectedTabID)
             return true
         case .goBack:
             guard webViewState.canGoBack else {
                 return false
             }
-            webViewState.dispatch(.goBack)
+            webViewState.dispatch(.goBack, targetTabID: store.selectedTabID)
             return true
         case .goForward:
             guard webViewState.canGoForward else {
                 return false
             }
-            webViewState.dispatch(.goForward)
+            webViewState.dispatch(.goForward, targetTabID: store.selectedTabID)
             return true
         case .closeTab, .pinTab, .addTabToEssentials, .moveTabToRegular, .moveTabUp, .moveTabDown, .splitActiveTab:
             return false

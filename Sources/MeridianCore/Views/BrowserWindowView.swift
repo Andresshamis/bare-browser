@@ -43,7 +43,6 @@ public struct BrowserWindowView: View {
 
     public var body: some View {
         browserSurface
-            .background(.background)
             .ignoresSafeArea(.container, edges: ignoredContentSafeAreaEdges)
             .toolbar(removing: .title)
             .toolbarVisibility(.hidden, for: .windowToolbar)
@@ -148,6 +147,7 @@ public struct BrowserWindowView: View {
             dataStoreProvider: dataStoreProvider
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var sidebarOverlay: some View {
@@ -155,7 +155,9 @@ public struct BrowserWindowView: View {
             .background(
                 Group {
                     if !store.sidebarIsLockedOpen {
-                        SidebarExitTrackingZone(dismissalIsSuspended: sidebarResizeStartWidth != nil) {
+                        SidebarExitTrackingZone(
+                            dismissalIsSuspended: sidebarResizeStartWidth != nil
+                        ) {
                             store.hideTransientSidebar()
                         }
                     }
@@ -185,17 +187,14 @@ public struct BrowserWindowView: View {
             pinnedSidebarChrome(settings: pinnedSettings, tintColor: tintColor, shape: shape)
                 .opacity(pinnedOpacity)
 
-            shape
-                .fill(.clear)
-                .glassEffect(.regular.tint(tintColor.opacity(floatingSettings.tintOpacity)).interactive(false), in: shape)
-                .compositingGroup()
-                .overlay {
-                    sidebarTintOverlay(shape: shape, tintColor: tintColor, settings: floatingSettings)
-                }
-                .opacity(floatingOpacity * floatingSettings.glassOpacity)
+            sidebarGlassMaterial(shape: shape, tintColor: tintColor, settings: floatingSettings)
+                .opacity(floatingOpacity)
                 .allowsHitTesting(false)
 
-            SidebarView(store: store, webViewState: webViewState)
+            SidebarView(
+                store: store,
+                webViewState: webViewState
+            )
         }
         .frame(maxHeight: .infinity)
         .clipShape(shape)
@@ -209,7 +208,7 @@ public struct BrowserWindowView: View {
             }
         }
         .shadow(
-            color: tintColor.opacity(floatingSettings.shadowOpacity * floatingOpacity),
+            color: tintColor.opacity(SidebarGlassRendering.shadowOpacity(for: floatingSettings) * floatingOpacity),
             radius: 18,
             x: 0,
             y: 8
@@ -223,11 +222,29 @@ public struct BrowserWindowView: View {
         tintColor: Color,
         shape: RoundedRectangle
     ) -> some View {
-        PinnedSidebarGlassBackdrop(opacity: settings.glassOpacity)
+        sidebarGlassMaterial(shape: shape, tintColor: tintColor, settings: settings)
+            .allowsHitTesting(false)
+    }
+
+    private func sidebarGlassMaterial(
+        shape: RoundedRectangle,
+        tintColor: Color,
+        settings: SidebarGlassSettings
+    ) -> some View {
+        shape
+            .fill(.clear)
+            .glassEffect(.regular.tint(tintColor.opacity(SidebarGlassRendering.glassTintOpacity(for: settings))).interactive(false), in: shape)
+            .compositingGroup()
             .overlay {
                 sidebarTintOverlay(shape: shape, tintColor: tintColor, settings: settings)
             }
-            .allowsHitTesting(false)
+            .overlay {
+                SidebarColorNoiseOverlay(
+                    level: settings.colorNoiseLevel,
+                    scale: settings.colorNoiseScale,
+                    shape: shape
+                )
+            }
     }
 
     private func sidebarTintOverlay(
@@ -235,14 +252,19 @@ public struct BrowserWindowView: View {
         tintColor: Color,
         settings: SidebarGlassSettings
     ) -> some View {
-        ZStack {
+        let recipe = SidebarGlassRendering.recipe(for: settings)
+
+        return ZStack {
             shape
-                .fill(tintColor.opacity(settings.tintOpacity))
+                .fill(Color(nsColor: .windowBackgroundColor).opacity(recipe.neutralFillOpacity))
+
+            shape
+                .fill(tintColor.opacity(recipe.themeFillOpacity))
 
             LinearGradient(
                 colors: [
-                    .white.opacity(settings.highlightOpacity),
-                    tintColor.opacity(settings.highlightOpacity * 0.42),
+                    .white.opacity(recipe.neutralHighlightOpacity),
+                    tintColor.opacity(recipe.themeHighlightOpacity),
                     .clear
                 ],
                 startPoint: .topLeading,
@@ -388,10 +410,10 @@ public struct BrowserWindowView: View {
         BrowserNavigationCommandContext(
             canGoBack: webViewState.canGoBack,
             canGoForward: webViewState.canGoForward,
-            canReload: store.activeTab?.url != nil,
+            canReload: store.activeTab?.content.isWeb == true && store.activeTab?.url != nil,
             canStopLoading: webViewState.isLoading
         ) { command in
-            webViewState.dispatch(command)
+            webViewState.dispatch(command, targetTabID: store.selectedTabID)
         }
     }
 
@@ -473,28 +495,6 @@ private struct SidebarResizeHandle: NSViewRepresentable {
         nsView.onResizeBegan = onResizeBegan
         nsView.onResizeChanged = onResizeChanged
         nsView.onResizeEnded = onResizeEnded
-    }
-}
-
-private struct PinnedSidebarGlassBackdrop: NSViewRepresentable {
-    let opacity: Double
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView(frame: .zero)
-        view.material = .sidebar
-        view.blendingMode = .behindWindow
-        view.state = .followsWindowActiveState
-        view.isEmphasized = false
-        view.alphaValue = CGFloat(opacity)
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = .sidebar
-        nsView.blendingMode = .behindWindow
-        nsView.state = .followsWindowActiveState
-        nsView.isEmphasized = false
-        nsView.alphaValue = CGFloat(opacity)
     }
 }
 
@@ -1214,8 +1214,8 @@ private extension NSWindow {
         titlebarAppearsTransparent = true
         titlebarSeparatorStyle = .none
         styleMask.insert([.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView])
-        isOpaque = true
-        backgroundColor = .windowBackgroundColor
+        isOpaque = false
+        backgroundColor = .clear
         hasShadow = true
         collectionBehavior.insert(.fullScreenPrimary)
 

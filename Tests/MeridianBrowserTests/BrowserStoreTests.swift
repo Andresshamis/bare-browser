@@ -58,6 +58,46 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.folders.first(where: { $0.id == folder?.id })?.tabIDs, [tab?.id].compactMap { $0 })
     }
 
+    func testCreatesNestedFoldersWithStableParentRelationships() throws {
+        let store = BrowserStore()
+        let spaceID = try XCTUnwrap(store.selectedSpaceID)
+        let parent = try XCTUnwrap(store.createFolder(name: "Research", in: spaceID))
+        let child = try XCTUnwrap(store.createFolder(name: "Sources", in: spaceID, parentFolderID: parent.id))
+
+        let updatedParent = try XCTUnwrap(store.folders.first { $0.id == parent.id })
+        let updatedChild = try XCTUnwrap(store.folders.first { $0.id == child.id })
+        let updatedSpace = try XCTUnwrap(store.spaces.first { $0.id == spaceID })
+
+        XCTAssertEqual(updatedChild.parentSpaceID, spaceID)
+        XCTAssertEqual(updatedChild.parentFolderID, parent.id)
+        XCTAssertEqual(updatedParent.childFolderIDs, [child.id])
+        XCTAssertFalse(updatedSpace.folderIDs.contains(child.id))
+    }
+
+    func testMoveTabIntoNestedFolderUpdatesMembershipAndOrder() throws {
+        let store = BrowserStore()
+        let spaceID = try XCTUnwrap(store.selectedSpaceID)
+        let parent = try XCTUnwrap(store.createFolder(name: "Research", in: spaceID))
+        let child = try XCTUnwrap(store.createFolder(name: "Sources", in: spaceID, parentFolderID: parent.id))
+        let first = try XCTUnwrap(store.createTab(title: "First", in: spaceID, folderID: child.id))
+        let second = try XCTUnwrap(store.createTab(title: "Second", in: spaceID))
+        let third = try XCTUnwrap(store.createTab(title: "Third", in: spaceID))
+
+        XCTAssertTrue(store.moveTab(third.id, toFolder: child.id, before: first.id))
+        XCTAssertTrue(store.moveTab(second.id, toFolder: child.id))
+
+        let updatedChild = try XCTUnwrap(store.folders.first { $0.id == child.id })
+        let updatedSecond = try XCTUnwrap(store.tabs.first { $0.id == second.id })
+        let updatedThird = try XCTUnwrap(store.tabs.first { $0.id == third.id })
+        let updatedSpace = try XCTUnwrap(store.spaces.first { $0.id == spaceID })
+
+        XCTAssertEqual(updatedChild.tabIDs, [third.id, first.id, second.id])
+        XCTAssertEqual(updatedSecond.parentFolderID, child.id)
+        XCTAssertEqual(updatedThird.parentFolderID, child.id)
+        XCTAssertFalse(updatedSpace.regularTabIDs.contains(second.id))
+        XCTAssertFalse(updatedSpace.regularTabIDs.contains(third.id))
+    }
+
     func testCreatedSpacesDefaultToDotSymbol() {
         let store = BrowserStore()
 
@@ -77,6 +117,16 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(projectSpace.profileID, workProfile.id)
     }
 
+    func testCreatedSpacesDefaultToNeutralMediumDensitySidebarTheme() throws {
+        let store = BrowserStore()
+        let space = store.createSpace(name: "Focus")
+
+        XCTAssertEqual(space.sidebarAppearance.base.tintOpacity, 0, accuracy: 0.001)
+        XCTAssertEqual(space.sidebarAppearance.base.glassOpacity, 0.60, accuracy: 0.001)
+        XCTAssertEqual(space.sidebarAppearance.base.colorNoiseLevel, 0, accuracy: 0.001)
+        XCTAssertEqual(space.sidebarAppearance.base.colorNoiseScale, 0.30, accuracy: 0.001)
+    }
+
     func testCustomizeSpaceUpdatesNameSymbolAndColor() throws {
         let store = BrowserStore()
         let space = store.createSpace(name: "Work")
@@ -92,6 +142,43 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(updatedSpace.name, "Design")
         XCTAssertEqual(updatedSpace.symbolName, "paintpalette.fill")
         XCTAssertEqual(updatedSpace.colorHex, "#FF375F")
+    }
+
+    func testOpenSpaceCustomizerCreatesSelectedInternalTab() throws {
+        let store = BrowserStore()
+        let space = store.createSpace(name: "Design")
+
+        let tab = try XCTUnwrap(store.openSpaceCustomizer(for: space.id))
+
+        XCTAssertEqual(tab.title, "Customize Space")
+        XCTAssertNil(tab.url)
+        XCTAssertEqual(tab.content, .spaceCustomization(space.id))
+        XCTAssertEqual(store.selectedTabID, tab.id)
+        XCTAssertEqual(store.selectedSpace?.regularTabIDs.last, tab.id)
+    }
+
+    func testOpenSpaceCustomizerReusesExistingCustomizerTab() throws {
+        let store = BrowserStore()
+        let space = store.createSpace(name: "Design")
+        let first = try XCTUnwrap(store.openSpaceCustomizer(for: space.id))
+        let second = try XCTUnwrap(store.openSpaceCustomizer(for: space.id))
+
+        XCTAssertEqual(first.id, second.id)
+        XCTAssertEqual(store.tabs.filter { $0.content == .spaceCustomization(space.id) }.count, 1)
+        XCTAssertEqual(store.selectedTabID, first.id)
+    }
+
+    func testNavigatingFromSpaceCustomizerConvertsTabToWebContent() throws {
+        let store = BrowserStore()
+        let space = store.createSpace(name: "Design")
+        let tab = try XCTUnwrap(store.openSpaceCustomizer(for: space.id))
+        let url = try XCTUnwrap(URL(string: "https://example.com"))
+
+        store.navigateActiveTab(to: url)
+
+        let updatedTab = try XCTUnwrap(store.tabs.first { $0.id == tab.id })
+        XCTAssertEqual(updatedTab.content, .web)
+        XCTAssertEqual(updatedTab.url, url)
     }
 
     func testCustomizeSpaceUpdatesProfileAndTabs() throws {
@@ -125,6 +212,8 @@ final class BrowserStoreTests: XCTestCase {
             base: SidebarGlassSettings(
                 glassOpacity: 0.84,
                 tintOpacity: 0.32,
+                colorNoiseLevel: 0.46,
+                colorNoiseScale: 0.62,
                 edgeOpacity: 0.52,
                 shadowOpacity: 0.28,
                 highlightOpacity: 0.24
@@ -132,6 +221,8 @@ final class BrowserStoreTests: XCTestCase {
             pinnedOverride: SidebarGlassSettings(
                 glassOpacity: 0.72,
                 tintOpacity: 0.18,
+                colorNoiseLevel: 0.23,
+                colorNoiseScale: 0.18,
                 edgeOpacity: 0.36,
                 shadowOpacity: 0.06,
                 highlightOpacity: 0.14
@@ -189,6 +280,25 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(space.sidebarAppearance, .standard)
     }
 
+    func testLegacyTabWithoutContentDecodesAsWebTab() throws {
+        let data = Data("""
+        {
+          "id": "C9C267E3-C314-4F10-A69D-C03CBA3B533F",
+          "title": "Example",
+          "url": "https://example.com",
+          "parentSpaceID": "E7F390AB-B64B-4E32-944E-B2DD8BC85F2E",
+          "isPinned": false,
+          "isFavorite": false,
+          "profileID": "A0B97C4C-0E21-4B4E-A09C-B7C8B37C2601",
+          "lastActiveDate": 0
+        }
+        """.utf8)
+
+        let tab = try JSONDecoder().decode(BrowserTab.self, from: data)
+
+        XCTAssertEqual(tab.content, .web)
+    }
+
     func testSidebarAppearanceRoundTripsThroughSessionSnapshot() throws {
         let profile = BrowserProfile(name: "Personal")
         let appearance = SidebarAppearance(
@@ -197,6 +307,8 @@ final class BrowserStoreTests: XCTestCase {
             base: SidebarGlassSettings(
                 glassOpacity: 0.91,
                 tintOpacity: 0.27,
+                colorNoiseLevel: 0.37,
+                colorNoiseScale: 0.74,
                 edgeOpacity: 0.48,
                 shadowOpacity: 0.19,
                 highlightOpacity: 0.22
@@ -204,6 +316,8 @@ final class BrowserStoreTests: XCTestCase {
             pinnedOverride: SidebarGlassSettings(
                 glassOpacity: 0.82,
                 tintOpacity: 0.21,
+                colorNoiseLevel: 0.11,
+                colorNoiseScale: 0.27,
                 edgeOpacity: 0.31,
                 shadowOpacity: 0.08,
                 highlightOpacity: 0.18
@@ -461,6 +575,35 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.tabs.map(\.id), [restorableTab.id])
         XCTAssertEqual(store.selectedTabID, restorableTab.id)
         XCTAssertEqual(store.selectedSpace?.regularTabIDs, [restorableTab.id])
+    }
+
+    func testLoadedSessionKeepsSpaceCustomizerTabs() throws {
+        let date = Date(timeIntervalSince1970: 10)
+        let profile = BrowserProfile(name: "Personal", createdAt: date)
+        var space = BrowserSpace(name: "Today", profileID: profile.id, lastActiveDate: date)
+        let customizerTab = BrowserTab(
+            title: "Customize Space",
+            content: .spaceCustomization(space.id),
+            parentSpaceID: space.id,
+            profileID: profile.id,
+            lastActiveDate: date
+        )
+        space.regularTabIDs = [customizerTab.id]
+        space.selectedTabID = customizerTab.id
+        let snapshot = BrowserSessionSnapshot(
+            profiles: [profile],
+            spaces: [space],
+            folders: [],
+            tabs: [customizerTab],
+            selectedSpaceID: space.id,
+            selectedTabID: customizerTab.id,
+            capturedAt: date
+        )
+
+        let store = BrowserStore(snapshot: snapshot)
+
+        XCTAssertEqual(store.tabs.map(\.id), [customizerTab.id])
+        XCTAssertEqual(store.activeTab?.content, .spaceCustomization(space.id))
     }
 
     func testTabPlacementMovesBetweenSectionsAndPreservesSelection() throws {

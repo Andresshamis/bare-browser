@@ -1,10 +1,55 @@
 import Foundation
 
+public enum BrowserTabContent: Hashable, Codable, Sendable {
+    case web
+    case spaceCustomization(SpaceID)
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case spaceID
+    }
+
+    private enum ContentType: String, Codable {
+        case web
+        case spaceCustomization
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decodeIfPresent(ContentType.self, forKey: .type) ?? .web
+        switch type {
+        case .web:
+            self = .web
+        case .spaceCustomization:
+            self = .spaceCustomization(try container.decode(SpaceID.self, forKey: .spaceID))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .web:
+            try container.encode(ContentType.web, forKey: .type)
+        case .spaceCustomization(let spaceID):
+            try container.encode(ContentType.spaceCustomization, forKey: .type)
+            try container.encode(spaceID, forKey: .spaceID)
+        }
+    }
+
+    public var isWeb: Bool {
+        if case .web = self {
+            return true
+        }
+        return false
+    }
+}
+
 public struct BrowserTab: Identifiable, Hashable, Codable, Sendable {
     public var id: TabID
     public var title: String
     public var url: URL?
     public var faviconURL: URL?
+    public var content: BrowserTabContent
     public var parentSpaceID: SpaceID
     public var parentFolderID: FolderID?
     public var isPinned: Bool
@@ -21,6 +66,7 @@ public struct BrowserTab: Identifiable, Hashable, Codable, Sendable {
         title: String,
         url: URL? = nil,
         faviconURL: URL? = nil,
+        content: BrowserTabContent = .web,
         parentSpaceID: SpaceID,
         parentFolderID: FolderID? = nil,
         isPinned: Bool = false,
@@ -36,6 +82,7 @@ public struct BrowserTab: Identifiable, Hashable, Codable, Sendable {
         self.title = title
         self.url = url
         self.faviconURL = faviconURL
+        self.content = content
         self.parentSpaceID = parentSpaceID
         self.parentFolderID = parentFolderID
         self.isPinned = isPinned
@@ -46,6 +93,48 @@ public struct BrowserTab: Identifiable, Hashable, Codable, Sendable {
         self.isMuted = isMuted
         self.splitViewID = splitViewID
         self.restorationMetadata = restorationMetadata
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case url
+        case faviconURL
+        case content
+        case parentSpaceID
+        case parentFolderID
+        case isPinned
+        case isFavorite
+        case profileID
+        case lastActiveDate
+        case isLoading
+        case isMuted
+        case splitViewID
+        case restorationMetadata
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decode(TabID.self, forKey: .id),
+            title: try container.decode(String.self, forKey: .title),
+            url: try container.decodeIfPresent(URL.self, forKey: .url),
+            faviconURL: try container.decodeIfPresent(URL.self, forKey: .faviconURL),
+            content: try container.decodeIfPresent(BrowserTabContent.self, forKey: .content) ?? .web,
+            parentSpaceID: try container.decode(SpaceID.self, forKey: .parentSpaceID),
+            parentFolderID: try container.decodeIfPresent(FolderID.self, forKey: .parentFolderID),
+            isPinned: try container.decode(Bool.self, forKey: .isPinned),
+            isFavorite: try container.decode(Bool.self, forKey: .isFavorite),
+            profileID: try container.decode(ProfileID.self, forKey: .profileID),
+            lastActiveDate: try container.decodeIfPresent(Date.self, forKey: .lastActiveDate) ?? Date(),
+            isLoading: try container.decodeIfPresent(Bool.self, forKey: .isLoading) ?? false,
+            isMuted: try container.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false,
+            splitViewID: try container.decodeIfPresent(SplitViewID.self, forKey: .splitViewID),
+            restorationMetadata: try container.decodeIfPresent(
+                TabRestorationMetadata.self,
+                forKey: .restorationMetadata
+            ) ?? .init()
+        )
     }
 }
 
