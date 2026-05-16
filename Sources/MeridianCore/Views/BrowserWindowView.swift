@@ -62,11 +62,9 @@ public struct BrowserWindowView: View {
                     .zIndex(9)
                 }
             }
-            .overlay(alignment: .top) {
+            .overlay {
                 if store.isCommandBarPresented {
-                    CommandBarView(store: store, webViewState: webViewState)
-                        .padding(.top, 24)
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                    CommandBarFloatingLayer(store: store, webViewState: webViewState)
                         .zIndex(10)
                 }
             }
@@ -650,6 +648,124 @@ private struct WindowDragStrip: View {
         WindowTitlebarInteractionZone()
             .frame(height: 8)
             .accessibilityHidden(true)
+    }
+}
+
+struct CommandBarPlacement: Equatable {
+    static let originXKey = "CommandBarOriginX"
+    static let originYKey = "CommandBarOriginY"
+    static let unsetCoordinate = -1.0
+    static let margin: CGFloat = 12
+    static let defaultTopMargin: CGFloat = 24
+    static let boundingSize = CGSize(width: CommandBarMetrics.width, height: CommandBarMetrics.maximumHeight)
+
+    static func resolvedOrigin(
+        persistedX: Double,
+        persistedY: Double,
+        containerSize: CGSize
+    ) -> CGPoint {
+        let candidate: CGPoint
+        if persistedX >= 0, persistedY >= 0, persistedX.isFinite, persistedY.isFinite {
+            candidate = CGPoint(x: persistedX, y: persistedY)
+        } else {
+            candidate = defaultOrigin(containerSize: containerSize)
+        }
+
+        return clampedOrigin(candidate, itemSize: boundingSize, containerSize: containerSize)
+    }
+
+    static func defaultOrigin(containerSize: CGSize) -> CGPoint {
+        CGPoint(
+            x: max(margin, (containerSize.width - boundingSize.width) / 2),
+            y: defaultTopMargin
+        )
+    }
+
+    static func clampedOrigin(
+        _ origin: CGPoint,
+        itemSize: CGSize,
+        containerSize: CGSize,
+        margin: CGFloat = margin
+    ) -> CGPoint {
+        CGPoint(
+            x: clampedCoordinate(origin.x, itemLength: itemSize.width, containerLength: containerSize.width, margin: margin),
+            y: clampedCoordinate(origin.y, itemLength: itemSize.height, containerLength: containerSize.height, margin: margin)
+        )
+    }
+
+    static func containerID(_ size: CGSize) -> String {
+        "\(Int(size.width.rounded()))x\(Int(size.height.rounded()))"
+    }
+
+    private static func clampedCoordinate(
+        _ value: CGFloat,
+        itemLength: CGFloat,
+        containerLength: CGFloat,
+        margin: CGFloat
+    ) -> CGFloat {
+        guard containerLength > itemLength + margin * 2 else {
+            return max(0, (containerLength - itemLength) / 2)
+        }
+
+        return min(max(value, margin), containerLength - itemLength - margin)
+    }
+}
+
+private struct CommandBarFloatingLayer: View {
+    @ObservedObject var store: BrowserStore
+    @ObservedObject var webViewState: WebViewState
+    @AppStorage(CommandBarPlacement.originXKey) private var persistedOriginX = CommandBarPlacement.unsetCoordinate
+    @AppStorage(CommandBarPlacement.originYKey) private var persistedOriginY = CommandBarPlacement.unsetCoordinate
+    @State private var dragStartOrigin: CGPoint?
+
+    var body: some View {
+        GeometryReader { proxy in
+            let containerSize = proxy.size
+            let origin = CommandBarPlacement.resolvedOrigin(
+                persistedX: persistedOriginX,
+                persistedY: persistedOriginY,
+                containerSize: containerSize
+            )
+
+            ZStack(alignment: .topLeading) {
+                CommandBarView(store: store, webViewState: webViewState)
+                    .offset(x: origin.x, y: origin.y)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                    .simultaneousGesture(dragGesture(currentOrigin: origin, containerSize: containerSize))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .task(id: CommandBarPlacement.containerID(containerSize)) {
+                persist(origin)
+            }
+        }
+    }
+
+    private func dragGesture(currentOrigin: CGPoint, containerSize: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 3)
+            .onChanged { value in
+                if dragStartOrigin == nil {
+                    dragStartOrigin = currentOrigin
+                }
+
+                let startOrigin = dragStartOrigin ?? currentOrigin
+                let candidate = CGPoint(
+                    x: startOrigin.x + value.translation.width,
+                    y: startOrigin.y + value.translation.height
+                )
+                persist(CommandBarPlacement.clampedOrigin(
+                    candidate,
+                    itemSize: CommandBarPlacement.boundingSize,
+                    containerSize: containerSize
+                ))
+            }
+            .onEnded { _ in
+                dragStartOrigin = nil
+            }
+    }
+
+    private func persist(_ origin: CGPoint) {
+        persistedOriginX = origin.x
+        persistedOriginY = origin.y
     }
 }
 

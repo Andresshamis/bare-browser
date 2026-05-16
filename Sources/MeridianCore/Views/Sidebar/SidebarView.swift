@@ -1,5 +1,11 @@
 import AppKit
+import OSLog
 import SwiftUI
+
+private let sidebarPerformanceLog = OSLog(
+    subsystem: "app.meridianbrowser.MeridianBrowser",
+    category: "SidebarPerformance"
+)
 
 public struct SidebarView: View {
     @ObservedObject private var store: BrowserStore
@@ -20,24 +26,15 @@ public struct SidebarView: View {
             profileHeader
             spaceSwitcher
             Divider()
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    tabSection("Essentials", ids: store.selectedSpace?.favoriteTabIDs ?? [], symbolName: "sparkle", placement: .favorite)
-                    tabSection("Pinned", ids: store.selectedSpace?.pinnedTabIDs ?? [], symbolName: "pin.fill", placement: .pinned)
-                    folderSection
-                    tabSection("Tabs", ids: store.selectedSpace?.regularTabIDs ?? [], symbolName: "rectangle.stack", placement: .regular)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 12)
-            }
+            spacePager
         }
         .accessibilityLabel("Sidebar")
-        .background(
+        .background {
             WindowReader { window in
                 self.window = window
             }
             .accessibilityHidden(true)
-        )
+        }
         .sheet(isPresented: $isProfileCreatorPresented) {
             ProfileCreationSheet(
                 profileName: $newProfileName,
@@ -218,7 +215,7 @@ public struct SidebarView: View {
             HStack(spacing: 8) {
                 ForEach(store.activeProfileSpaces) { space in
                     Button {
-                        store.selectSpace(space.id)
+                        selectSpace(space.id)
                     } label: {
                         Image(systemName: space.symbolName)
                             .font(.system(size: 14, weight: .semibold))
@@ -233,7 +230,7 @@ public struct SidebarView: View {
                     .accessibilityLabel(space.name)
                     .contextMenu {
                         Button {
-                            store.selectSpace(space.id)
+                            selectSpace(space.id)
                         } label: {
                             Label("Switch to Space", systemImage: "arrow.right.circle")
                         }
@@ -264,69 +261,102 @@ public struct SidebarView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
         }
+        .animation(SidebarSpacePagerMetrics.selectionAnimation, value: store.selectedSpaceID)
     }
 
     @ViewBuilder
-    private func tabSection(_ title: String, ids: [TabID], symbolName: String, placement: BrowserTabPlacement) -> some View {
-        if !ids.isEmpty {
-            SidebarSectionHeader(title: title, symbolName: symbolName)
-            ForEach(tabs(for: ids)) { tab in
-                SidebarTabRow(
-                    tab: tab,
-                    isSelected: tab.id == store.selectedTabID,
-                    select: { store.selectTab(tab.id) },
-                    close: { close(tab) },
-                    setPlacement: { placement in store.setTabPlacement(placement, for: tab.id) },
-                    move: { direction in store.moveTab(tab.id, direction) },
-                    canMoveUp: store.canMoveTab(tab.id, .up),
-                    canMoveDown: store.canMoveTab(tab.id, .down),
-                    moveBefore: { draggedTabID in
-                        store.moveTab(draggedTabID, to: placement, before: tab.id)
-                    }
-                )
-            }
+    private var spacePager: some View {
+        SidebarSpacePagerView(
+            snapshot: makeSpacePagerSnapshot(),
+            selectTab: { store.selectTab($0) },
+            closeTab: { store.closeTab($0.id) },
+            setTabPlacement: { tabID, placement in store.setTabPlacement(placement, for: tabID) },
+            moveTab: { tabID, direction in store.moveTab(tabID, direction) },
+            moveTabBefore: { draggedTabID, placement, tabID in
+                store.moveTab(draggedTabID, to: placement, before: tabID)
+            },
+            moveTabToPlacement: { draggedTabID, placement in
+                store.moveTab(draggedTabID, to: placement)
+            },
+            selectAdjacentSpace: { store.selectAdjacentSpace($0) }
+        )
+    }
 
-            Color.clear
-                .frame(height: 8)
-                .dropDestination(for: String.self) { values, _ in
-                    guard let value = values.first,
-                          let draggedTabID = UUID(uuidString: value) else {
-                        return false
-                    }
-                    return store.moveTab(draggedTabID, to: placement)
-                }
+    private func selectSpace(_ id: SpaceID) {
+        guard store.selectedSpaceID != id else {
+            return
+        }
+
+        withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
+            store.selectSpace(id)
         }
     }
 
-    @ViewBuilder
-    private var folderSection: some View {
-        let folderIDs = store.selectedSpace?.folderIDs ?? []
-        if !folderIDs.isEmpty {
-            SidebarSectionHeader(title: "Folders", symbolName: "folder")
-            ForEach(folders(for: folderIDs)) { folder in
-                SidebarFolderRow(
-                    folder: folder,
-                    tabs: tabs(for: folder.tabIDs),
-                    selectedTabID: store.selectedTabID,
-                    selectTab: { store.selectTab($0) },
-                    closeTab: { tab in close(tab) },
-                    setTabPlacement: { tabID, placement in store.setTabPlacement(placement, for: tabID) },
-                    moveTab: { tabID, direction in store.moveTab(tabID, direction) },
-                    canMoveTab: { tabID, direction in store.canMoveTab(tabID, direction) }
-                )
-            }
+    private func makeSpacePagerSnapshot() -> SidebarSpacePagerSnapshot {
+        let activeSpaces = store.activeProfileSpaces
+        let selectedIndex = selectedSpaceIndex(in: activeSpaces)
+        let visibleIndices = SidebarSpacePagerWindow.visibleIndices(
+            selectedIndex: selectedIndex,
+            count: activeSpaces.count
+        )
+        let tabsByID = Dictionary(uniqueKeysWithValues: store.tabs.map { ($0.id, $0) })
+        let foldersByID = Dictionary(uniqueKeysWithValues: store.folders.map { ($0.id, $0) })
+        let pages = visibleIndices.map { index in
+            let space = activeSpaces[index]
+            return SidebarSpacePageSnapshot(
+                index: index,
+                space: space,
+                favoriteTabs: tabItems(for: space.favoriteTabIDs, tabsByID: tabsByID),
+                pinnedTabs: tabItems(for: space.pinnedTabIDs, tabsByID: tabsByID),
+                folders: folderItems(for: space.folderIDs, foldersByID: foldersByID, tabsByID: tabsByID),
+                regularTabs: tabItems(for: space.regularTabIDs, tabsByID: tabsByID)
+            )
         }
+
+        return SidebarSpacePagerSnapshot(
+            selectedIndex: selectedIndex,
+            spaceCount: activeSpaces.count,
+            pages: pages
+        )
     }
 
-    private func tabs(for ids: [TabID]) -> [BrowserTab] {
+    private func selectedSpaceIndex(in activeSpaces: [BrowserSpace]) -> Int? {
+        guard let selectedSpaceID = store.selectedSpaceID else {
+            return nil
+        }
+        return activeSpaces.firstIndex { $0.id == selectedSpaceID }
+    }
+
+    private func tabItems(
+        for ids: [TabID],
+        tabsByID: [TabID: BrowserTab]
+    ) -> [SidebarTabItemSnapshot] {
         ids.compactMap { id in
-            store.tabs.first { $0.id == id }
+            guard let tab = tabsByID[id] else {
+                return nil
+            }
+            return SidebarTabItemSnapshot(
+                tab: tab,
+                isSelected: tab.id == store.selectedTabID,
+                canMoveUp: store.canMoveTab(tab.id, .up),
+                canMoveDown: store.canMoveTab(tab.id, .down)
+            )
         }
     }
 
-    private func folders(for ids: [FolderID]) -> [BrowserFolder] {
+    private func folderItems(
+        for ids: [FolderID],
+        foldersByID: [FolderID: BrowserFolder],
+        tabsByID: [TabID: BrowserTab]
+    ) -> [SidebarFolderItemSnapshot] {
         ids.compactMap { id in
-            store.folders.first { $0.id == id }
+            guard let folder = foldersByID[id] else {
+                return nil
+            }
+            return SidebarFolderItemSnapshot(
+                folder: folder,
+                tabs: tabItems(for: folder.tabIDs, tabsByID: tabsByID)
+            )
         }
     }
 
@@ -607,6 +637,528 @@ private struct WindowReader: NSViewRepresentable {
         DispatchQueue.main.async {
             update(nsView.window)
         }
+    }
+}
+
+struct SidebarSpacePagerSnapshot: Equatable {
+    let selectedIndex: Int?
+    let spaceCount: Int
+    let pages: [SidebarSpacePageSnapshot]
+}
+
+struct SidebarSpacePageSnapshot: Identifiable, Equatable {
+    var id: SpaceID { space.id }
+
+    let index: Int
+    let space: BrowserSpace
+    let favoriteTabs: [SidebarTabItemSnapshot]
+    let pinnedTabs: [SidebarTabItemSnapshot]
+    let folders: [SidebarFolderItemSnapshot]
+    let regularTabs: [SidebarTabItemSnapshot]
+}
+
+struct SidebarFolderItemSnapshot: Identifiable, Equatable {
+    var id: FolderID { folder.id }
+
+    let folder: BrowserFolder
+    let tabs: [SidebarTabItemSnapshot]
+}
+
+struct SidebarTabItemSnapshot: Identifiable, Equatable {
+    var id: TabID { tab.id }
+
+    let tab: BrowserTab
+    let isSelected: Bool
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+}
+
+private struct SidebarSpacePagerView: View {
+    let snapshot: SidebarSpacePagerSnapshot
+    let selectTab: (TabID) -> Void
+    let closeTab: (BrowserTab) -> Void
+    let setTabPlacement: (TabID, BrowserTabPlacement) -> Void
+    let moveTab: (TabID, BrowserTabReorderDirection) -> Void
+    let moveTabBefore: (TabID, BrowserTabPlacement, TabID) -> Bool
+    let moveTabToPlacement: (TabID, BrowserTabPlacement) -> Bool
+    let selectAdjacentSpace: (SpaceNavigationDirection) -> Bool
+
+    @State private var spaceSwipeDeltaX: CGFloat = 0
+    @State private var isSpaceSwipeTracking = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            let pageWidth = max(proxy.size.width, 1)
+
+            ZStack(alignment: .topLeading) {
+                ForEach(snapshot.pages) { page in
+                    SidebarSpacePageView(
+                        page: page,
+                        selectTab: selectTab,
+                        closeTab: closeTab,
+                        setTabPlacement: setTabPlacement,
+                        moveTab: moveTab,
+                        moveTabBefore: moveTabBefore,
+                        moveTabToPlacement: moveTabToPlacement
+                    )
+                    .equatable()
+                    .id(page.id)
+                    .frame(width: pageWidth, height: proxy.size.height, alignment: .top)
+                    .offset(x: pageOffset(pageIndex: page.index, pageWidth: pageWidth))
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+            .clipped()
+            .animation(
+                isSpaceSwipeTracking ? nil : SidebarSpacePagerMetrics.selectionAnimation,
+                value: snapshot.selectedIndex
+            )
+            .background {
+                SidebarSpaceSwipeMonitor(
+                    updateSwipeProgress: updateSpaceSwipeProgress,
+                    finishSwipe: finishSpaceSwipe,
+                    cancelSwipe: cancelSpaceSwipe
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityHidden(true)
+            }
+        }
+    }
+
+    private func pageOffset(pageIndex: Int, pageWidth: CGFloat) -> CGFloat {
+        guard let selectedIndex = snapshot.selectedIndex else {
+            return 0
+        }
+
+        let interactiveOffset = SidebarSpacePagerWindow.visualOffset(
+            for: spaceSwipeDeltaX,
+            pageWidth: pageWidth,
+            canMovePrevious: selectedIndex > 0,
+            canMoveNext: selectedIndex < snapshot.spaceCount - 1
+        )
+
+        return CGFloat(pageIndex - selectedIndex) * pageWidth + interactiveOffset
+    }
+
+    private func updateSpaceSwipeProgress(_ deltaX: CGFloat) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            isSpaceSwipeTracking = true
+            spaceSwipeDeltaX = deltaX
+        }
+    }
+
+    @discardableResult
+    private func finishSpaceSwipe(_ direction: SpaceNavigationDirection) -> Bool {
+        var didSelect = false
+        withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
+            didSelect = selectAdjacentSpace(direction)
+            spaceSwipeDeltaX = 0
+            isSpaceSwipeTracking = false
+        }
+        return didSelect
+    }
+
+    private func cancelSpaceSwipe() {
+        withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
+            spaceSwipeDeltaX = 0
+            isSpaceSwipeTracking = false
+        }
+    }
+}
+
+private struct SidebarSpacePageView: View, Equatable {
+    let page: SidebarSpacePageSnapshot
+    let selectTab: (TabID) -> Void
+    let closeTab: (BrowserTab) -> Void
+    let setTabPlacement: (TabID, BrowserTabPlacement) -> Void
+    let moveTab: (TabID, BrowserTabReorderDirection) -> Void
+    let moveTabBefore: (TabID, BrowserTabPlacement, TabID) -> Bool
+    let moveTabToPlacement: (TabID, BrowserTabPlacement) -> Bool
+
+    nonisolated static func == (lhs: SidebarSpacePageView, rhs: SidebarSpacePageView) -> Bool {
+        lhs.page == rhs.page
+    }
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                tabSection(
+                    "Essentials",
+                    tabs: page.favoriteTabs,
+                    symbolName: "sparkle",
+                    placement: .favorite
+                )
+                tabSection(
+                    "Pinned",
+                    tabs: page.pinnedTabs,
+                    symbolName: "pin.fill",
+                    placement: .pinned
+                )
+                folderSection
+                tabSection(
+                    "Tabs",
+                    tabs: page.regularTabs,
+                    symbolName: "rectangle.stack",
+                    placement: .regular
+                )
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 12)
+        }
+    }
+
+    @ViewBuilder
+    private func tabSection(
+        _ title: String,
+        tabs: [SidebarTabItemSnapshot],
+        symbolName: String,
+        placement: BrowserTabPlacement
+    ) -> some View {
+        if !tabs.isEmpty {
+            SidebarSectionHeader(title: title, symbolName: symbolName)
+            ForEach(tabs) { item in
+                tabRow(item, placement: placement, allowsDropBefore: true)
+            }
+
+            Color.clear
+                .frame(height: 8)
+                .dropDestination(for: String.self) { values, _ in
+                    guard let value = values.first,
+                          let draggedTabID = UUID(uuidString: value) else {
+                        return false
+                    }
+                    return moveTabToPlacement(draggedTabID, placement)
+                }
+        }
+    }
+
+    @ViewBuilder
+    private var folderSection: some View {
+        if !page.folders.isEmpty {
+            SidebarSectionHeader(title: "Folders", symbolName: "folder")
+            ForEach(page.folders) { folderItem in
+                DisclosureGroup(isExpanded: .constant(!folderItem.folder.isCollapsed)) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(folderItem.tabs) { item in
+                            tabRow(item, placement: .regular, allowsDropBefore: false)
+                                .padding(.leading, 14)
+                        }
+                    }
+                    .padding(.top, 2)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 16)
+                        Text(folderItem.folder.name)
+                            .font(.system(size: 13, weight: .medium))
+                            .lineLimit(1)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private func tabRow(
+        _ item: SidebarTabItemSnapshot,
+        placement: BrowserTabPlacement,
+        allowsDropBefore: Bool
+    ) -> some View {
+        SidebarTabRow(
+            tab: item.tab,
+            isSelected: item.isSelected,
+            select: { selectTab(item.tab.id) },
+            close: { closeTab(item.tab) },
+            setPlacement: { placement in setTabPlacement(item.tab.id, placement) },
+            move: { direction in moveTab(item.tab.id, direction) },
+            canMoveUp: item.canMoveUp,
+            canMoveDown: item.canMoveDown,
+            moveBefore: { draggedTabID in
+                guard allowsDropBefore else {
+                    return false
+                }
+                return moveTabBefore(draggedTabID, placement, item.tab.id)
+            }
+        )
+    }
+}
+
+enum SidebarSpacePagerMetrics {
+    static let commitDelta: CGFloat = 58
+    static let edgeResistanceRatio: CGFloat = 0.22
+    static let selectionAnimation: Animation = .interpolatingSpring(
+        mass: 0.85,
+        stiffness: 340,
+        damping: 34,
+        initialVelocity: 0.2
+    )
+}
+
+struct SidebarSpacePagerWindow {
+    static func visibleIndices(selectedIndex: Int?, count: Int) -> [Int] {
+        guard let selectedIndex,
+              count > 0,
+              (0..<count).contains(selectedIndex) else {
+            return []
+        }
+
+        let lowerBound = max(0, selectedIndex - 1)
+        let upperBound = min(count - 1, selectedIndex + 1)
+        return Array(lowerBound...upperBound)
+    }
+
+    static func visualOffset(
+        for deltaX: CGFloat,
+        pageWidth: CGFloat,
+        canMovePrevious: Bool,
+        canMoveNext: Bool
+    ) -> CGFloat {
+        guard pageWidth > 0 else {
+            return 0
+        }
+
+        let maxTravel = max(pageWidth * 0.44, SidebarSpacePagerMetrics.commitDelta)
+        let rawOffset = (-deltaX).clamped(to: -maxTravel...maxTravel)
+
+        if rawOffset < 0, !canMoveNext {
+            return rawOffset * SidebarSpacePagerMetrics.edgeResistanceRatio
+        }
+        if rawOffset > 0, !canMovePrevious {
+            return rawOffset * SidebarSpacePagerMetrics.edgeResistanceRatio
+        }
+
+        return rawOffset
+    }
+}
+
+private struct SidebarSpaceSwipeMonitor: NSViewRepresentable {
+    let updateSwipeProgress: @MainActor (CGFloat) -> Void
+    let finishSwipe: @MainActor (SpaceNavigationDirection) -> Bool
+    let cancelSwipe: @MainActor () -> Void
+
+    func makeNSView(context: Context) -> SidebarSpaceSwipeMonitorNSView {
+        let nsView = SidebarSpaceSwipeMonitorNSView()
+        nsView.updateSwipeProgress = updateSwipeProgress
+        nsView.finishSwipe = finishSwipe
+        nsView.cancelSwipe = cancelSwipe
+        return nsView
+    }
+
+    func updateNSView(_ nsView: SidebarSpaceSwipeMonitorNSView, context: Context) {
+        nsView.updateSwipeProgress = updateSwipeProgress
+        nsView.finishSwipe = finishSwipe
+        nsView.cancelSwipe = cancelSwipe
+        nsView.installEventMonitorIfNeeded()
+    }
+
+    static func dismantleNSView(_ nsView: SidebarSpaceSwipeMonitorNSView, coordinator: ()) {
+        nsView.removeEventMonitor()
+    }
+}
+
+@MainActor
+private final class SidebarSpaceSwipeMonitorNSView: NSView {
+    var updateSwipeProgress: (@MainActor (CGFloat) -> Void)?
+    var finishSwipe: (@MainActor (SpaceNavigationDirection) -> Bool)?
+    var cancelSwipe: (@MainActor () -> Void)?
+
+    private let horizontalDominanceRatio: CGFloat = 1.35
+    private let minimumProgressInterval: TimeInterval = 1.0 / 120.0
+    private var eventMonitor: Any?
+    private var accumulatedHorizontalDelta: CGFloat = 0
+    private var isTrackingHorizontalGesture = false
+    private var didTriggerInCurrentGesture = false
+    private var lastProgressTimestamp: TimeInterval = -Double.infinity
+    private var activeSwipeSignpostID: OSSignpostID?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installEventMonitorIfNeeded()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            removeEventMonitor()
+        }
+    }
+
+    func installEventMonitorIfNeeded() {
+        guard eventMonitor == nil else {
+            return
+        }
+
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self,
+                  self.shouldHandle(event) else {
+                return event
+            }
+
+            return self.handleScrollWheel(event) ? nil : event
+        }
+    }
+
+    func removeEventMonitor() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+        endSwipeSignpostIfNeeded(outcome: "removed")
+        resetSwipeState()
+    }
+
+    private func shouldHandle(_ event: NSEvent) -> Bool {
+        guard event.window === window else {
+            return false
+        }
+
+        let location = convert(event.locationInWindow, from: nil)
+        return bounds.contains(location)
+    }
+
+    private func handleScrollWheel(_ event: NSEvent) -> Bool {
+        if event.phase.contains(.began) || event.phase.contains(.mayBegin) {
+            endSwipeSignpostIfNeeded(outcome: "restarted")
+            resetSwipeState()
+        }
+
+        if isEnding(event) {
+            let shouldConsume = isTrackingHorizontalGesture || didTriggerInCurrentGesture
+            if isTrackingHorizontalGesture, !didTriggerInCurrentGesture {
+                cancelSwipe?()
+            }
+            endSwipeSignpostIfNeeded(outcome: didTriggerInCurrentGesture ? "completed" : "cancelled")
+            resetSwipeState()
+            return shouldConsume
+        }
+
+        let horizontalDelta = event.scrollingDeltaX
+        let verticalDelta = event.scrollingDeltaY
+        let hasHorizontalIntent = abs(horizontalDelta) > abs(verticalDelta) * horizontalDominanceRatio
+        guard hasHorizontalIntent else {
+            return false
+        }
+
+        if didTriggerInCurrentGesture {
+            return true
+        }
+
+        isTrackingHorizontalGesture = true
+        accumulatedHorizontalDelta += horizontalDelta
+        beginSwipeSignpostIfNeeded()
+        publishSwipeProgress(accumulatedHorizontalDelta, event: event, force: false)
+
+        guard abs(accumulatedHorizontalDelta) >= SidebarSpacePagerMetrics.commitDelta else {
+            cancelUnphasedGestureIfNeeded(event)
+            return true
+        }
+
+        publishSwipeProgress(accumulatedHorizontalDelta, event: event, force: true)
+        let direction: SpaceNavigationDirection = accumulatedHorizontalDelta > 0 ? .next : .previous
+        let didFinish = finishSwipe?(direction) ?? false
+        if !didFinish {
+            cancelSwipe?()
+            endSwipeSignpostIfNeeded(outcome: "edge")
+            resetSwipeState()
+            return true
+        }
+
+        let directionName = direction == .next ? "next" : "previous"
+        emitSwipeCommitSignpost(direction: directionName)
+        didTriggerInCurrentGesture = true
+        if event.phase.isEmpty, event.momentumPhase.isEmpty {
+            endSwipeSignpostIfNeeded(outcome: "completed")
+            resetSwipeState()
+        }
+        return true
+    }
+
+    private func beginSwipeSignpostIfNeeded() {
+        guard activeSwipeSignpostID == nil else {
+            return
+        }
+
+        let signpostID = OSSignpostID(log: sidebarPerformanceLog)
+        activeSwipeSignpostID = signpostID
+        os_signpost(.begin, log: sidebarPerformanceLog, name: "SidebarSpaceSwipe", signpostID: signpostID)
+    }
+
+    private func emitSwipeCommitSignpost(direction: String) {
+        guard let activeSwipeSignpostID else {
+            return
+        }
+
+        os_signpost(
+            .event,
+            log: sidebarPerformanceLog,
+            name: "SidebarSpaceSwipeCommit",
+            signpostID: activeSwipeSignpostID,
+            "%{public}s",
+            direction
+        )
+    }
+
+    private func endSwipeSignpostIfNeeded(outcome: String) {
+        guard let activeSwipeSignpostID else {
+            return
+        }
+
+        os_signpost(
+            .end,
+            log: sidebarPerformanceLog,
+            name: "SidebarSpaceSwipe",
+            signpostID: activeSwipeSignpostID,
+            "%{public}s",
+            outcome
+        )
+        self.activeSwipeSignpostID = nil
+    }
+
+    private func publishSwipeProgress(_ deltaX: CGFloat, event: NSEvent, force: Bool) {
+        guard force || event.timestamp - lastProgressTimestamp >= minimumProgressInterval else {
+            return
+        }
+
+        lastProgressTimestamp = event.timestamp
+        updateSwipeProgress?(deltaX)
+    }
+
+    private func isEnding(_ event: NSEvent) -> Bool {
+        event.phase.contains(.ended)
+            || event.phase.contains(.cancelled)
+            || event.momentumPhase.contains(.ended)
+            || event.momentumPhase.contains(.cancelled)
+    }
+
+    private func cancelUnphasedGestureIfNeeded(_ event: NSEvent) {
+        guard event.phase.isEmpty,
+              event.momentumPhase.isEmpty,
+              isTrackingHorizontalGesture else {
+            return
+        }
+
+        cancelSwipe?()
+        endSwipeSignpostIfNeeded(outcome: "unphased")
+        resetSwipeState()
+    }
+
+    private func resetSwipeState() {
+        accumulatedHorizontalDelta = 0
+        isTrackingHorizontalGesture = false
+        didTriggerInCurrentGesture = false
+        lastProgressTimestamp = -Double.infinity
+        activeSwipeSignpostID = nil
+    }
+}
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        min(max(self, range.lowerBound), range.upperBound)
     }
 }
 

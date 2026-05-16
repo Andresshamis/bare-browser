@@ -24,6 +24,11 @@ public enum CommandBarMode: Equatable, Sendable {
     case newTab
 }
 
+public enum SpaceNavigationDirection: Equatable, Sendable {
+    case previous
+    case next
+}
+
 @MainActor
 public final class BrowserStore: ObservableObject {
     @Published public var profiles: [BrowserProfile]
@@ -35,6 +40,7 @@ public final class BrowserStore: ObservableObject {
     @Published public var selectedTabID: TabID?
     @Published public var isCommandBarPresented: Bool
     @Published public private(set) var commandBarMode: CommandBarMode
+    @Published public private(set) var commandBarFocusRequest: Int
     @Published public var sidebarIsVisible: Bool
     @Published public var sidebarIsLockedOpen: Bool
     @Published public var sidebarRevealEdge: SidebarRevealEdge
@@ -77,6 +83,7 @@ public final class BrowserStore: ObservableObject {
         self.selectedTabID = snapshot.selectedTabID
         self.isCommandBarPresented = false
         self.commandBarMode = .address
+        self.commandBarFocusRequest = 0
         self.sidebarIsVisible = true
         self.sidebarIsLockedOpen = true
         self.sidebarRevealEdge = sidebarRevealEdge
@@ -319,6 +326,30 @@ public final class BrowserStore: ObservableObject {
             ?? space.regularTabIDs.first
         refreshActivePageSecurityStatus()
         persistSession()
+    }
+
+    @discardableResult
+    public func selectAdjacentSpace(_ direction: SpaceNavigationDirection) -> Bool {
+        let spaces = activeProfileSpaces
+        guard let selectedSpaceID,
+              let selectedIndex = spaces.firstIndex(where: { $0.id == selectedSpaceID }) else {
+            return false
+        }
+
+        let targetIndex: Int
+        switch direction {
+        case .previous:
+            targetIndex = selectedIndex - 1
+        case .next:
+            targetIndex = selectedIndex + 1
+        }
+
+        guard spaces.indices.contains(targetIndex) else {
+            return false
+        }
+
+        selectSpace(spaces[targetIndex].id)
+        return true
     }
 
     public func selectTab(_ id: TabID) {
@@ -573,6 +604,7 @@ public final class BrowserStore: ObservableObject {
     public func showCommandBar() {
         commandBarMode = .address
         isCommandBarPresented = true
+        requestCommandBarFocus()
     }
 
     public func hideCommandBar() {
@@ -583,6 +615,7 @@ public final class BrowserStore: ObservableObject {
     public func beginNewTab() {
         commandBarMode = .newTab
         isCommandBarPresented = true
+        requestCommandBarFocus()
     }
 
     public func submitCommandInput(
@@ -1480,6 +1513,10 @@ public final class BrowserStore: ObservableObject {
             return
         }
         mutate(&tabs[index])
+    }
+
+    private func requestCommandBarFocus() {
+        commandBarFocusRequest += 1
     }
 
     @discardableResult

@@ -96,10 +96,53 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedTabID, originalTabID)
     }
 
+    func testSelectAdjacentSpaceMovesWithinActiveProfileSpaces() throws {
+        let store = BrowserStore()
+        let firstSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let secondSpace = store.createSpace(name: "Second")
+        let thirdSpace = store.createSpace(name: "Third")
+
+        store.selectSpace(firstSpaceID)
+
+        XCTAssertFalse(store.selectAdjacentSpace(.previous))
+        XCTAssertEqual(store.selectedSpaceID, firstSpaceID)
+
+        XCTAssertTrue(store.selectAdjacentSpace(.next))
+        XCTAssertEqual(store.selectedSpaceID, secondSpace.id)
+
+        XCTAssertTrue(store.selectAdjacentSpace(.next))
+        XCTAssertEqual(store.selectedSpaceID, thirdSpace.id)
+
+        XCTAssertFalse(store.selectAdjacentSpace(.next))
+        XCTAssertEqual(store.selectedSpaceID, thirdSpace.id)
+
+        XCTAssertTrue(store.selectAdjacentSpace(.previous))
+        XCTAssertEqual(store.selectedSpaceID, secondSpace.id)
+    }
+
+    func testSelectAdjacentSpaceDoesNotCrossProfiles() throws {
+        let store = BrowserStore()
+        let firstPersonalSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let secondPersonalSpace = store.createSpace(name: "Personal Research")
+        _ = store.createPersistentProfile(name: "Work")
+
+        store.selectSpace(secondPersonalSpace.id)
+
+        XCTAssertFalse(store.selectAdjacentSpace(.next))
+        XCTAssertEqual(store.selectedSpaceID, secondPersonalSpace.id)
+
+        XCTAssertTrue(store.selectAdjacentSpace(.previous))
+        XCTAssertEqual(store.selectedSpaceID, firstPersonalSpaceID)
+
+        XCTAssertFalse(store.selectAdjacentSpace(.previous))
+        XCTAssertEqual(store.selectedSpaceID, firstPersonalSpaceID)
+    }
+
     func testBeginNewTabShowsCommandBarWithoutCreatingBlankTab() throws {
         let store = BrowserStore()
         let previousSelectedTabID = store.selectedTabID
         let previousTabCount = store.tabs.count
+        let previousFocusRequest = store.commandBarFocusRequest
 
         store.beginNewTab()
 
@@ -107,6 +150,15 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedTabID, previousSelectedTabID)
         XCTAssertTrue(store.isCommandBarPresented)
         XCTAssertEqual(store.commandBarMode, .newTab)
+        XCTAssertEqual(store.commandBarFocusRequest, previousFocusRequest + 1)
+
+        store.beginNewTab()
+
+        XCTAssertEqual(store.tabs.count, previousTabCount)
+        XCTAssertEqual(store.selectedTabID, previousSelectedTabID)
+        XCTAssertTrue(store.isCommandBarPresented)
+        XCTAssertEqual(store.commandBarMode, .newTab)
+        XCTAssertEqual(store.commandBarFocusRequest, previousFocusRequest + 2)
     }
 
     func testNewTabAddressSubmissionCreatesSelectedTab() throws {
@@ -121,6 +173,28 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertNotEqual(store.selectedTabID, previousSelectedTabID)
         XCTAssertEqual(store.activeTab?.url, URL(string: "https://example.com")!)
         XCTAssertEqual(store.selectedSpace?.regularTabIDs.last, store.selectedTabID)
+        XCTAssertFalse(store.isCommandBarPresented)
+        XCTAssertEqual(store.commandBarMode, .address)
+    }
+
+    func testNewTabSearchSubmissionCreatesGoogleSearchTabWithoutRedirect() throws {
+        let store = BrowserStore()
+        let previousSelectedTabID = store.selectedTabID
+        let previousTabCount = store.tabs.count
+
+        store.beginNewTab()
+        store.submitAddressInput("instagram andrescarnesrd")
+
+        XCTAssertEqual(store.tabs.count, previousTabCount + 1)
+        XCTAssertNotEqual(store.selectedTabID, previousSelectedTabID)
+        let url = try XCTUnwrap(store.activeTab?.url)
+        XCTAssertEqual(url.scheme, "https")
+        XCTAssertEqual(url.host(percentEncoded: false), "www.google.com")
+        XCTAssertEqual(url.path(), "/search")
+
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "q" })?.value, "instagram andrescarnesrd")
+        XCTAssertNil(components.queryItems?.first(where: { $0.name == "btnI" }))
         XCTAssertFalse(store.isCommandBarPresented)
         XCTAssertEqual(store.commandBarMode, .address)
     }
