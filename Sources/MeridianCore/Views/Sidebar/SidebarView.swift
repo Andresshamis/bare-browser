@@ -13,6 +13,7 @@ public struct SidebarView: View {
     @State private var isProfileCreatorPresented = false
     @State private var newProfileName = ""
     @State private var window: NSWindow?
+    @State private var spaceCustomizationDraft: SpaceCustomizationDraft?
 
     public init(store: BrowserStore, webViewState: WebViewState) {
         self.store = store
@@ -24,9 +25,11 @@ public struct SidebarView: View {
             browserControlsHeader
             compactAddressButton
             profileHeader
-            spaceSwitcher
             Divider()
             spacePager
+                .frame(maxHeight: .infinity)
+            Divider()
+            spaceSwitcher
         }
         .accessibilityLabel("Sidebar")
         .background {
@@ -46,6 +49,19 @@ public struct SidebarView: View {
                 cancel: {
                     isProfileCreatorPresented = false
                     newProfileName = ""
+                }
+            )
+        }
+        .sheet(item: $spaceCustomizationDraft) { draft in
+            SpaceCustomizationSheet(
+                draft: draft,
+                save: { name, symbolName, colorHex in
+                    if store.customizeSpace(draft.id, name: name, symbolName: symbolName, colorHex: colorHex) {
+                        spaceCustomizationDraft = nil
+                    }
+                },
+                cancel: {
+                    spaceCustomizationDraft = nil
                 }
             )
         }
@@ -217,18 +233,23 @@ public struct SidebarView: View {
                     Button {
                         selectSpace(space.id)
                     } label: {
-                        Image(systemName: space.symbolName)
-                            .font(.system(size: 14, weight: .semibold))
-                            .frame(width: 28, height: 28)
-                            .background(
-                                Circle()
-                                    .fill(Color(hex: space.colorHex).opacity(store.selectedSpaceID == space.id ? 0.26 : 0.12))
-                            )
+                        SpaceSwitcherButtonLabel(
+                            space: space,
+                            isSelected: store.selectedSpaceID == space.id
+                        )
                     }
                     .buttonStyle(.plain)
                     .help(space.name)
                     .accessibilityLabel(space.name)
                     .contextMenu {
+                        Button {
+                            beginCustomizing(space)
+                        } label: {
+                            Label("Customize Space...", systemImage: "slider.horizontal.3")
+                        }
+
+                        Divider()
+
                         Button {
                             selectSpace(space.id)
                         } label: {
@@ -252,14 +273,19 @@ public struct SidebarView: View {
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 28, height: 28)
-                        .background(Circle().fill(.quaternary))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(.primary.opacity(0.05)))
+                        .overlay {
+                            Circle()
+                                .stroke(.separator.opacity(0.55), lineWidth: 0.8)
+                        }
                 }
                 .buttonStyle(.plain)
                 .help("New space")
             }
             .padding(.horizontal, 12)
-            .padding(.bottom, 10)
+            .padding(.vertical, 10)
         }
         .animation(SidebarSpacePagerMetrics.selectionAnimation, value: store.selectedSpaceID)
     }
@@ -299,8 +325,25 @@ public struct SidebarView: View {
             selectedIndex: selectedIndex,
             count: activeSpaces.count
         )
-        let tabsByID = Dictionary(uniqueKeysWithValues: store.tabs.map { ($0.id, $0) })
-        let foldersByID = Dictionary(uniqueKeysWithValues: store.folders.map { ($0.id, $0) })
+        let visibleSpaces = visibleIndices.map { activeSpaces[$0] }
+        let visibleFolderIDs = Set(visibleSpaces.flatMap(\.folderIDs))
+        let foldersByID = Dictionary(
+            uniqueKeysWithValues: store.folders
+                .lazy
+                .filter { visibleFolderIDs.contains($0.id) }
+                .map { ($0.id, $0) }
+        )
+        let directTabIDs = visibleSpaces.flatMap { space in
+            space.favoriteTabIDs + space.pinnedTabIDs + space.regularTabIDs
+        }
+        let folderTabIDs = foldersByID.values.flatMap(\.tabIDs)
+        let visibleTabIDs = Set(directTabIDs + folderTabIDs)
+        let tabsByID = Dictionary(
+            uniqueKeysWithValues: store.tabs
+                .lazy
+                .filter { visibleTabIDs.contains($0.id) }
+                .map { ($0.id, $0) }
+        )
         let pages = visibleIndices.map { index in
             let space = activeSpaces[index]
             return SidebarSpacePageSnapshot(
@@ -331,15 +374,13 @@ public struct SidebarView: View {
         for ids: [TabID],
         tabsByID: [TabID: BrowserTab]
     ) -> [SidebarTabItemSnapshot] {
-        ids.compactMap { id in
-            guard let tab = tabsByID[id] else {
-                return nil
-            }
+        let orderedTabs = ids.compactMap { tabsByID[$0] }
+        return orderedTabs.enumerated().map { index, tab in
             return SidebarTabItemSnapshot(
                 tab: tab,
                 isSelected: tab.id == store.selectedTabID,
-                canMoveUp: store.canMoveTab(tab.id, .up),
-                canMoveDown: store.canMoveTab(tab.id, .down)
+                canMoveUp: index > 0,
+                canMoveDown: index < orderedTabs.count - 1
             )
         }
     }
@@ -367,6 +408,15 @@ public struct SidebarView: View {
     private func beginCreatingProfile() {
         newProfileName = store.suggestedPersistentProfileName
         isProfileCreatorPresented = true
+    }
+
+    private func beginCustomizing(_ space: BrowserSpace) {
+        spaceCustomizationDraft = SpaceCustomizationDraft(
+            id: space.id,
+            name: space.name,
+            symbolName: space.symbolName,
+            colorHex: space.colorHex
+        )
     }
 
     private var addressText: String {
@@ -546,6 +596,188 @@ public struct SidebarView: View {
 private struct ActiveSitePermissionContext {
     var origin: SitePermissionOrigin
     var profileID: ProfileID
+}
+
+private struct SpaceCustomizationDraft: Identifiable {
+    var id: SpaceID
+    var name: String
+    var symbolName: String
+    var colorHex: String
+}
+
+private struct SpaceSwitcherButtonLabel: View {
+    let space: BrowserSpace
+    let isSelected: Bool
+
+    var body: some View {
+        let color = Color(hex: space.colorHex)
+
+        ZStack {
+            Circle()
+                .fill(isSelected ? color.opacity(0.18) : .primary.opacity(0.045))
+
+            Circle()
+                .stroke(
+                    isSelected ? color.opacity(0.95) : Color(nsColor: .separatorColor).opacity(0.45),
+                    lineWidth: isSelected ? 1.4 : 0.8
+                )
+
+            SpaceIconGlyph(
+                symbolName: space.symbolName,
+                colorHex: space.colorHex,
+                size: 32,
+                usesMutedIcon: !isSelected
+            )
+        }
+        .frame(width: 32, height: 32)
+        .contentShape(Circle())
+    }
+}
+
+private struct SpaceIconGlyph: View {
+    let symbolName: String
+    let colorHex: String
+    let size: CGFloat
+    var usesMutedIcon = false
+
+    var body: some View {
+        if symbolName == BrowserSpace.defaultSymbolName {
+            Circle()
+                .fill(Color(hex: colorHex))
+                .frame(width: size * 0.34, height: size * 0.34)
+        } else {
+            Image(systemName: symbolName)
+                .font(.system(size: size * 0.45, weight: .semibold))
+                .foregroundStyle(usesMutedIcon ? Color.secondary : Color(hex: colorHex))
+        }
+    }
+}
+
+private struct SpaceCustomizationSheet: View {
+    let draft: SpaceCustomizationDraft
+    let save: (String, String, String) -> Void
+    let cancel: () -> Void
+
+    @State private var name: String
+    @State private var selectedSymbolName: String
+    @State private var selectedColorHex: String
+
+    init(
+        draft: SpaceCustomizationDraft,
+        save: @escaping (String, String, String) -> Void,
+        cancel: @escaping () -> Void
+    ) {
+        self.draft = draft
+        self.save = save
+        self.cancel = cancel
+        _name = State(initialValue: draft.name)
+        _selectedSymbolName = State(initialValue: draft.symbolName)
+        _selectedColorHex = State(initialValue: draft.colorHex)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Customize Space")
+                .font(.headline)
+
+            TextField("Name", text: $name)
+                .textFieldStyle(.roundedBorder)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Icon")
+                    .font(.subheadline.weight(.semibold))
+                LazyVGrid(columns: iconColumns, alignment: .leading, spacing: 8) {
+                    ForEach(Self.symbolOptions.indices, id: \.self) { index in
+                        let symbolName = Self.symbolOptions[index]
+                        Button {
+                            selectedSymbolName = symbolName
+                        } label: {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(symbolName == selectedSymbolName ? Color(hex: selectedColorHex).opacity(0.16) : .clear)
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(
+                                        symbolName == selectedSymbolName ? Color(hex: selectedColorHex) : Color(nsColor: .separatorColor).opacity(0.35),
+                                        lineWidth: symbolName == selectedSymbolName ? 1.2 : 0.7
+                                    )
+                                SpaceIconGlyph(
+                                    symbolName: symbolName,
+                                    colorHex: selectedColorHex,
+                                    size: 34
+                                )
+                            }
+                            .frame(width: 38, height: 38)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Color")
+                    .font(.subheadline.weight(.semibold))
+                HStack(spacing: 8) {
+                    ForEach(Self.colorOptions.indices, id: \.self) { index in
+                        let colorHex = Self.colorOptions[index]
+                        Button {
+                            selectedColorHex = colorHex
+                        } label: {
+                            Circle()
+                                .fill(Color(hex: colorHex))
+                                .frame(width: 26, height: 26)
+                                .overlay {
+                                    Circle()
+                                        .stroke(.primary.opacity(colorHex == selectedColorHex ? 0.75 : 0.14), lineWidth: colorHex == selectedColorHex ? 2 : 0.8)
+                                }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: cancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") {
+                    save(name, selectedSymbolName, selectedColorHex)
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
+    }
+
+    private var iconColumns: [GridItem] {
+        Array(repeating: GridItem(.fixed(38), spacing: 8), count: 6)
+    }
+
+    private static let symbolOptions = [
+        BrowserSpace.defaultSymbolName,
+        "house.fill",
+        "briefcase.fill",
+        "book.closed.fill",
+        "paintpalette.fill",
+        "camera.fill",
+        "cart.fill",
+        "gamecontroller.fill",
+        "heart.fill",
+        "bolt.fill",
+        "leaf.fill",
+        "sparkles"
+    ]
+
+    private static let colorOptions = [
+        "#4F7CAC",
+        "#5E5CE6",
+        "#34C759",
+        "#FF9F0A",
+        "#FF375F",
+        "#BF5AF2",
+        "#64D2FF",
+        "#FFD60A"
+    ]
 }
 
 private struct WindowTrafficLightGroup: View {

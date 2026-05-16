@@ -60,6 +60,7 @@ public final class BrowserStore: ObservableObject {
     private let localHistoryPersistence: LocalHistoryPersisting?
     private var localHistoryStore: LocalHistoryStore
     private var pendingDownloadCompletion: (@MainActor (URL?) -> Void)?
+    private var scheduledSessionPersistenceTask: Task<Void, Never>?
 
     public init(
         snapshot: BrowserSessionSnapshot = SessionSnapshotFactory.initial(),
@@ -103,7 +104,9 @@ public final class BrowserStore: ObservableObject {
         self.localHistoryStore = localHistoryStore
         self.pendingDownloadCompletion = nil
 
-        if pruneStaleEmptyTabsFromLoadedSession() {
+        let didNormalizeLegacySpaceSymbols = normalizeLegacySpaceSymbols()
+        let didPruneStaleEmptyTabs = pruneStaleEmptyTabsFromLoadedSession()
+        if didNormalizeLegacySpaceSymbols || didPruneStaleEmptyTabs {
             persistSession()
         }
     }
@@ -173,7 +176,34 @@ public final class BrowserStore: ObservableObject {
         let space = BrowserSpace(name: resolvedName, profileID: profileID)
         spaces.append(space)
         selectSpace(space.id)
+        persistSession()
         return space
+    }
+
+    @discardableResult
+    public func customizeSpace(
+        _ id: SpaceID,
+        name: String,
+        symbolName: String,
+        colorHex: String
+    ) -> Bool {
+        guard spaces.contains(where: { $0.id == id }) else {
+            return false
+        }
+
+        let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedName = cleanedName.isEmpty ? "Untitled Space" : cleanedName
+        let resolvedSymbolName = symbolName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? BrowserSpace.defaultSymbolName
+            : symbolName
+
+        updateSpace(id) { space in
+            space.name = resolvedName
+            space.symbolName = resolvedSymbolName
+            space.colorHex = colorHex
+        }
+        persistSession()
+        return true
     }
 
     public func canDeleteSpace(_ id: SpaceID) -> Bool {
@@ -325,7 +355,7 @@ public final class BrowserStore: ObservableObject {
             ?? space.pinnedTabIDs.first
             ?? space.regularTabIDs.first
         refreshActivePageSecurityStatus()
-        persistSession()
+        schedulePersistSession()
     }
 
     @discardableResult
@@ -1159,10 +1189,30 @@ public final class BrowserStore: ObservableObject {
         guard let selectedTabID else {
             return
         }
+        updateTabFromWebView(
+            tabID: selectedTabID,
+            title: title,
+            url: url,
+            isLoading: isLoading,
+            securityMessage: securityMessage
+        )
+    }
+
+    public func updateTabFromWebView(
+        tabID: TabID,
+        title: String?,
+        url: URL?,
+        isLoading: Bool,
+        securityMessage: String? = nil
+    ) {
+        guard tabs.contains(where: { $0.id == tabID }) else {
+            return
+        }
+
         var visitProfileID: ProfileID?
         var visitURL: URL?
         var visitTitle: String?
-        updateTab(selectedTabID) { tab in
+        updateTab(tabID) { tab in
             if let title, !title.isEmpty {
                 tab.title = title
             }
@@ -1179,12 +1229,14 @@ public final class BrowserStore: ObservableObject {
         if !isLoading {
             recordHistoryVisit(title: visitTitle, url: visitURL, profileID: visitProfileID)
         }
-        if let securityMessage {
-            publishStatusMessage(securityMessage)
-        } else if let statusURL = url ?? visitURL {
-            updatePageSecurityStatus(for: statusURL)
-        } else {
-            clearCurrentPageSecurityStatus()
+        if tabID == selectedTabID {
+            if let securityMessage {
+                publishStatusMessage(securityMessage)
+            } else if let statusURL = url ?? visitURL {
+                updatePageSecurityStatus(for: statusURL)
+            } else {
+                clearCurrentPageSecurityStatus()
+            }
         }
         persistSession()
     }
@@ -1272,6 +1324,19 @@ public final class BrowserStore: ObservableObject {
         } else {
             createStartTab(in: replacementSpace.id, profileID: profileID, date: date)
         }
+    }
+
+    private func normalizeLegacySpaceSymbols() -> Bool {
+        var didNormalize = false
+        let legacyDefaultSymbolNames = [
+            BrowserSpace.legacyDefaultSymbolName,
+            "sparkle.magnifyingglass"
+        ]
+        for index in spaces.indices where legacyDefaultSymbolNames.contains(spaces[index].symbolName) {
+            spaces[index].symbolName = BrowserSpace.defaultSymbolName
+            didNormalize = true
+        }
+        return didNormalize
     }
 
     private func createDefaultSpaceAndTab(for profile: BrowserProfile, date: Date) {
@@ -1667,7 +1732,42 @@ public final class BrowserStore: ObservableObject {
         completion?(nil)
     }
 
+    private func schedulePersistSession(date: Date = Date()) {
+        guard sessionPersistence != nil else {
+            return
+        }
+
+        scheduledSessionPersistenceTask?.cancel()
+        scheduledSessionPersistenceTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 300_000_000)
+            } catch {
+                return
+            }
+
+            guard let self, !Task.isCancelled else {
+                return
+            }
+
+            self.scheduledSessionPersistenceTask = nil
+            self.persistSession(date: date)
+        }
+    }
+
+    public func flushScheduledSessionPersistence(date: Date = Date()) {
+        guard scheduledSessionPersistenceTask != nil else {
+            return
+        }
+
+        scheduledSessionPersistenceTask?.cancel()
+        scheduledSessionPersistenceTask = nil
+        persistSession(date: date)
+    }
+
     private func persistSession(date: Date = Date()) {
+        scheduledSessionPersistenceTask?.cancel()
+        scheduledSessionPersistenceTask = nil
+
         guard let sessionPersistence else {
             return
         }

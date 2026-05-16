@@ -10,6 +10,7 @@ struct MeridianBrowserApp: App {
     private let sessionPersistence: SQLiteSessionPersistenceStore
     private let historyPersistence: SQLiteLocalHistoryPersistenceStore
     @StateObject private var store: BrowserStore
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         let sessionPersistence = SQLiteSessionPersistenceStore()
@@ -36,6 +37,11 @@ struct MeridianBrowserApp: App {
         WindowGroup("Meridian Browser") {
             BrowserWindowView(store: store)
                 .frame(minWidth: 900, minHeight: 620)
+                .onChange(of: scenePhase) { _, phase in
+                    if phase != .active {
+                        store.flushScheduledSessionPersistence()
+                    }
+                }
         }
         .windowStyle(.plain)
         .defaultWindowPlacement { _, context in
