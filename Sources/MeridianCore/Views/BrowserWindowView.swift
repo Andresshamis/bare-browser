@@ -161,6 +161,11 @@ public struct BrowserWindowView: View {
     private var sidebarShell: some View {
         sidebar
             .frame(width: sidebarContentWidth)
+            .background {
+                if store.sidebarIsLockedOpen {
+                    pinnedSidebarChrome
+                }
+            }
             .padding(.vertical, sidebarCurrentOuterPadding)
             .padding(sidebarPaddingEdge, sidebarCurrentOuterPadding)
     }
@@ -170,7 +175,7 @@ public struct BrowserWindowView: View {
         let clipShape = RoundedRectangle(cornerRadius: sidebarCurrentCornerRadius, style: .continuous)
 
         return ZStack {
-            if sidebarFloatingChromeIsMounted {
+            if !store.sidebarIsLockedOpen, sidebarFloatingChromeIsMounted {
                 chromeShape
                     .fill(.clear)
                     .glassEffect(.regular, in: chromeShape)
@@ -184,11 +189,37 @@ public struct BrowserWindowView: View {
             .frame(maxHeight: .infinity)
             .clipShape(clipShape)
             .overlay {
-                clipShape
-                    .stroke(.separator.opacity(0.42), lineWidth: 0.5)
-                    .opacity(Double(sidebarFloatingChromeProgress))
+                if store.sidebarIsLockedOpen {
+                    pinnedSidebarSeparator
+                } else {
+                    clipShape
+                        .stroke(.separator.opacity(0.42), lineWidth: 0.5)
+                        .opacity(Double(sidebarFloatingChromeProgress))
+                }
             }
             .accessibilityIdentifier("BrowserSidebar")
+    }
+
+    private var pinnedSidebarChrome: some View {
+        PinnedSidebarGlassBackdrop()
+            .allowsHitTesting(false)
+    }
+
+    private var pinnedSidebarSeparator: some View {
+        HStack(spacing: 0) {
+            if store.sidebarRevealEdge == .right {
+                Rectangle()
+                    .fill(.separator.opacity(0.34))
+                    .frame(width: 0.5)
+                Spacer(minLength: 0)
+            } else {
+                Spacer(minLength: 0)
+                Rectangle()
+                    .fill(.separator.opacity(0.34))
+                    .frame(width: 0.5)
+            }
+        }
+        .allowsHitTesting(false)
     }
 
     private var sidebarCurrentOuterPadding: CGFloat {
@@ -935,12 +966,29 @@ private struct WindowChromeController: NSViewRepresentable {
     }
 }
 
+private struct PinnedSidebarGlassBackdrop: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView(frame: .zero)
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = .sidebar
+        nsView.blendingMode = .behindWindow
+        nsView.state = .active
+    }
+}
+
 private extension NSWindow {
     func applyMeridianChrome(contentCornerRadius: CGFloat) {
         title = "Meridian Browser"
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
-        styleMask.insert([.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView])
+        styleMask.insert([.closable, .miniaturizable, .resizable, .fullSizeContentView])
+        styleMask.remove(.titled)
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
