@@ -3,14 +3,33 @@ import SwiftUI
 
 private let sidebarRevealHotZoneWidth: CGFloat = 8
 
+private enum BrowserSidebarSizing {
+    static let widthStorageKey = "BrowserSidebarWidth"
+    static let defaultWidth = 280.0
+    static let minimumWidth: CGFloat = 220
+    static let maximumWidth: CGFloat = 520
+    static let resizeOverlayWidth: CGFloat = 18
+    static let resizeHitWidth: CGFloat = 8
+    static let accessibilityStep: CGFloat = 16
+
+    static func clamped(_ width: CGFloat) -> CGFloat {
+        min(max(width, minimumWidth), maximumWidth)
+    }
+}
+
 public struct BrowserWindowView: View {
     @ObservedObject private var store: BrowserStore
     @StateObject private var webViewState = WebViewState()
     @StateObject private var webViewRegistry = BrowserWebViewRegistry()
+    @AppStorage(BrowserSidebarSizing.widthStorageKey) private var storedSidebarWidth = BrowserSidebarSizing.defaultWidth
+    @State private var sidebarResizeStartWidth: CGFloat?
+    @State private var sidebarResizeLiveWidth: CGFloat?
     private let dataStoreProvider = ProfileWebsiteDataStoreProvider()
-    private let sidebarWidth: CGFloat = 280
     private let floatingSidebarInset: CGFloat = 8
     private let floatingSidebarCornerRadius: CGFloat = 12
+    private var sidebarWidth: CGFloat {
+        sidebarResizeLiveWidth ?? BrowserSidebarSizing.clamped(CGFloat(storedSidebarWidth))
+    }
     private var sidebarReservedWidth: CGFloat {
         sidebarWidth
     }
@@ -59,6 +78,9 @@ public struct BrowserWindowView: View {
             .animation(.snappy(duration: 0.16), value: store.isCommandBarPresented)
             .animation(.snappy(duration: 0.16), value: store.sidebarIsVisible)
             .animation(.snappy(duration: 0.16), value: store.sidebarIsLockedOpen)
+            .onAppear {
+                normalizeStoredSidebarWidth()
+            }
             .alert(
                 store.pendingURLConfirmation?.confirmationTitle ?? "Open Link?",
                 isPresented: pendingURLConfirmationIsPresented,
@@ -130,7 +152,7 @@ public struct BrowserWindowView: View {
             .background(
                 Group {
                     if !store.sidebarIsLockedOpen {
-                        SidebarExitTrackingZone {
+                        SidebarExitTrackingZone(dismissalIsSuspended: sidebarResizeStartWidth != nil) {
                             store.hideTransientSidebar()
                         }
                     }
@@ -163,6 +185,7 @@ public struct BrowserWindowView: View {
         }
         .frame(maxHeight: .infinity)
         .overlay { pinnedSidebarSeparator }
+        .overlay(alignment: sidebarResizeHandleAlignment) { sidebarResizeHandle }
         .accessibilityIdentifier("BrowserSidebar")
     }
 
@@ -183,12 +206,12 @@ public struct BrowserWindowView: View {
         .overlay {
             shape.stroke(.separator.opacity(0.42), lineWidth: 0.5)
         }
+        .overlay(alignment: sidebarResizeHandleAlignment) { sidebarResizeHandle }
         .accessibilityIdentifier("BrowserSidebar")
     }
 
     private var pinnedSidebarChrome: some View {
-        Rectangle()
-            .fill(.regularMaterial)
+        PinnedSidebarGlassBackdrop()
             .allowsHitTesting(false)
     }
 
@@ -211,6 +234,61 @@ public struct BrowserWindowView: View {
 
     private var sidebarOuterInset: CGFloat {
         store.sidebarIsLockedOpen ? 0 : floatingSidebarInset
+    }
+
+    private var sidebarResizeHandleAlignment: Alignment {
+        switch store.sidebarRevealEdge {
+        case .left:
+            return .trailing
+        case .right:
+            return .leading
+        }
+    }
+
+    private var sidebarResizeHandle: some View {
+        SidebarResizeHandle(
+            edge: store.sidebarRevealEdge,
+            currentWidth: sidebarWidth,
+            onResizeBegan: { startWidth in
+                sidebarResizeStartWidth = BrowserSidebarSizing.clamped(startWidth)
+                sidebarResizeLiveWidth = BrowserSidebarSizing.clamped(startWidth)
+            },
+            onResizeChanged: { width in
+                sidebarResizeLiveWidth = BrowserSidebarSizing.clamped(width)
+            },
+            onResizeEnded: { width in
+                storedSidebarWidth = Double(BrowserSidebarSizing.clamped(width))
+                sidebarResizeStartWidth = nil
+                sidebarResizeLiveWidth = nil
+            }
+        )
+            .frame(width: BrowserSidebarSizing.resizeOverlayWidth)
+            .frame(maxHeight: .infinity)
+            .help("Resize sidebar")
+            .accessibilityElement()
+            .accessibilityLabel("Resize sidebar")
+            .accessibilityValue("\(Int(sidebarWidth.rounded())) points")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment:
+                    adjustSidebarWidth(by: BrowserSidebarSizing.accessibilityStep)
+                case .decrement:
+                    adjustSidebarWidth(by: -BrowserSidebarSizing.accessibilityStep)
+                @unknown default:
+                    break
+                }
+            }
+            .zIndex(1)
+    }
+
+    private func adjustSidebarWidth(by delta: CGFloat) {
+        storedSidebarWidth = Double(BrowserSidebarSizing.clamped(sidebarWidth + delta))
+        sidebarResizeStartWidth = nil
+        sidebarResizeLiveWidth = nil
+    }
+
+    private func normalizeStoredSidebarWidth() {
+        storedSidebarWidth = Double(BrowserSidebarSizing.clamped(CGFloat(storedSidebarWidth)))
     }
 
     private var sidebarShouldBeMounted: Bool {
@@ -320,6 +398,146 @@ private struct SidebarWindowRevealMonitor: NSViewRepresentable {
     }
 }
 
+private struct SidebarResizeHandle: NSViewRepresentable {
+    let edge: SidebarRevealEdge
+    let currentWidth: CGFloat
+    let onResizeBegan: (CGFloat) -> Void
+    let onResizeChanged: (CGFloat) -> Void
+    let onResizeEnded: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> SidebarResizeNSView {
+        SidebarResizeNSView()
+    }
+
+    func updateNSView(_ nsView: SidebarResizeNSView, context: Context) {
+        nsView.edge = edge
+        nsView.currentWidth = currentWidth
+        nsView.onResizeBegan = onResizeBegan
+        nsView.onResizeChanged = onResizeChanged
+        nsView.onResizeEnded = onResizeEnded
+    }
+}
+
+private struct PinnedSidebarGlassBackdrop: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView(frame: .zero)
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.isEmphasized = true
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = .sidebar
+        nsView.blendingMode = .behindWindow
+        nsView.state = .active
+        nsView.isEmphasized = true
+    }
+}
+
+private final class SidebarResizeNSView: NSView {
+    var edge: SidebarRevealEdge = .left {
+        didSet {
+            if edge != oldValue {
+                window?.invalidateCursorRects(for: self)
+            }
+        }
+    }
+    var currentWidth: CGFloat = BrowserSidebarSizing.defaultWidth
+    var onResizeBegan: ((CGFloat) -> Void)?
+    var onResizeChanged: ((CGFloat) -> Void)?
+    var onResizeEnded: ((CGFloat) -> Void)?
+
+    private var dragStartX: CGFloat?
+    private var dragStartWidth: CGFloat?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard bounds.contains(point) else {
+            return nil
+        }
+
+        if dragStartX != nil || activeRect.contains(point) {
+            return self
+        }
+
+        return nil
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(activeRect, cursor: .resizeLeftRight)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            finishResize(at: nil)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        dragStartX = event.locationInWindow.x
+        dragStartWidth = currentWidth
+        onResizeBegan?(currentWidth)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let nextWidth = resizedWidth(at: event.locationInWindow.x) else {
+            return
+        }
+
+        onResizeChanged?(nextWidth)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        finishResize(at: event.locationInWindow.x)
+    }
+
+    private var activeRect: CGRect {
+        let width = min(BrowserSidebarSizing.resizeHitWidth, bounds.width)
+        switch edge {
+        case .left:
+            return CGRect(x: bounds.maxX - width, y: bounds.minY, width: width, height: bounds.height)
+        case .right:
+            return CGRect(x: bounds.minX, y: bounds.minY, width: width, height: bounds.height)
+        }
+    }
+
+    private func resizedWidth(at windowX: CGFloat) -> CGFloat? {
+        guard let dragStartX, let dragStartWidth else {
+            return nil
+        }
+
+        let delta = switch edge {
+        case .left:
+            windowX - dragStartX
+        case .right:
+            dragStartX - windowX
+        }
+
+        return BrowserSidebarSizing.clamped(dragStartWidth + delta)
+    }
+
+    private func finishResize(at windowX: CGFloat?) {
+        let finalWidth = windowX.flatMap(resizedWidth(at:)) ?? currentWidth
+        if dragStartX != nil {
+            onResizeEnded?(finalWidth)
+        }
+        dragStartX = nil
+        dragStartWidth = nil
+    }
+}
+
 private final class SidebarWindowRevealNSView: NSView {
     var edge: SidebarRevealEdge = .left
     var sidebarIsVisible = true
@@ -422,6 +640,7 @@ private struct SidebarRevealZone: NSViewRepresentable {
 }
 
 private struct SidebarExitTrackingZone: NSViewRepresentable {
+    let dismissalIsSuspended: Bool
     let dismiss: @MainActor () -> Void
 
     func makeNSView(context: Context) -> SidebarExitTrackingNSView {
@@ -429,6 +648,7 @@ private struct SidebarExitTrackingZone: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: SidebarExitTrackingNSView, context: Context) {
+        nsView.dismissalIsSuspended = dismissalIsSuspended
         nsView.dismiss = dismiss
         nsView.startPointerTimerIfNeeded()
     }
@@ -521,6 +741,13 @@ private final class SidebarRevealTrackingNSView: NSView {
 
 private final class SidebarExitTrackingNSView: NSView {
     var dismiss: (@MainActor () -> Void)?
+    var dismissalIsSuspended = false {
+        didSet {
+            if dismissalIsSuspended {
+                outsideStartDate = nil
+            }
+        }
+    }
     private var hoverTrackingArea: NSTrackingArea?
     private var pointerTimer: Timer?
     private var outsideStartDate: Date?
@@ -583,6 +810,11 @@ private final class SidebarExitTrackingNSView: NSView {
     }
 
     private func updateDismissalState() {
+        guard !dismissalIsSuspended else {
+            outsideStartDate = nil
+            return
+        }
+
         guard let window else {
             return
         }
