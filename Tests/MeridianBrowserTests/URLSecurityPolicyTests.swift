@@ -19,6 +19,32 @@ final class URLSecurityPolicyTests: XCTestCase {
         )
     }
 
+    func testAllowsBlobAndDataOnlyForWebDownloads() {
+        let policy = URLSecurityPolicy()
+        let blobURL = URL(string: "blob:https://example.com/download-id")!
+        let dataURL = URL(string: "data:text/plain,hello")!
+
+        XCTAssertEqual(
+            policy.decision(for: blobURL),
+            .block(reason: "Unsupported URL scheme: blob.")
+        )
+        XCTAssertEqual(
+            policy.decision(for: dataURL),
+            .block(reason: "Blocked unsafe URL scheme: data.")
+        )
+        XCTAssertEqual(policy.decision(forWebDownloadURL: blobURL), .allowInWebView)
+        XCTAssertEqual(policy.decision(forWebDownloadURL: dataURL), .allowInWebView)
+    }
+
+    func testStillBlocksScriptSchemesForWebDownloads() {
+        let policy = URLSecurityPolicy()
+
+        XCTAssertEqual(
+            policy.decision(forWebDownloadURL: URL(string: "javascript:alert(1)")!),
+            .block(reason: "Blocked unsafe URL scheme: javascript.")
+        )
+    }
+
     func testRequiresConfirmationForExternalAndLocalSchemes() {
         let policy = URLSecurityPolicy()
         let externalURL = URL(string: "mailto:hello@example.com")!

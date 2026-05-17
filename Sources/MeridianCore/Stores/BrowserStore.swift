@@ -1268,7 +1268,7 @@ public final class BrowserStore: ObservableObject {
             )
             pendingDownloadConfirmation = request
             pendingDownloadCompletion = completion
-            lastUserMessage = request.pendingMessage
+            lastUserMessage = nil
         }
     }
 
@@ -1325,7 +1325,7 @@ public final class BrowserStore: ObservableObject {
         pendingDownloadCompletion = nil
         isChoosingDownloadDestination = false
         markDownloadStarted(request.id, destinationURL: destinationURL)
-        lastUserMessage = "Download will be saved as \(destinationURL.lastPathComponent)."
+        lastUserMessage = nil
         completion(destinationURL)
         return true
     }
