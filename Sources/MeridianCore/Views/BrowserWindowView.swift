@@ -1,6 +1,12 @@
 import AppKit
+import OSLog
 import SwiftUI
 import WebKit
+
+private let browserWindowLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "MeridianBrowser",
+    category: "BrowserWindow"
+)
 
 private let sidebarRevealHotZoneWidth: CGFloat = 8
 
@@ -27,6 +33,7 @@ public struct BrowserWindowView: View {
     @State private var sidebarResizeStartWidth: CGFloat?
     @State private var sidebarResizeLiveWidth: CGFloat?
     @State private var sidebarChromeTheme: SidebarChromeTheme?
+    @State private var autoPresentedDownloadID: UUID?
     private let dataStoreProvider = ProfileWebsiteDataStoreProvider()
     private let floatingSidebarInset: CGFloat = 8
     private let floatingSidebarCornerRadius: CGFloat = 12
@@ -93,6 +100,10 @@ public struct BrowserWindowView: View {
             .animation(sidebarPinnedStateAnimation, value: store.sidebarIsLockedOpen)
             .onAppear {
                 normalizeStoredSidebarWidth()
+                presentPendingDownloadSavePanelIfNeeded()
+            }
+            .onChange(of: store.pendingDownloadConfirmation?.id) { _, _ in
+                presentPendingDownloadSavePanelIfNeeded()
             }
             .alert(
                 store.pendingURLConfirmation?.confirmationTitle ?? "Open Link?",
@@ -470,7 +481,12 @@ public struct BrowserWindowView: View {
 
     private var pendingDownloadConfirmationIsPresented: Binding<Bool> {
         Binding {
-            store.pendingDownloadConfirmation != nil && !store.isChoosingDownloadDestination
+            guard let request = store.pendingDownloadConfirmation,
+                  !store.isChoosingDownloadDestination else {
+                return false
+            }
+
+            return shouldShowDownloadConfirmationAlert(for: request)
         } set: { isPresented in
             if !isPresented {
                 store.dismissPendingDownloadConfirmationAlert()
@@ -478,20 +494,52 @@ public struct BrowserWindowView: View {
         }
     }
 
+    private func shouldShowDownloadConfirmationAlert(for request: DownloadConfirmationRequest) -> Bool {
+        if case .requiresConfirmation = request.risk {
+            return true
+        }
+
+        return false
+    }
+
+    private func presentPendingDownloadSavePanelIfNeeded() {
+        guard let request = store.pendingDownloadConfirmation,
+              !store.isChoosingDownloadDestination,
+              autoPresentedDownloadID != request.id,
+              !shouldShowDownloadConfirmationAlert(for: request) else {
+            browserWindowLogger.info(
+                "download save panel auto-present skipped pending=\(store.pendingDownloadConfirmation != nil, privacy: .public) choosing=\(store.isChoosingDownloadDestination, privacy: .public)"
+            )
+            return
+        }
+
+        autoPresentedDownloadID = request.id
+        browserWindowLogger.info("download save panel auto-present begin")
+        if store.beginPendingDownloadDestinationSelection() {
+            presentSavePanel(for: request)
+        } else {
+            browserWindowLogger.info("download save panel auto-present beginSelection failed")
+        }
+    }
+
     private func presentSavePanel(for request: DownloadConfirmationRequest) {
         let panel = NSSavePanel()
         panel.title = request.confirmationTitle
         panel.nameFieldStringValue = request.sanitizedFilename
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
 
+        browserWindowLogger.info("download save panel presenting")
         panel.begin { response in
             Task { @MainActor in
                 guard response == .OK, let destinationURL = panel.url else {
+                    browserWindowLogger.info("download save panel canceled")
                     store.cancelPendingDownloadConfirmation()
                     return
                 }
 
+                browserWindowLogger.info("download save panel approved")
                 store.approvePendingDownloadConfirmation(destination: destinationURL)
             }
         }

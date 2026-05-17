@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Meridian Download Context Menu Fixture</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 40px;
+      background: #f4f4f0;
+      color: #1b1b18;
+    }
+
+    .grid {
+      display: flex;
+      gap: 32px;
+      align-items: flex-start;
+    }
+
+    figure {
+      margin: 0;
+      width: 260px;
+    }
+
+    img {
+      width: 260px;
+      height: 180px;
+      object-fit: cover;
+      border: 1px solid #b9b9b0;
+      background: white;
+    }
+  </style>
+</head>
+<body>
+  <h1>Download Context Menu Fixture</h1>
+  <p>Right-click each image and choose Download Image or Download Linked File.</p>
+  <div class="grid">
+    <figure>
+      <img
+        id="plain-image"
+        alt="Plain fixture"
+        src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='360'%3E%3Crect width='520' height='360' fill='%23f8d75c'/%3E%3Ccircle cx='130' cy='110' r='56' fill='%23df5d43'/%3E%3Crect x='220' y='86' width='210' height='168' rx='18' fill='%233b6ea8'/%3E%3Ctext x='260' y='190' font-size='42' font-family='Arial' fill='white'%3EIMG%3C/text%3E%3C/svg%3E">
+      <figcaption>Plain image</figcaption>
+    </figure>
+
+    <figure>
+      <a
+        id="linked-image-anchor"
+        href="data:text/plain,linked-file-download">
+        <img
+          id="linked-image"
+          alt="Linked fixture"
+          src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='360'%3E%3Crect width='520' height='360' fill='%239ad6c6'/%3E%3Cpath d='M90 270 L210 90 L320 230 L390 150 L460 270 Z' fill='%232f7d57'/%3E%3Ctext x='195' y='190' font-size='42' font-family='Arial' fill='white'%3ELINK%3C/text%3E%3C/svg%3E">
+      </a>
+      <figcaption>Image wrapped in a download link</figcaption>
+    </figure>
+  </div>
+</body>
+</html>

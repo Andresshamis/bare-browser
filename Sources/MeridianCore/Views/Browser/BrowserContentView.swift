@@ -1,5 +1,11 @@
 import AppKit
+import OSLog
 import SwiftUI
+
+private let browserContentLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "MeridianBrowser",
+    category: "BrowserContent"
+)
 
 public struct BrowserContentView: View {
     @ObservedObject private var store: BrowserStore
@@ -26,18 +32,17 @@ public struct BrowserContentView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            if let message = store.lastUserMessage {
-                statusRow(message)
-                Divider()
-            }
-            if let download = store.primaryActiveDownload {
-                downloadStatusRow(download)
-                Divider()
-            }
-            webSurface
-        }
+        webSurface
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
+        .overlay(alignment: .bottomTrailing) {
+            floatingStatusStack
+                .padding(.trailing, 16)
+                .padding(.bottom, 16)
+        }
+        .animation(.snappy(duration: 0.18), value: store.lastUserMessage)
+        .animation(.snappy(duration: 0.18), value: store.primaryActiveDownload?.id)
+        .animation(.snappy(duration: 0.18), value: store.activeDownloads.count)
         .alert(
             "Site Permission",
             isPresented: sitePermissionAlertIsPresented,
@@ -70,6 +75,9 @@ public struct BrowserContentView: View {
                 oldValue[tabID] != nil && oldValue[tabID] != newValue[tabID]
             })
             webViewRegistry.invalidate(tabIDs: changedTabIDs)
+        }
+        .task(id: store.lastUserMessage) {
+            await autoDismissStatusMessageIfNeeded()
         }
     }
 
@@ -110,14 +118,20 @@ public struct BrowserContentView: View {
                 store.requestURLConfirmation(kind: kind, url: url, sourceContext: sourceContext)
             } onDownloadConfirmationRequired: { tabID, request, completion in
                 guard isSelected(tabID: tabID) else {
+                    browserContentLogger.info("download confirmation dropped inactive tab")
                     completion(nil)
                     return
                 }
+                browserContentLogger.info(
+                    "download confirmation forwarding filenameEmpty=\(request.sanitizedFilename.isEmpty, privacy: .public)"
+                )
                 store.requestDownloadConfirmation(request, completion: completion)
             } onDownloadStarted: { tabID, request, destinationURL, cancel in
                 guard isSelected(tabID: tabID) else {
+                    browserContentLogger.info("download started dropped inactive tab")
                     return
                 }
+                browserContentLogger.info("download started forwarded")
                 store.registerDownloadCancellation(request.id, cancel: cancel)
                 store.updateDownloadProgress(request.id, progress: 0)
             } onDownloadProgress: { _, downloadID, progress in
@@ -215,10 +229,33 @@ public struct BrowserContentView: View {
         return presentationState.snapshot(for: previewTabID)
     }
 
-    private func statusRow(_ message: String) -> some View {
+    @ViewBuilder
+    private var floatingStatusStack: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            if let message = store.lastUserMessage {
+                statusToast(message)
+                    .transition(floatingStatusTransition)
+            }
+
+            if let download = store.primaryActiveDownload {
+                downloadToast(download)
+                    .transition(floatingStatusTransition)
+            }
+        }
+        .frame(maxWidth: 360, alignment: .trailing)
+        .allowsHitTesting(true)
+    }
+
+    private var floatingStatusTransition: AnyTransition {
+        .move(edge: .bottom)
+            .combined(with: .opacity)
+            .combined(with: .scale(scale: 0.98, anchor: .bottomTrailing))
+    }
+
+    private func statusToast(_ message: String) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.yellow)
+            Image(systemName: statusIcon(for: message))
+                .foregroundStyle(statusTint(for: message))
                 .accessibilityHidden(true)
 
             Text(message)
@@ -232,37 +269,48 @@ public struct BrowserContentView: View {
             Button {
                 store.dismissLastUserMessage()
             } label: {
-                Image(systemName: "xmark")
+                Image(systemName: "xmark.circle.fill")
+                    .symbolRenderingMode(.hierarchical)
             }
             .buttonStyle(.borderless)
             .help("Dismiss status message")
             .accessibilityLabel("Dismiss status message")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(.bar)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(.separator.opacity(0.45), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.14), radius: 16, x: 0, y: 8)
         .accessibilityElement(children: .contain)
     }
 
-    private func downloadStatusRow(_ download: BrowserDownload) -> some View {
-        HStack(spacing: 8) {
+    private func downloadToast(_ download: BrowserDownload) -> some View {
+        HStack(spacing: 10) {
             Image(systemName: "arrow.down.circle.fill")
-                .foregroundStyle(.secondary)
+                .font(.title3)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.tint)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(downloadStatusText(for: download))
-                    .font(.callout)
+                    .font(.callout.weight(.medium))
                     .lineLimit(1)
+                    .truncationMode(.middle)
 
                 if let progress = download.progress {
                     ProgressView(value: progress)
                         .controlSize(.small)
+                        .frame(width: 190)
                         .accessibilityLabel("Download progress")
                         .accessibilityValue("\(download.progressPercent ?? 0) percent")
                 } else {
                     ProgressView()
                         .controlSize(.small)
+                        .frame(width: 190)
                         .accessibilityLabel("Download progress")
                 }
             }
@@ -279,16 +327,79 @@ public struct BrowserContentView: View {
             Button {
                 cancel(download)
             } label: {
-                Image(systemName: "xmark")
+                Image(systemName: "xmark.circle.fill")
+                    .symbolRenderingMode(.hierarchical)
             }
             .buttonStyle(.borderless)
             .help("Cancel download")
             .accessibilityLabel("Cancel download")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(.bar)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 10)
+        .frame(width: 332, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(.separator.opacity(0.45), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 8)
         .accessibilityElement(children: .contain)
+    }
+
+    private func statusIcon(for message: String) -> String {
+        let normalizedMessage = message.lowercased()
+        if normalizedMessage.contains("download finished") || normalizedMessage.contains("saved") {
+            return "checkmark.circle.fill"
+        }
+        if normalizedMessage.contains("blocked")
+            || normalizedMessage.contains("failed")
+            || normalizedMessage.contains("unsafe")
+            || normalizedMessage.contains("unavailable") {
+            return "exclamationmark.triangle.fill"
+        }
+
+        return "info.circle.fill"
+    }
+
+    private func statusTint(for message: String) -> Color {
+        switch statusIcon(for: message) {
+        case "checkmark.circle.fill":
+            return .green
+        case "exclamationmark.triangle.fill":
+            return .yellow
+        default:
+            return .secondary
+        }
+    }
+
+    private func autoDismissStatusMessageIfNeeded() async {
+        guard let message = store.lastUserMessage else {
+            return
+        }
+
+        let delay = statusDismissDelay(for: message)
+        try? await Task.sleep(nanoseconds: delay)
+        guard !Task.isCancelled else {
+            return
+        }
+
+        await MainActor.run {
+            if store.lastUserMessage == message {
+                store.dismissLastUserMessage()
+            }
+        }
+    }
+
+    private func statusDismissDelay(for message: String) -> UInt64 {
+        let normalizedMessage = message.lowercased()
+        let seconds: UInt64 = normalizedMessage.contains("blocked")
+            || normalizedMessage.contains("failed")
+            || normalizedMessage.contains("unsafe")
+            || normalizedMessage.contains("unavailable")
+            ? 7
+            : 4
+
+        return seconds * 1_000_000_000
     }
 
     private func downloadStatusText(for download: BrowserDownload) -> String {

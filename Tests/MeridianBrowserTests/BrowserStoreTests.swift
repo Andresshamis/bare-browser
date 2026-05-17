@@ -1749,7 +1749,7 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertTrue(didApprove)
         XCTAssertEqual(completedURL?.lastPathComponent, "script 2.sh")
         XCTAssertNil(store.pendingDownloadConfirmation)
-        XCTAssertEqual(store.lastUserMessage, "Download will be saved as script 2.sh.")
+        XCTAssertNil(store.lastUserMessage)
     }
 
     func testDownloadAlertDismissalDuringDestinationSelectionKeepsPendingDownload() throws {

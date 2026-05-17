@@ -51,15 +51,48 @@ private enum BrowserContextMenuScript {
             return null;
         };
 
-        document.addEventListener("contextmenu", event => {
-            const target = event.target;
+        const contextTargetForNode = (target, clientX, clientY) => {
             const element = elementFor(target);
             const link = element && element.closest ? element.closest("a[href]") : null;
-            window.webkit.messageHandlers.\(messageHandlerName).postMessage({
+            return {
                 imageURL: imageURLFor(target),
                 linkURL: link ? absoluteURL(link.getAttribute("href")) : null,
-                pageURL: absoluteURL(window.location.href)
-            });
+                pageURL: absoluteURL(window.location.href),
+                clientX: Number.isFinite(clientX) ? clientX : null,
+                clientY: Number.isFinite(clientY) ? clientY : null
+            };
+        };
+
+        const contextTargetFor = event => contextTargetForNode(event.target, event.clientX, event.clientY);
+
+        window.__meridianContextTargetForPoint = (clientX, clientY) => {
+            const target = Number.isFinite(clientX) && Number.isFinite(clientY)
+                ? document.elementFromPoint(clientX, clientY)
+                : null;
+            return contextTargetForNode(target, clientX, clientY);
+        };
+
+        const postContextTarget = event => {
+            window.webkit.messageHandlers.\(messageHandlerName).postMessage(contextTargetFor(event));
+        };
+
+        const shouldCapturePress = event => event.button === 2 || event.ctrlKey;
+
+        document.addEventListener("pointerdown", event => {
+            if (shouldCapturePress(event)) {
+                postContextTarget(event);
+            }
+        }, true);
+
+        document.addEventListener("mousedown", event => {
+            if (shouldCapturePress(event)) {
+                postContextTarget(event);
+            }
+        }, true);
+
+        document.addEventListener("contextmenu", event => {
+            const target = contextTargetFor(event);
+            window.webkit.messageHandlers.\(messageHandlerName).postMessage(target);
         }, true);
     })();
     """
@@ -69,18 +102,31 @@ struct BrowserContextMenuDownloadTarget: Equatable {
     var imageURL: URL?
     var linkURL: URL?
     var pageURL: URL?
+    var clientPoint: CGPoint?
+    var shouldShowDownloadMenu: Bool
 
-    init(imageURL: URL? = nil, linkURL: URL? = nil, pageURL: URL? = nil) {
+    init(
+        imageURL: URL? = nil,
+        linkURL: URL? = nil,
+        pageURL: URL? = nil,
+        clientPoint: CGPoint? = nil,
+        shouldShowDownloadMenu: Bool = false
+    ) {
         self.imageURL = imageURL
         self.linkURL = linkURL
         self.pageURL = pageURL
+        self.clientPoint = clientPoint
+        self.shouldShowDownloadMenu = shouldShowDownloadMenu
     }
 
     init(messageBody: Any) {
         let body = messageBody as? [String: Any]
+            ?? (messageBody as? NSDictionary) as? [String: Any]
         imageURL = Self.url(from: body?["imageURL"])
         linkURL = Self.url(from: body?["linkURL"])
         pageURL = Self.url(from: body?["pageURL"])
+        clientPoint = Self.point(x: body?["clientX"], y: body?["clientY"])
+        shouldShowDownloadMenu = body?["showDownloadMenu"] as? Bool ?? false
     }
 
     private static func url(from value: Any?) -> URL? {
@@ -91,9 +137,32 @@ struct BrowserContextMenuDownloadTarget: Equatable {
 
         return url
     }
+
+    private static func point(x: Any?, y: Any?) -> CGPoint? {
+        guard let x = Self.double(from: x),
+              let y = Self.double(from: y) else {
+            return nil
+        }
+
+        return CGPoint(x: x, y: y)
+    }
+
+    private static func double(from value: Any?) -> Double? {
+        switch value {
+        case let value as Double:
+            return value.isFinite ? value : nil
+        case let value as CGFloat:
+            return value.isFinite ? Double(value) : nil
+        case let value as NSNumber:
+            let doubleValue = value.doubleValue
+            return doubleValue.isFinite ? doubleValue : nil
+        default:
+            return nil
+        }
+    }
 }
 
-enum BrowserContextMenuDownloadKind {
+enum BrowserContextMenuDownloadKind: Hashable {
     case image
     case linkedFile
 
@@ -115,6 +184,15 @@ enum BrowserContextMenuDownloadKind {
             return .image
         }
         if normalizedTitle.contains("download linked file") || normalizedTitle.contains("download link") {
+            return .linkedFile
+        }
+
+        let normalizedIdentifier = item.identifier?.rawValue.lowercased()
+        if normalizedIdentifier?.contains("downloadimage") == true {
+            return .image
+        }
+        if normalizedIdentifier?.contains("downloadlink") == true
+            || normalizedIdentifier?.contains("downloadlinkedfile") == true {
             return .linkedFile
         }
 
@@ -428,16 +506,161 @@ public final class BrowserWebViewRegistry: ObservableObject {
 
 @MainActor
 private protocol BrowserContextMenuDownloadHandling: AnyObject {
+    func prepareContextMenu(for event: NSEvent, in webView: WKWebView)
     func configureContextMenu(_ menu: NSMenu?, in webView: WKWebView)
+    func performContextMenuDownload(_ kind: BrowserContextMenuDownloadKind, in webView: WKWebView)
 }
 
 private final class BrowserWKWebView: WKWebView {
+    private struct UnsafeNotification: @unchecked Sendable {
+        let value: Notification
+    }
+
+    private final class NotificationObserverBag: @unchecked Sendable {
+        private var observers: [NSObjectProtocol] = []
+
+        func replace(with observers: [NSObjectProtocol]) {
+            removeAll()
+            self.observers = observers
+        }
+
+        func removeAll() {
+            let center = NotificationCenter.default
+            for observer in observers {
+                center.removeObserver(observer)
+            }
+            observers = []
+        }
+
+        deinit {
+            removeAll()
+        }
+    }
+
     weak var contextMenuDownloadHandler: BrowserContextMenuDownloadHandling?
+    private let contextMenuNotificationObservers = NotificationObserverBag()
+
+    override func rightMouseDown(with event: NSEvent) {
+        webViewLogger.info("context-menu rightMouseDown")
+        contextMenuDownloadHandler?.prepareContextMenu(for: event, in: self)
+        installContextMenuNotificationObservers()
+        super.rightMouseDown(with: event)
+    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
+        webViewLogger.info("context-menu requested")
+        return configuredMenu(for: event)
+    }
+
+    private func configuredMenu(for event: NSEvent) -> NSMenu? {
+        contextMenuDownloadHandler?.prepareContextMenu(for: event, in: self)
         let menu = super.menu(for: event)
+        webViewLogger.info("context-menu native menu built itemCount=\(menu?.items.count ?? 0, privacy: .public)")
         contextMenuDownloadHandler?.configureContextMenu(menu, in: self)
+        webViewLogger.info("context-menu configured itemCount=\(menu?.items.count ?? 0, privacy: .public)")
         return menu
+    }
+
+    private func installContextMenuNotificationObservers() {
+        removeContextMenuNotificationObservers()
+
+        let center = NotificationCenter.default
+        let beginObserver = center.addObserver(
+            forName: NSMenu.didBeginTrackingNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let notification = UnsafeNotification(value: notification)
+            MainActor.assumeIsolated {
+                self?.contextMenuDidBeginTracking(notification.value)
+            }
+        }
+        let willSendObserver = center.addObserver(
+            forName: NSMenu.willSendActionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let notification = UnsafeNotification(value: notification)
+            MainActor.assumeIsolated {
+                self?.contextMenuWillSendAction(notification.value)
+            }
+        }
+        let endObserver = center.addObserver(
+            forName: NSMenu.didEndTrackingNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.removeContextMenuNotificationObservers()
+            }
+        }
+
+        contextMenuNotificationObservers.replace(with: [beginObserver, willSendObserver, endObserver])
+    }
+
+    private func removeContextMenuNotificationObservers() {
+        contextMenuNotificationObservers.removeAll()
+    }
+
+    private func contextMenuDidBeginTracking(_ notification: Notification) {
+        guard let menu = notification.object as? NSMenu,
+              isWebKitContextMenu(menu) else {
+            return
+        }
+
+        webViewLogger.info("context-menu didBeginTracking itemCount=\(menu.items.count, privacy: .public)")
+        contextMenuDownloadHandler?.configureContextMenu(menu, in: self)
+    }
+
+    private func contextMenuWillSendAction(_ notification: Notification) {
+        guard let item = contextMenuItem(from: notification),
+              item.target !== contextMenuDownloadHandler,
+              let kind = BrowserContextMenuDownloadKind.kind(for: item) else {
+            return
+        }
+
+        webViewLogger.info(
+            "context-menu willSendAction intercepted title=\(item.title, privacy: .public)"
+        )
+        contextMenuDownloadHandler?.performContextMenuDownload(kind, in: self)
+    }
+
+    private func contextMenuItem(from notification: Notification) -> NSMenuItem? {
+        if let item = notification.object as? NSMenuItem {
+            return item
+        }
+
+        if let values = notification.userInfo?.values {
+            for value in values {
+                if let item = value as? NSMenuItem {
+                    return item
+                }
+            }
+        }
+
+        guard let menu = notification.object as? NSMenu else {
+            return nil
+        }
+
+        if let highlightedItem = menu.highlightedItem {
+            return highlightedItem
+        }
+
+        if let index = notification.userInfo?["NSMenuItemIndex"] as? NSNumber {
+            let itemIndex = index.intValue
+            if menu.items.indices.contains(itemIndex) {
+                return menu.items[itemIndex]
+            }
+        }
+
+        return nil
+    }
+
+    private func isWebKitContextMenu(_ menu: NSMenu) -> Bool {
+        menu.items.contains { item in
+            item.identifier?.rawValue.hasPrefix("WKMenuItemIdentifier") == true
+                || item.submenu.map(isWebKitContextMenu(_:)) == true
+        }
     }
 }
 
@@ -965,13 +1188,13 @@ public struct WebViewHost: NSViewRepresentable {
                 return
             }
 
+            if navigationAction.shouldPerformDownload {
+                decisionHandler(shouldAllowWebDownload(from: url) ? .download : .cancel)
+                return
+            }
+
             switch securityPolicy.decision(for: url) {
             case .allowInWebView:
-                guard isActive || !navigationAction.shouldPerformDownload else {
-                    decisionHandler(.cancel)
-                    return
-                }
-
                 if shouldUpgradeNavigationAction(navigationAction, url: url),
                    let upgradedURL = securityPolicy.httpsUpgradeCandidate(for: url) {
                     beginHTTPSUpgrade(from: url, to: upgradedURL, in: webView)
@@ -980,7 +1203,7 @@ public struct WebViewHost: NSViewRepresentable {
                 }
 
                 publishSecurityMessage(securityPolicy.securityMessage(forAllowedWebURL: url))
-                decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
+                decisionHandler(.allow)
             case .requireExternalApplicationConfirmation:
                 requestConfirmation(.externalApplication, url: url, sourceURL: webView.url)
                 decisionHandler(.cancel)
@@ -998,12 +1221,12 @@ public struct WebViewHost: NSViewRepresentable {
             decidePolicyFor navigationResponse: WKNavigationResponse,
             decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void
         ) {
-            guard isActive || navigationResponse.canShowMIMEType else {
-                decisionHandler(.cancel)
+            if navigationResponse.canShowMIMEType {
+                decisionHandler(.allow)
                 return
             }
 
-            decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
+            decisionHandler(shouldAllowWebDownload(from: navigationResponse.response.url) ? .download : .cancel)
         }
 
         public func webView(
@@ -1011,7 +1234,10 @@ public struct WebViewHost: NSViewRepresentable {
             navigationAction: WKNavigationAction,
             didBecome download: WKDownload
         ) {
-            prepare(download, sourceURL: navigationAction.request.url)
+            prepare(
+                download,
+                sourceURL: downloadSourceURL(candidateURL: navigationAction.request.url, webView: webView)
+            )
         }
 
         public func webView(
@@ -1019,7 +1245,10 @@ public struct WebViewHost: NSViewRepresentable {
             navigationResponse: WKNavigationResponse,
             didBecome download: WKDownload
         ) {
-            prepare(download, sourceURL: navigationResponse.response.url ?? webView.url)
+            prepare(
+                download,
+                sourceURL: downloadSourceURL(candidateURL: navigationResponse.response.url, webView: webView)
+            )
         }
 
         public func download(
@@ -1041,6 +1270,9 @@ public struct WebViewHost: NSViewRepresentable {
                 sourceMetadata: sourceMetadata
             )
 
+            webViewLogger.info(
+                "download destination requested suggestedFilenameEmpty=\(suggestedFilename.isEmpty, privacy: .public) risk=\(String(describing: request.risk), privacy: .public)"
+            )
             publishSecurityMessage(request.pendingMessage)
             callbacks.onDownloadConfirmationRequired(request) { [weak self] destinationURL in
                 guard let self else {
@@ -1049,6 +1281,7 @@ public struct WebViewHost: NSViewRepresentable {
                 }
 
                 if let destinationURL {
+                    webViewLogger.info("download destination approved")
                     self.downloadDestinations[identifier] = destinationURL
                     self.downloadSourceMetadata[identifier] = sourceMetadata
                     self.downloadRequests[identifier] = request
@@ -1057,6 +1290,7 @@ public struct WebViewHost: NSViewRepresentable {
                         download?.cancel { _ in }
                     }
                 } else {
+                    webViewLogger.info("download destination canceled")
                     self.cleanup(download)
                 }
 
@@ -1075,6 +1309,7 @@ public struct WebViewHost: NSViewRepresentable {
                     to: destinationURL,
                     sourceMetadata: sourceMetadata
                 )
+                webViewLogger.info("download finished quarantine=\(didApplyQuarantine, privacy: .public)")
                 if let request {
                     callbacks.onDownloadFinished(request.id, destinationURL, didApplyQuarantine)
                 }
@@ -1101,6 +1336,7 @@ public struct WebViewHost: NSViewRepresentable {
             if let request = downloadRequests[ObjectIdentifier(download)] {
                 callbacks.onDownloadFailed(request.id, "Download failed.")
             }
+            webViewLogger.info("download failed")
             publishSecurityMessage("Download failed.")
             cleanup(download)
         }
@@ -1122,7 +1358,7 @@ public struct WebViewHost: NSViewRepresentable {
                 return
             }
 
-            switch securityPolicy.decision(for: url) {
+            switch securityPolicy.decision(forWebDownloadURL: url) {
             case .allowInWebView:
                 publishSecurityMessage(securityPolicy.securityMessage(forAllowedWebURL: url))
                 downloadSourceMetadata[ObjectIdentifier(download)] = downloadSafetyPolicy.sourceMetadata(from: url)
@@ -1141,7 +1377,7 @@ public struct WebViewHost: NSViewRepresentable {
             didReceive challenge: URLAuthenticationChallenge,
             completionHandler: @escaping @MainActor @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
         ) {
-            completionHandler(.rejectProtectionSpace, nil)
+            completionHandler(.performDefaultHandling, nil)
         }
 
         public func webView(
@@ -1203,32 +1439,121 @@ public struct WebViewHost: NSViewRepresentable {
                 return
             }
 
-            contextMenuDownloadTarget = BrowserContextMenuDownloadTarget(messageBody: message.body)
+            let target = BrowserContextMenuDownloadTarget(messageBody: message.body)
+            contextMenuDownloadTarget = target
+            webViewLogger.info(
+                "context-menu script target image=\(target.imageURL != nil, privacy: .public) link=\(target.linkURL != nil, privacy: .public) point=\(target.clientPoint != nil, privacy: .public)"
+            )
+        }
+
+        func prepareContextMenu(for event: NSEvent, in webView: WKWebView) {
+            contextMenuWebView = webView
+            let viewPoint = webView.convert(event.locationInWindow, from: nil)
+            contextMenuDownloadTarget.clientPoint = CGPoint(
+                x: viewPoint.x,
+                y: max(0, webView.bounds.height - viewPoint.y)
+            )
+            webViewLogger.info(
+                "context-menu prepared point x=\(Double(viewPoint.x), privacy: .public) y=\(Double(viewPoint.y), privacy: .public)"
+            )
         }
 
         func configureContextMenu(_ menu: NSMenu?, in webView: WKWebView) {
             contextMenuWebView = webView
-            configureContextMenuItems(in: menu?.items)
-        }
-
-        private func configureContextMenuItems(in items: [NSMenuItem]?) {
-            guard let items else {
+            guard let menu else {
                 return
             }
 
-            for item in items {
-                if let kind = BrowserContextMenuDownloadKind.kind(for: item) {
-                    item.target = self
-                    switch kind {
-                    case .image:
-                        item.action = #selector(downloadContextMenuImage(_:))
-                    case .linkedFile:
-                        item.action = #selector(downloadContextMenuLinkedFile(_:))
-                    }
-                }
+            installDownloadContextMenuItems(in: menu)
+        }
 
-                configureContextMenuItems(in: item.submenu?.items)
+        func performContextMenuDownload(_ kind: BrowserContextMenuDownloadKind, in webView: WKWebView) {
+            contextMenuWebView = webView
+            startContextMenuDownload(kind)
+        }
+
+        private func installDownloadContextMenuItems(in menu: NSMenu) {
+            let removedItems = removeDownloadContextMenuItems(from: menu)
+            let removedKinds = Set(removedItems.kinds)
+            webViewLogger.info(
+                "context-menu download install removed=\(removedKinds.debugDescription, privacy: .public) image=\(self.contextMenuDownloadTarget.imageURL != nil, privacy: .public) link=\(self.contextMenuDownloadTarget.linkURL != nil, privacy: .public)"
+            )
+            guard contextMenuDownloadTarget.imageURL != nil
+                    || contextMenuDownloadTarget.linkURL != nil
+                    || !removedKinds.isEmpty else {
+                webViewLogger.info("context-menu download install skipped")
+                return
             }
+
+            let insertionIndex = removedItems.firstIndex ?? 0
+            var replacementItems: [NSMenuItem] = []
+            if contextMenuDownloadTarget.imageURL != nil || removedKinds.contains(.image) {
+                replacementItems.append(downloadContextMenuItem(
+                    title: "Download Image",
+                    action: #selector(downloadContextMenuImage(_:))
+                ))
+            }
+            if shouldInstallLinkedFileMenuItem(removedKinds: removedKinds) {
+                replacementItems.append(downloadContextMenuItem(
+                    title: "Download Linked File",
+                    action: #selector(downloadContextMenuLinkedFile(_:))
+                ))
+            }
+
+            guard !replacementItems.isEmpty else {
+                webViewLogger.info("context-menu download replacement empty")
+                return
+            }
+
+            let boundedIndex = min(insertionIndex, menu.items.count)
+            for (offset, item) in replacementItems.enumerated() {
+                menu.insertItem(item, at: boundedIndex + offset)
+            }
+
+            let separatorIndex = boundedIndex + replacementItems.count
+            if separatorIndex < menu.items.count,
+               !menu.items[separatorIndex].isSeparatorItem {
+                menu.insertItem(.separator(), at: separatorIndex)
+            }
+            webViewLogger.info(
+                "context-menu download replacement inserted count=\(replacementItems.count, privacy: .public) index=\(boundedIndex, privacy: .public)"
+            )
+        }
+
+        private func shouldInstallLinkedFileMenuItem(removedKinds: Set<BrowserContextMenuDownloadKind>) -> Bool {
+            if let linkURL = contextMenuDownloadTarget.linkURL {
+                return linkURL != contextMenuDownloadTarget.imageURL
+            }
+
+            return removedKinds.contains(.linkedFile)
+        }
+
+        @discardableResult
+        private func removeDownloadContextMenuItems(
+            from menu: NSMenu
+        ) -> (firstIndex: Int?, kinds: [BrowserContextMenuDownloadKind]) {
+            var firstRemovedIndex: Int?
+            var removedKinds: [BrowserContextMenuDownloadKind] = []
+            for index in menu.items.indices.reversed() {
+                let item = menu.items[index]
+                if let submenu = item.submenu {
+                    let submenuResult = removeDownloadContextMenuItems(from: submenu)
+                    removedKinds.append(contentsOf: submenuResult.kinds)
+                }
+                if let kind = BrowserContextMenuDownloadKind.kind(for: item) {
+                    firstRemovedIndex = index
+                    removedKinds.append(kind)
+                    menu.removeItem(at: index)
+                }
+            }
+            return (firstRemovedIndex, removedKinds)
+        }
+
+        private func downloadContextMenuItem(title: String, action: Selector) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.isEnabled = true
+            return item
         }
 
         @objc private func downloadContextMenuImage(_ sender: NSMenuItem) {
@@ -1241,36 +1566,118 @@ public struct WebViewHost: NSViewRepresentable {
 
         private func startContextMenuDownload(_ kind: BrowserContextMenuDownloadKind) {
             guard isActive else {
-                return
-            }
-
-            let targetURL: URL?
-            switch kind {
-            case .image:
-                targetURL = contextMenuDownloadTarget.imageURL
-            case .linkedFile:
-                targetURL = contextMenuDownloadTarget.linkURL
-            }
-
-            guard let targetURL else {
-                publishSecurityMessage("No downloadable URL was found for this menu item.")
+                webViewLogger.info("context-menu download action ignored inactive")
                 return
             }
 
             guard let webView = contextMenuWebView else {
+                webViewLogger.info("context-menu download action missing webView kind=\(String(describing: kind), privacy: .public)")
                 publishSecurityMessage("Download could not start because the web view is unavailable.")
                 return
             }
 
-            switch securityPolicy.decision(for: targetURL) {
+            webViewLogger.info(
+                "context-menu download action kind=\(String(describing: kind), privacy: .public) cachedImage=\(self.contextMenuDownloadTarget.imageURL != nil, privacy: .public) cachedLink=\(self.contextMenuDownloadTarget.linkURL != nil, privacy: .public) point=\(self.contextMenuDownloadTarget.clientPoint != nil, privacy: .public)"
+            )
+            resolveContextMenuDownloadURL(kind, in: webView) { [weak self, weak webView] targetURL in
+                guard let self,
+                      let webView else {
+                    return
+                }
+
+                guard let targetURL else {
+                    webViewLogger.info("context-menu download resolved nil kind=\(String(describing: kind), privacy: .public)")
+                    self.publishSecurityMessage("No downloadable URL was found for this menu item.")
+                    return
+                }
+
+                self.startDownload(targetURL, from: webView)
+            }
+        }
+
+        private func resolveContextMenuDownloadURL(
+            _ kind: BrowserContextMenuDownloadKind,
+            in webView: WKWebView,
+            completion: @escaping @MainActor (URL?) -> Void
+        ) {
+            let cachedTarget = contextMenuDownloadTarget
+            let cachedURL = downloadURL(for: kind, in: cachedTarget)
+            guard let point = cachedTarget.clientPoint,
+                  point.x.isFinite,
+                  point.y.isFinite else {
+                webViewLogger.info(
+                    "context-menu resolve using cached URL kind=\(String(describing: kind), privacy: .public) hasURL=\(cachedURL != nil, privacy: .public)"
+                )
+                completion(cachedURL)
+                return
+            }
+
+            webViewLogger.info(
+                "context-menu resolve evaluating point kind=\(String(describing: kind), privacy: .public) cachedURL=\(cachedURL != nil, privacy: .public)"
+            )
+            let script = """
+            (() => {
+                const resolver = window.__meridianContextTargetForPoint;
+                return resolver ? resolver(\(Double(point.x)), \(Double(point.y))) : null;
+            })()
+            """
+            webView.evaluateJavaScript(script) { [weak self] result, _ in
+                Task { @MainActor [weak self] in
+                    guard let self else {
+                        completion(cachedURL)
+                        return
+                    }
+
+                    let resolvedTarget = BrowserContextMenuDownloadTarget(messageBody: result as Any)
+                    webViewLogger.info(
+                        "context-menu resolve result image=\(resolvedTarget.imageURL != nil, privacy: .public) link=\(resolvedTarget.linkURL != nil, privacy: .public)"
+                    )
+                    if resolvedTarget.imageURL != nil || resolvedTarget.linkURL != nil {
+                        self.contextMenuDownloadTarget = resolvedTarget
+                        completion(self.downloadURL(for: kind, in: resolvedTarget) ?? cachedURL)
+                    } else {
+                        completion(cachedURL)
+                    }
+                }
+            }
+        }
+
+        private func downloadURL(
+            for kind: BrowserContextMenuDownloadKind,
+            in target: BrowserContextMenuDownloadTarget
+        ) -> URL? {
+            switch kind {
+            case .image:
+                return target.imageURL
+            case .linkedFile:
+                return target.linkURL
+            }
+        }
+
+        private func startDownload(_ targetURL: URL, from webView: WKWebView) {
+            switch securityPolicy.decision(forWebDownloadURL: targetURL) {
             case .allowInWebView:
-                publishSecurityMessage(securityPolicy.securityMessage(forAllowedWebURL: targetURL))
+                webViewLogger.info(
+                    "context-menu startDownload allowed scheme=\(targetURL.scheme ?? "none", privacy: .public)"
+                )
+                publishSecurityMessage(
+                    securityPolicy.securityMessage(forAllowedWebURL: targetURL)
+                        ?? "Preparing download..."
+                )
                 webView.startDownload(using: URLRequest(url: targetURL)) { [weak self] download in
-                    self?.prepare(download, sourceURL: targetURL)
+                    guard let self else {
+                        return
+                    }
+                    self.prepare(
+                        download,
+                        sourceURL: self.downloadSourceURL(candidateURL: targetURL, webView: webView)
+                    )
                 }
             case .requireExternalApplicationConfirmation, .requireLocalFileConfirmation:
+                webViewLogger.info("context-menu startDownload blocked external-or-file")
                 publishSecurityMessage("Download was blocked because it left the web download flow.")
             case .block(let reason):
+                webViewLogger.info("context-menu startDownload blocked reason=\(reason, privacy: .public)")
                 publishSecurityMessage(reason)
             }
         }
@@ -1323,6 +1730,43 @@ public struct WebViewHost: NSViewRepresentable {
                 downloadSourceMetadata.removeValue(forKey: identifier)
             }
             download.delegate = self
+            webViewLogger.info("download prepared source=\(sourceURL != nil, privacy: .public)")
+        }
+
+        private func shouldAllowWebDownload(from url: URL?) -> Bool {
+            guard isActive else {
+                return false
+            }
+
+            guard let url else {
+                publishSecurityMessage("Download was blocked because it did not include a URL.")
+                return false
+            }
+
+            switch securityPolicy.decision(forWebDownloadURL: url) {
+            case .allowInWebView:
+                publishSecurityMessage(securityPolicy.securityMessage(forAllowedWebURL: url))
+                return true
+            case .requireExternalApplicationConfirmation, .requireLocalFileConfirmation:
+                publishSecurityMessage("Download was blocked because it left the web download flow.")
+                return false
+            case .block(let reason):
+                publishSecurityMessage(reason)
+                return false
+            }
+        }
+
+        private func downloadSourceURL(candidateURL: URL?, webView: WKWebView) -> URL? {
+            guard let candidateURL else {
+                return webView.url
+            }
+
+            switch candidateURL.scheme?.lowercased() {
+            case "blob", "data":
+                return webView.url ?? candidateURL
+            default:
+                return candidateURL
+            }
         }
 
         private func cleanup(_ download: WKDownload) {
