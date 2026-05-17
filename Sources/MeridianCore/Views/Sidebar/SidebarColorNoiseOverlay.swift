@@ -3,12 +3,11 @@ import SwiftUI
 
 struct SidebarColorNoiseOverlay<ClipShape: Shape>: View {
     let level: Double
-    let scale: Double
     let shape: ClipShape
 
     var body: some View {
         let opacity = SidebarGlassRendering.colorNoiseOpacity(forLevel: level)
-        let cellSize = SidebarGlassRendering.colorNoiseTextureCellSize(forScale: scale)
+        let cellSize = SidebarGlassRendering.colorNoiseTextureCellSize()
 
         if opacity > 0,
            let texture = SidebarColorNoiseTextureCache.image(cellSize: cellSize) {

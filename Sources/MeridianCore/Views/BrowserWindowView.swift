@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WebKit
 
 private let sidebarRevealHotZoneWidth: CGFloat = 8
 
@@ -21,12 +22,22 @@ public struct BrowserWindowView: View {
     @ObservedObject private var store: BrowserStore
     @StateObject private var webViewState = WebViewState()
     @StateObject private var webViewRegistry = BrowserWebViewRegistry()
+    @StateObject private var contentPresentationState = BrowserContentPresentationState()
     @AppStorage(BrowserSidebarSizing.widthStorageKey) private var storedSidebarWidth = BrowserSidebarSizing.defaultWidth
     @State private var sidebarResizeStartWidth: CGFloat?
     @State private var sidebarResizeLiveWidth: CGFloat?
+    @State private var sidebarChromeTheme: SidebarChromeTheme?
     private let dataStoreProvider = ProfileWebsiteDataStoreProvider()
     private let floatingSidebarInset: CGFloat = 8
     private let floatingSidebarCornerRadius: CGFloat = 12
+    private var sidebarVisibilityAnimation: Animation {
+        .interpolatingSpring(
+            mass: 0.82,
+            stiffness: 430,
+            damping: 44,
+            initialVelocity: 0
+        )
+    }
     private var sidebarPinnedStateAnimation: Animation {
         .smooth(duration: 0.24, extraBounce: 0)
     }
@@ -78,7 +89,7 @@ public struct BrowserWindowView: View {
                 }
             }
             .animation(.snappy(duration: 0.16), value: store.isCommandBarPresented)
-            .animation(.snappy(duration: 0.16), value: store.sidebarIsVisible)
+            .animation(sidebarVisibilityAnimation, value: store.sidebarIsVisible)
             .animation(sidebarPinnedStateAnimation, value: store.sidebarIsLockedOpen)
             .onAppear {
                 normalizeStoredSidebarWidth()
@@ -123,10 +134,13 @@ public struct BrowserWindowView: View {
                 .padding(sidebarPaddingEdge, store.sidebarIsLockedOpen ? sidebarReservedWidth : 0)
                 .zIndex(0)
 
-            if sidebarShouldBeMounted {
-                sidebarOverlay
-                    .zIndex(2)
-            } else {
+            sidebarOverlay
+                .offset(x: sidebarVisibilityOffset)
+                .opacity(sidebarVisibilityOpacity)
+                .allowsHitTesting(sidebarShouldBeMounted)
+                .zIndex(2)
+
+            if !sidebarShouldBeMounted {
                 SidebarRevealZone {
                     store.revealSidebar()
                 }
@@ -143,8 +157,10 @@ public struct BrowserWindowView: View {
         BrowserContentView(
             store: store,
             webViewState: webViewState,
+            presentationState: contentPresentationState,
             webViewRegistry: webViewRegistry,
-            dataStoreProvider: dataStoreProvider
+            dataStoreProvider: dataStoreProvider,
+            webContentMouseExclusionRegion: webContentMouseExclusionRegion
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -154,7 +170,7 @@ public struct BrowserWindowView: View {
         sidebarShell
             .background(
                 Group {
-                    if !store.sidebarIsLockedOpen {
+                    if store.sidebarIsVisible && !store.sidebarIsLockedOpen {
                         SidebarExitTrackingZone(
                             dismissalIsSuspended: sidebarResizeStartWidth != nil
                         ) {
@@ -164,7 +180,6 @@ public struct BrowserWindowView: View {
                 }
                 .accessibilityHidden(true)
             )
-            .transition(.move(edge: sidebarTransitionEdge).combined(with: .opacity))
     }
 
     private var sidebarShell: some View {
@@ -175,11 +190,12 @@ public struct BrowserWindowView: View {
     }
 
     private var sidebar: some View {
-        let shape = RoundedRectangle(cornerRadius: sidebarCornerRadius, style: .continuous)
+        let shape = sidebarShape
         let pinnedOpacity = Double(sidebarPinnedProgress)
         let floatingOpacity = Double(sidebarFloatingProgress)
-        let appearance = selectedSidebarAppearance
-        let tintColor = selectedSidebarTintColor
+        let chromeTheme = sidebarChromeTheme ?? selectedSidebarChromeTheme
+        let appearance = chromeTheme.appearance
+        let tintColor = Color(hex: chromeTheme.tintHex)
         let floatingSettings = appearance.base
         let pinnedSettings = appearance.pinnedSettings
 
@@ -193,19 +209,16 @@ public struct BrowserWindowView: View {
 
             SidebarView(
                 store: store,
-                webViewState: webViewState
+                webViewState: webViewState,
+                presentationState: contentPresentationState,
+                updateSidebarChromeTheme: { sidebarChromeTheme = $0 }
             )
         }
         .frame(maxHeight: .infinity)
         .clipShape(shape)
         .overlay {
-            ZStack {
-                pinnedSidebarSeparator(opacity: pinnedSettings.edgeOpacity)
-                    .opacity(pinnedOpacity)
-
-                shape.stroke(.separator.opacity(floatingSettings.edgeOpacity), lineWidth: 0.5)
-                    .opacity(floatingOpacity)
-            }
+            shape.stroke(.separator.opacity(floatingSettings.edgeOpacity), lineWidth: 0.5)
+                .opacity(floatingOpacity)
         }
         .shadow(
             color: tintColor.opacity(SidebarGlassRendering.shadowOpacity(for: floatingSettings) * floatingOpacity),
@@ -220,14 +233,14 @@ public struct BrowserWindowView: View {
     private func pinnedSidebarChrome(
         settings: SidebarGlassSettings,
         tintColor: Color,
-        shape: RoundedRectangle
+        shape: UnevenRoundedRectangle
     ) -> some View {
         sidebarGlassMaterial(shape: shape, tintColor: tintColor, settings: settings)
             .allowsHitTesting(false)
     }
 
     private func sidebarGlassMaterial(
-        shape: RoundedRectangle,
+        shape: UnevenRoundedRectangle,
         tintColor: Color,
         settings: SidebarGlassSettings
     ) -> some View {
@@ -241,14 +254,13 @@ public struct BrowserWindowView: View {
             .overlay {
                 SidebarColorNoiseOverlay(
                     level: settings.colorNoiseLevel,
-                    scale: settings.colorNoiseScale,
                     shape: shape
                 )
             }
     }
 
     private func sidebarTintOverlay(
-        shape: RoundedRectangle,
+        shape: UnevenRoundedRectangle,
         tintColor: Color,
         settings: SidebarGlassSettings
     ) -> some View {
@@ -275,37 +287,28 @@ public struct BrowserWindowView: View {
         .allowsHitTesting(false)
     }
 
-    private func pinnedSidebarSeparator(opacity: Double) -> some View {
-        HStack(spacing: 0) {
-            if store.sidebarRevealEdge == .right {
-                Rectangle()
-                    .fill(.separator.opacity(opacity))
-                    .frame(width: 0.5)
-                Spacer(minLength: 0)
-            } else {
-                Spacer(minLength: 0)
-                Rectangle()
-                    .fill(.separator.opacity(opacity))
-                    .frame(width: 0.5)
-            }
+    private var selectedSidebarChromeTheme: SidebarChromeTheme {
+        guard let selectedSpace = store.selectedSpace else {
+            return .standard
         }
-        .allowsHitTesting(false)
-    }
 
-    private var selectedSidebarAppearance: SidebarAppearance {
-        store.selectedSpace?.sidebarAppearance ?? .standard
-    }
-
-    private var selectedSidebarTintColor: Color {
-        Color(hex: selectedSidebarAppearance.tintHex(forSpaceColorHex: store.selectedSpace?.colorHex ?? "#4F7CAC"))
+        return SidebarChromeTheme.theme(for: selectedSpace)
     }
 
     private var sidebarOuterInset: CGFloat {
         store.sidebarIsLockedOpen ? 0 : floatingSidebarInset
     }
 
-    private var sidebarCornerRadius: CGFloat {
-        store.sidebarIsLockedOpen ? 0 : floatingSidebarCornerRadius
+    private var sidebarShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(cornerRadii: sidebarCornerRadii.rectangleCornerRadii, style: .continuous)
+    }
+
+    private var sidebarCornerRadii: SidebarChromeCornerRadii {
+        SidebarChromeCornerRadii.resolved(
+            isPinned: store.sidebarIsLockedOpen,
+            edge: store.sidebarRevealEdge,
+            radius: floatingSidebarCornerRadius
+        )
     }
 
     private var sidebarPinnedProgress: CGFloat {
@@ -375,6 +378,41 @@ public struct BrowserWindowView: View {
         store.sidebarIsLockedOpen || store.sidebarIsVisible
     }
 
+    private var sidebarVisibilityOpacity: Double {
+        sidebarShouldBeMounted ? 1 : 0
+    }
+
+    private var sidebarVisibilityOffset: CGFloat {
+        guard !sidebarShouldBeMounted else {
+            return 0
+        }
+
+        let hiddenTravel = sidebarWidth + sidebarOuterInset
+        switch store.sidebarRevealEdge {
+        case .left:
+            return -hiddenTravel
+        case .right:
+            return hiddenTravel
+        }
+    }
+
+    private var floatingSidebarShouldBlockWebContent: Bool {
+        sidebarShouldBeMounted && !store.sidebarIsLockedOpen
+    }
+
+    private var webContentMouseExclusionRegion: WebContentMouseExclusionRegion? {
+        guard floatingSidebarShouldBlockWebContent else {
+            return nil
+        }
+
+        return WebContentMouseExclusionRegion(
+            edge: store.sidebarRevealEdge,
+            width: sidebarWidth,
+            inset: sidebarOuterInset,
+            cornerRadius: sidebarCornerRadii.maximumRadius
+        )
+    }
+
     private var sidebarPaddingEdge: Edge.Set {
         switch store.sidebarRevealEdge {
         case .left:
@@ -393,15 +431,6 @@ public struct BrowserWindowView: View {
         }
     }
 
-    private var sidebarTransitionEdge: Edge {
-        switch store.sidebarRevealEdge {
-        case .left:
-            return .leading
-        case .right:
-            return .trailing
-        }
-    }
-
     private var ignoredContentSafeAreaEdges: Edge.Set {
         .top
     }
@@ -410,11 +439,23 @@ public struct BrowserWindowView: View {
         BrowserNavigationCommandContext(
             canGoBack: webViewState.canGoBack,
             canGoForward: webViewState.canGoForward,
-            canReload: store.activeTab?.content.isWeb == true && store.activeTab?.url != nil,
+            canReload: commandTargetTab?.content.isWeb == true && commandTargetTab?.url != nil,
             canStopLoading: webViewState.isLoading
         ) { command in
-            webViewState.dispatch(command, targetTabID: store.selectedTabID)
+            webViewState.dispatch(command, targetTabID: commandTargetTabID)
         }
+    }
+
+    private var commandTargetTabID: TabID? {
+        contentPresentationState.activeContentTabID ?? store.selectedTabID
+    }
+
+    private var commandTargetTab: BrowserTab? {
+        guard let commandTargetTabID else {
+            return nil
+        }
+
+        return store.tabs.first { $0.id == commandTargetTabID }
     }
 
     private var pendingURLConfirmationIsPresented: Binding<Bool> {
@@ -713,6 +754,191 @@ private struct SidebarExitTrackingZone: NSViewRepresentable {
         nsView.dismissalIsSuspended = dismissalIsSuspended
         nsView.dismiss = dismiss
         nsView.startPointerTimerIfNeeded()
+    }
+}
+
+private struct SidebarHitTestShield: NSViewRepresentable {
+    let cornerRadius: CGFloat
+
+    func makeNSView(context: Context) -> SidebarHitTestShieldNSView {
+        SidebarHitTestShieldNSView()
+    }
+
+    func updateNSView(_ nsView: SidebarHitTestShieldNSView, context: Context) {
+        nsView.cornerRadius = cornerRadius
+        nsView.window?.acceptsMouseMovedEvents = true
+        nsView.installEventMonitorIfNeeded()
+    }
+}
+
+final class SidebarHitTestShieldNSView: NSView {
+    private var hoverTrackingArea: NSTrackingArea?
+    private var eventMonitor: Any?
+
+    var cornerRadius: CGFloat = 0 {
+        didSet {
+            needsDisplay = true
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.acceptsMouseMovedEvents = true
+        installEventMonitorIfNeeded()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil, let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+            self.hoverTrackingArea = nil
+        }
+        removeEventMonitor()
+    }
+
+    deinit {
+        MainActor.assumeIsolated {
+            removeEventMonitor()
+        }
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard hitRegionContains(point) else {
+            return nil
+        }
+
+        return self
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .arrow)
+    }
+
+    override func updateTrackingAreas() {
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .inVisibleRect, .mouseEnteredAndExited, .mouseMoved, .cursorUpdate],
+            owner: self
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+        super.updateTrackingAreas()
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    func installEventMonitorIfNeeded() {
+        guard eventMonitor == nil else {
+            return
+        }
+
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [
+            .leftMouseDown,
+            .leftMouseDragged,
+            .leftMouseUp,
+            .rightMouseDown,
+            .rightMouseDragged,
+            .rightMouseUp,
+            .otherMouseDown,
+            .otherMouseDragged,
+            .otherMouseUp,
+            .mouseMoved,
+            .scrollWheel,
+            .cursorUpdate
+        ]) { [weak self] event in
+            self?.handle(event) ?? event
+        }
+    }
+
+    func hitRegionContains(_ point: NSPoint) -> Bool {
+        guard bounds.contains(point) else {
+            return false
+        }
+
+        guard cornerRadius > 0 else {
+            return true
+        }
+
+        return NSBezierPath(
+            roundedRect: bounds,
+            xRadius: cornerRadius,
+            yRadius: cornerRadius
+        )
+        .contains(point)
+    }
+
+    func shouldSuppressWebContentEvent(localPoint: NSPoint, targetView: NSView?) -> Bool {
+        hitRegionContains(localPoint) && targetView.map(Self.viewBelongsToWebContent) == true
+    }
+
+    private func removeEventMonitor() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+    }
+
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        guard let window, event.window === window else {
+            return event
+        }
+
+        let localPoint = convert(event.locationInWindow, from: nil)
+        guard hitRegionContains(localPoint) else {
+            return event
+        }
+
+        NSCursor.arrow.set()
+
+        let targetView = eventTarget(in: window, at: event.locationInWindow)
+        return shouldSuppressWebContentEvent(localPoint: localPoint, targetView: targetView) ? nil : event
+    }
+
+    private func eventTarget(in window: NSWindow, at windowPoint: NSPoint) -> NSView? {
+        guard let contentView = window.contentView else {
+            return nil
+        }
+
+        return contentView.hitTest(contentView.convert(windowPoint, from: nil))
+    }
+
+    private static func viewBelongsToWebContent(_ view: NSView) -> Bool {
+        var candidate: NSView? = view
+        while let current = candidate {
+            if current is WKWebView {
+                return true
+            }
+            candidate = current.superview
+        }
+
+        return false
     }
 }
 

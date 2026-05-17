@@ -1,9 +1,28 @@
 import Foundation
 @testable import MeridianCore
+import WebKit
 import XCTest
 
 @MainActor
 final class BrowserWebViewRegistryTests: XCTestCase {
+    func testContainerKeepsOnlyActiveWebViewMountedDuringSwitch() {
+        let container = BrowserWebViewContainerView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        let firstWebView = WKWebView()
+        let secondWebView = WKWebView()
+
+        container.attach(firstWebView)
+        container.attach(secondWebView)
+
+        XCTAssertNil(firstWebView.superview)
+        XCTAssertTrue(secondWebView.superview === container)
+        XCTAssertEqual(secondWebView.alphaValue, 1)
+
+        container.deactivateActiveWebView()
+
+        XCTAssertNil(firstWebView.superview)
+        XCTAssertNil(secondWebView.superview)
+    }
+
     func testRegistryReusesSessionForSameTab() {
         let fixture = RegistryFixture()
         let registry = BrowserWebViewRegistry(capacity: 8)
@@ -186,6 +205,7 @@ final class BrowserWebViewRegistryTests: XCTestCase {
         XCTAssertEqual(secondSession.profileID, workProfile.id)
         XCTAssertEqual(registry.liveSessionCount, 1)
     }
+
 }
 
 @MainActor
@@ -194,9 +214,10 @@ private struct RegistryFixture {
     let spaceID = UUID()
     let dataStoreProvider = ProfileWebsiteDataStoreProvider()
 
-    func tab(title: String) -> BrowserTab {
+    func tab(title: String, url: URL? = nil) -> BrowserTab {
         BrowserTab(
             title: title,
+            url: url,
             parentSpaceID: spaceID,
             profileID: profile.id
         )

@@ -9,13 +9,192 @@ private let webViewLogger = Logger(
     category: "WebView"
 )
 
+private enum BrowserContextMenuScript {
+    static let messageHandlerName = "meridianContextMenuTarget"
+
+    static let source = """
+    (() => {
+        if (window.__meridianContextMenuTargetInstalled) {
+            return;
+        }
+        window.__meridianContextMenuTargetInstalled = true;
+
+        const absoluteURL = value => {
+            if (!value || typeof value !== "string") {
+                return null;
+            }
+            try {
+                return new URL(value, document.baseURI).href;
+            } catch {
+                return null;
+            }
+        };
+
+        const elementFor = node => {
+            if (!node) {
+                return null;
+            }
+            return node instanceof Element ? node : node.parentElement;
+        };
+
+        const imageURLFor = node => {
+            let candidate = elementFor(node);
+            while (candidate && candidate !== document) {
+                if (candidate instanceof HTMLImageElement) {
+                    return absoluteURL(candidate.currentSrc || candidate.src);
+                }
+                if (candidate instanceof SVGImageElement) {
+                    return absoluteURL(candidate.href && candidate.href.baseVal);
+                }
+                candidate = candidate.parentElement;
+            }
+            return null;
+        };
+
+        document.addEventListener("contextmenu", event => {
+            const target = event.target;
+            const element = elementFor(target);
+            const link = element && element.closest ? element.closest("a[href]") : null;
+            window.webkit.messageHandlers.\(messageHandlerName).postMessage({
+                imageURL: imageURLFor(target),
+                linkURL: link ? absoluteURL(link.getAttribute("href")) : null,
+                pageURL: absoluteURL(window.location.href)
+            });
+        }, true);
+    })();
+    """
+}
+
+struct BrowserContextMenuDownloadTarget: Equatable {
+    var imageURL: URL?
+    var linkURL: URL?
+    var pageURL: URL?
+
+    init(imageURL: URL? = nil, linkURL: URL? = nil, pageURL: URL? = nil) {
+        self.imageURL = imageURL
+        self.linkURL = linkURL
+        self.pageURL = pageURL
+    }
+
+    init(messageBody: Any) {
+        let body = messageBody as? [String: Any]
+        imageURL = Self.url(from: body?["imageURL"])
+        linkURL = Self.url(from: body?["linkURL"])
+        pageURL = Self.url(from: body?["pageURL"])
+    }
+
+    private static func url(from value: Any?) -> URL? {
+        guard let string = value as? String,
+              let url = URL(string: string) else {
+            return nil
+        }
+
+        return url
+    }
+}
+
+enum BrowserContextMenuDownloadKind {
+    case image
+    case linkedFile
+
+    private static let legacyDownloadLinkToDiskTag = 2
+    private static let legacyDownloadImageToDiskTag = 5
+
+    static func kind(for item: NSMenuItem) -> BrowserContextMenuDownloadKind? {
+        switch item.tag {
+        case legacyDownloadImageToDiskTag:
+            return .image
+        case legacyDownloadLinkToDiskTag:
+            return .linkedFile
+        default:
+            break
+        }
+
+        let normalizedTitle = item.title.lowercased()
+        if normalizedTitle.contains("download image") || normalizedTitle.contains("save image") {
+            return .image
+        }
+        if normalizedTitle.contains("download linked file") || normalizedTitle.contains("download link") {
+            return .linkedFile
+        }
+
+        return nil
+    }
+}
+
 @MainActor
 struct BrowserWebViewCallbacks {
     var onStateChange: @MainActor (String?, URL?, Bool, String?) -> Void
     var onSecurityMessage: @MainActor (String) -> Void
     var onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
     var onDownloadConfirmationRequired: @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
+    var onDownloadStarted: @MainActor (DownloadConfirmationRequest, URL, @escaping @MainActor () -> Void) -> Void
+    var onDownloadProgress: @MainActor (UUID, Double?) -> Void
+    var onDownloadFinished: @MainActor (UUID, URL?, Bool) -> Void
+    var onDownloadFailed: @MainActor (UUID, String) -> Void
     var onSitePermissionRequest: @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
+    var onSnapshot: @MainActor (NSImage) -> Void
+
+    init(
+        onStateChange: @escaping @MainActor (String?, URL?, Bool, String?) -> Void,
+        onSecurityMessage: @escaping @MainActor (String) -> Void,
+        onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void,
+        onDownloadConfirmationRequired: @escaping @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void,
+        onDownloadStarted: @escaping @MainActor (DownloadConfirmationRequest, URL, @escaping @MainActor () -> Void) -> Void = { _, _, _ in },
+        onDownloadProgress: @escaping @MainActor (UUID, Double?) -> Void = { _, _ in },
+        onDownloadFinished: @escaping @MainActor (UUID, URL?, Bool) -> Void = { _, _, _ in },
+        onDownloadFailed: @escaping @MainActor (UUID, String) -> Void = { _, _ in },
+        onSitePermissionRequest: @escaping @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation,
+        onSnapshot: @escaping @MainActor (NSImage) -> Void = { _ in }
+    ) {
+        self.onStateChange = onStateChange
+        self.onSecurityMessage = onSecurityMessage
+        self.onURLConfirmationRequired = onURLConfirmationRequired
+        self.onDownloadConfirmationRequired = onDownloadConfirmationRequired
+        self.onDownloadStarted = onDownloadStarted
+        self.onDownloadProgress = onDownloadProgress
+        self.onDownloadFinished = onDownloadFinished
+        self.onDownloadFailed = onDownloadFailed
+        self.onSitePermissionRequest = onSitePermissionRequest
+        self.onSnapshot = onSnapshot
+    }
+}
+
+public struct WebContentMouseExclusionRegion: Equatable, Sendable {
+    public var edge: SidebarRevealEdge
+    public var width: CGFloat
+    public var inset: CGFloat
+    public var cornerRadius: CGFloat
+
+    public init(
+        edge: SidebarRevealEdge,
+        width: CGFloat,
+        inset: CGFloat,
+        cornerRadius: CGFloat
+    ) {
+        self.edge = edge
+        self.width = width
+        self.inset = inset
+        self.cornerRadius = cornerRadius
+    }
+
+    func frame(in bounds: CGRect) -> CGRect {
+        let clampedWidth = min(max(width, 0), max(0, bounds.width - inset * 2))
+        let clampedHeight = max(0, bounds.height - inset * 2)
+        let x = switch edge {
+        case .left:
+            bounds.minX + inset
+        case .right:
+            bounds.maxX - inset - clampedWidth
+        }
+
+        return CGRect(
+            x: x,
+            y: bounds.minY + inset,
+            width: clampedWidth,
+            height: clampedHeight
+        )
+    }
 }
 
 @MainActor
@@ -96,6 +275,8 @@ public final class BrowserWebViewRegistry: ObservableObject {
                 securityPolicy: securityPolicy,
                 downloadSafetyPolicy: downloadSafetyPolicy,
                 callbacks: callbacks,
+                requestedURL: tab.url,
+                pendingHTTPFallbackURL: tab.restorationMetadata.pendingHTTPFallbackURL,
                 isActive: true
             )
             markActive(tab.id)
@@ -133,6 +314,8 @@ public final class BrowserWebViewRegistry: ObservableObject {
             securityPolicy: securityPolicy,
             downloadSafetyPolicy: downloadSafetyPolicy,
             callbacks: callbacks,
+            requestedURL: tab.url,
+            pendingHTTPFallbackURL: tab.restorationMetadata.pendingHTTPFallbackURL,
             isActive: true
         )
         let webView = Self.makeWebView(
@@ -222,9 +405,19 @@ public final class BrowserWebViewRegistry: ObservableObject {
         if sitePermissionPolicy.requiresUserActionForAutoplay {
             configuration.mediaTypesRequiringUserActionForPlayback = .all
         }
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: BrowserContextMenuScript.source,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false
+        ))
+        configuration.userContentController.add(
+            WeakScriptMessageHandler(target: coordinator),
+            name: BrowserContextMenuScript.messageHandlerName
+        )
         ContentBlockerService.installDefaultRules(into: configuration.userContentController)
 
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = BrowserWKWebView(frame: .zero, configuration: configuration)
+        webView.contextMenuDownloadHandler = coordinator
         webView.allowsBackForwardNavigationGestures = true
         webView.customUserAgent = BrowserUserAgentPolicy.desktopSafariUserAgent()
         webView.navigationDelegate = coordinator
@@ -233,22 +426,61 @@ public final class BrowserWebViewRegistry: ObservableObject {
     }
 }
 
-private final class BrowserWebViewContainerView: NSView {
+@MainActor
+private protocol BrowserContextMenuDownloadHandling: AnyObject {
+    func configureContextMenu(_ menu: NSMenu?, in webView: WKWebView)
+}
+
+private final class BrowserWKWebView: WKWebView {
+    weak var contextMenuDownloadHandler: BrowserContextMenuDownloadHandling?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event)
+        contextMenuDownloadHandler?.configureContextMenu(menu, in: self)
+        return menu
+    }
+}
+
+private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WKScriptMessageHandler?
+
+    init(target: WKScriptMessageHandler) {
+        self.target = target
+    }
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        target?.userContentController(userContentController, didReceive: message)
+    }
+}
+
+final class BrowserWebViewContainerView: NSView {
     private weak var activeWebView: WKWebView?
+    private let hitTestBlocker = WebContentHitTestBlockerView()
+    var mouseExclusionRegion: WebContentMouseExclusionRegion? {
+        didSet {
+            updateHitTestBlockerFrame()
+        }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        configureHitTestBlocker()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         wantsLayer = true
+        configureHitTestBlocker()
     }
 
-    func attach(_ webView: WKWebView) {
+    @discardableResult
+    func attach(_ webView: WKWebView) -> Bool {
         guard activeWebView !== webView || webView.superview !== self || webView.alphaValue < 1 else {
-            return
+            return false
         }
 
         NSAnimationContext.runAnimationGroup { context in
@@ -258,50 +490,181 @@ private final class BrowserWebViewContainerView: NSView {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
 
+            if let activeWebView,
+               activeWebView !== webView,
+               activeWebView.superview === self {
+                activeWebView.removeFromSuperview()
+            }
+
             if webView.superview !== self {
                 webView.removeFromSuperview()
                 webView.translatesAutoresizingMaskIntoConstraints = true
                 webView.autoresizingMask = [.width, .height]
                 webView.frame = bounds
                 webView.isHidden = false
-                webView.alphaValue = 0
                 addSubview(webView)
             }
 
-            for subview in subviews {
-                subview.isHidden = false
-                subview.alphaValue = subview === webView ? 1 : 0
-                subview.layer?.opacity = subview === webView ? 1 : 0
-            }
+            webView.isHidden = false
+            webView.alphaValue = 1
+            webView.layer?.opacity = 1
             webView.frame = bounds
             activeWebView = webView
-            layoutSubtreeIfNeeded()
+            keepHitTestBlockerAboveWebContent()
             CATransaction.commit()
         }
+        return true
+    }
+
+    func deactivateActiveWebView() {
+        guard let activeWebView else {
+            return
+        }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        activeWebView.removeFromSuperview()
+        self.activeWebView = nil
+        CATransaction.commit()
     }
 
     func detachCurrentWebView() {
-        for subview in subviews {
-            subview.removeFromSuperview()
-        }
+        activeWebView?.removeFromSuperview()
         activeWebView = nil
     }
 
     override func layout() {
         super.layout()
         for subview in subviews {
+            guard subview !== hitTestBlocker else {
+                continue
+            }
             subview.frame = bounds
         }
+        updateHitTestBlockerFrame()
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard bounds.contains(point),
-              let activeWebView,
+        guard bounds.contains(point) else {
+            return nil
+        }
+
+        let blockerPoint = convert(point, to: hitTestBlocker)
+        if let blockerHit = hitTestBlocker.hitTest(blockerPoint) {
+            return blockerHit
+        }
+
+        guard let activeWebView,
               activeWebView.superview === self else {
             return nil
         }
 
         return activeWebView.hitTest(convert(point, to: activeWebView))
+    }
+
+    private func configureHitTestBlocker() {
+        hitTestBlocker.isHidden = true
+        addSubview(hitTestBlocker)
+    }
+
+    private func keepHitTestBlockerAboveWebContent() {
+        guard hitTestBlocker.superview === self else {
+            addSubview(hitTestBlocker)
+            return
+        }
+
+        hitTestBlocker.removeFromSuperview()
+        addSubview(hitTestBlocker)
+        updateHitTestBlockerFrame()
+    }
+
+    private func updateHitTestBlockerFrame() {
+        guard let mouseExclusionRegion else {
+            hitTestBlocker.isHidden = true
+            return
+        }
+
+        hitTestBlocker.cornerRadius = mouseExclusionRegion.cornerRadius
+        hitTestBlocker.frame = mouseExclusionRegion.frame(in: bounds)
+        hitTestBlocker.isHidden = hitTestBlocker.frame.isEmpty
+        window?.invalidateCursorRects(for: hitTestBlocker)
+    }
+}
+
+final class WebContentHitTestBlockerView: NSView {
+    var cornerRadius: CGFloat = 0 {
+        didSet {
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        hitRegionContains(point) ? self : nil
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .arrow)
+    }
+
+    override func updateTrackingAreas() {
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .inVisibleRect, .mouseMoved, .cursorUpdate],
+            owner: self
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+        super.updateTrackingAreas()
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    override func mouseDown(with event: NSEvent) {}
+    override func mouseUp(with event: NSEvent) {}
+    override func rightMouseDown(with event: NSEvent) {}
+    override func rightMouseUp(with event: NSEvent) {}
+    override func otherMouseDown(with event: NSEvent) {}
+    override func otherMouseUp(with event: NSEvent) {}
+    override func scrollWheel(with event: NSEvent) {}
+
+    func hitRegionContains(_ point: NSPoint) -> Bool {
+        guard bounds.contains(point) else {
+            return false
+        }
+
+        guard cornerRadius > 0 else {
+            return true
+        }
+
+        return NSBezierPath(
+            roundedRect: bounds,
+            xRadius: cornerRadius,
+            yRadius: cornerRadius
+        )
+        .contains(point)
     }
 }
 
@@ -309,49 +672,67 @@ private final class BrowserWebViewContainerView: NSView {
 public struct WebViewHost: NSViewRepresentable {
     @ObservedObject private var state: WebViewState
 
-    private let tab: BrowserTab
-    private let profile: BrowserProfile
+    private let activeTab: BrowserTab?
+    private let activeProfile: BrowserProfile?
     private let registry: BrowserWebViewRegistry
     private let dataStoreProvider: ProfileWebsiteDataStoreProvider
     private let securityPolicy: URLSecurityPolicy
     private let downloadSafetyPolicy: DownloadSafetyPolicy
     private let sitePermissionPolicy: SitePermissionPolicy
-    private let onStateChange: @MainActor (String?, URL?, Bool, String?) -> Void
-    private let onSecurityMessage: @MainActor (String) -> Void
-    private let onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
-    private let onDownloadConfirmationRequired: @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
-    private let onSitePermissionRequest: @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
+    private let mouseExclusionRegion: WebContentMouseExclusionRegion?
+    private let onStateChange: @MainActor (TabID, String?, URL?, Bool, String?) -> Void
+    private let onSecurityMessage: @MainActor (TabID, String) -> Void
+    private let onURLConfirmationRequired: @MainActor (TabID, URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
+    private let onDownloadConfirmationRequired: @MainActor (TabID, DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
+    private let onDownloadStarted: @MainActor (TabID, DownloadConfirmationRequest, URL, @escaping @MainActor () -> Void) -> Void
+    private let onDownloadProgress: @MainActor (TabID, UUID, Double?) -> Void
+    private let onDownloadFinished: @MainActor (TabID, UUID, URL?, Bool) -> Void
+    private let onDownloadFailed: @MainActor (TabID, UUID, String) -> Void
+    private let onSitePermissionRequest: @MainActor (TabID, ProfileID, SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
+    private let onSnapshotCaptured: @MainActor (TabID, NSImage) -> Void
 
     public init(
         state: WebViewState,
-        tab: BrowserTab,
-        profile: BrowserProfile,
+        activeTab: BrowserTab?,
+        activeProfile: BrowserProfile?,
         registry: BrowserWebViewRegistry,
         dataStoreProvider: ProfileWebsiteDataStoreProvider,
         securityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
         downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy(),
         sitePermissionPolicy: SitePermissionPolicy = SitePermissionPolicy(),
-        onStateChange: @escaping @MainActor (String?, URL?, Bool, String?) -> Void,
-        onSecurityMessage: @escaping @MainActor (String) -> Void = { _ in },
-        onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void = { _, _, _ in },
-        onDownloadConfirmationRequired: @escaping @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void = { _, completion in completion(nil) },
-        onSitePermissionRequest: @escaping @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation = { _, _ in
+        mouseExclusionRegion: WebContentMouseExclusionRegion? = nil,
+        onStateChange: @escaping @MainActor (TabID, String?, URL?, Bool, String?) -> Void,
+        onSecurityMessage: @escaping @MainActor (TabID, String) -> Void = { _, _ in },
+        onURLConfirmationRequired: @escaping @MainActor (TabID, URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void = { _, _, _, _ in },
+        onDownloadConfirmationRequired: @escaping @MainActor (TabID, DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void = { _, _, completion in completion(nil) },
+        onDownloadStarted: @escaping @MainActor (TabID, DownloadConfirmationRequest, URL, @escaping @MainActor () -> Void) -> Void = { _, _, _, _ in },
+        onDownloadProgress: @escaping @MainActor (TabID, UUID, Double?) -> Void = { _, _, _ in },
+        onDownloadFinished: @escaping @MainActor (TabID, UUID, URL?, Bool) -> Void = { _, _, _, _ in },
+        onDownloadFailed: @escaping @MainActor (TabID, UUID, String) -> Void = { _, _, _ in },
+        onSitePermissionRequest: @escaping @MainActor (TabID, ProfileID, SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation = { _, _, _, _ in
             .deny(reason: "Site permission request was blocked because no permission handler is installed.")
-        }
+        },
+        onSnapshotCaptured: @escaping @MainActor (TabID, NSImage) -> Void = { _, _ in }
     ) {
         self.state = state
-        self.tab = tab
-        self.profile = profile
+        self.activeTab = activeTab
+        self.activeProfile = activeProfile
         self.registry = registry
         self.dataStoreProvider = dataStoreProvider
         self.securityPolicy = securityPolicy
         self.downloadSafetyPolicy = downloadSafetyPolicy
         self.sitePermissionPolicy = sitePermissionPolicy
+        self.mouseExclusionRegion = mouseExclusionRegion
         self.onStateChange = onStateChange
         self.onSecurityMessage = onSecurityMessage
         self.onURLConfirmationRequired = onURLConfirmationRequired
         self.onDownloadConfirmationRequired = onDownloadConfirmationRequired
+        self.onDownloadStarted = onDownloadStarted
+        self.onDownloadProgress = onDownloadProgress
+        self.onDownloadFinished = onDownloadFinished
+        self.onDownloadFailed = onDownloadFailed
         self.onSitePermissionRequest = onSitePermissionRequest
+        self.onSnapshotCaptured = onSnapshotCaptured
     }
 
     public func makeNSView(context: Context) -> NSView {
@@ -360,17 +741,26 @@ public struct WebViewHost: NSViewRepresentable {
 
     public func makeCoordinator() -> Coordinator {
         Coordinator(
-            tabID: tab.id,
+            tabID: activeTab?.id ?? UUID(),
             state: state,
             securityPolicy: securityPolicy,
             downloadSafetyPolicy: downloadSafetyPolicy,
             callbacks: BrowserWebViewCallbacks(
-                onStateChange: onStateChange,
-                onSecurityMessage: onSecurityMessage,
-                onURLConfirmationRequired: onURLConfirmationRequired,
-                onDownloadConfirmationRequired: onDownloadConfirmationRequired,
-                onSitePermissionRequest: onSitePermissionRequest
+                onStateChange: { _, _, _, _ in },
+                onSecurityMessage: { _ in },
+                onURLConfirmationRequired: { _, _, _ in },
+                onDownloadConfirmationRequired: { _, completion in completion(nil) },
+                onDownloadStarted: { _, _, _ in },
+                onDownloadProgress: { _, _ in },
+                onDownloadFinished: { _, _, _ in },
+                onDownloadFailed: { _, _ in },
+                onSitePermissionRequest: { _, _ in
+                    .deny(reason: "Site permission request was blocked because no active tab is attached.")
+                },
+                onSnapshot: { _ in }
             ),
+            requestedURL: activeTab?.url,
+            pendingHTTPFallbackURL: activeTab?.restorationMetadata.pendingHTTPFallbackURL,
             isActive: false
         )
     }
@@ -379,13 +769,48 @@ public struct WebViewHost: NSViewRepresentable {
         guard let container = nsView as? BrowserWebViewContainerView else {
             return
         }
+        container.mouseExclusionRegion = mouseExclusionRegion
+
+        guard let tab = activeTab,
+              let profile = activeProfile,
+              tab.content.isWeb,
+              tab.url != nil else {
+            container.deactivateActiveWebView()
+            registry.markActive(nil)
+            return
+        }
 
         let callbacks = BrowserWebViewCallbacks(
-            onStateChange: onStateChange,
-            onSecurityMessage: onSecurityMessage,
-            onURLConfirmationRequired: onURLConfirmationRequired,
-            onDownloadConfirmationRequired: onDownloadConfirmationRequired,
-            onSitePermissionRequest: onSitePermissionRequest
+            onStateChange: { title, url, isLoading, securityMessage in
+                onStateChange(tab.id, title, url, isLoading, securityMessage)
+            },
+            onSecurityMessage: { message in
+                onSecurityMessage(tab.id, message)
+            },
+            onURLConfirmationRequired: { kind, url, sourceContext in
+                onURLConfirmationRequired(tab.id, kind, url, sourceContext)
+            },
+            onDownloadConfirmationRequired: { request, completion in
+                onDownloadConfirmationRequired(tab.id, request, completion)
+            },
+            onDownloadStarted: { request, destinationURL, cancel in
+                onDownloadStarted(tab.id, request, destinationURL, cancel)
+            },
+            onDownloadProgress: { downloadID, progress in
+                onDownloadProgress(tab.id, downloadID, progress)
+            },
+            onDownloadFinished: { downloadID, destinationURL, quarantineApplied in
+                onDownloadFinished(tab.id, downloadID, destinationURL, quarantineApplied)
+            },
+            onDownloadFailed: { downloadID, message in
+                onDownloadFailed(tab.id, downloadID, message)
+            },
+            onSitePermissionRequest: { kind, origin in
+                onSitePermissionRequest(tab.id, profile.id, kind, origin)
+            },
+            onSnapshot: { image in
+                onSnapshotCaptured(tab.id, image)
+            }
         )
         let session = registry.session(
             for: tab,
@@ -398,8 +823,11 @@ public struct WebViewHost: NSViewRepresentable {
             callbacks: callbacks
         )
 
-        container.attach(session.webView)
+        let didActivateWebView = container.attach(session.webView)
         session.coordinator.applyPendingState(to: session.webView)
+        if didActivateWebView {
+            session.coordinator.publishCurrentState(from: session.webView)
+        }
     }
 
     public static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -407,12 +835,14 @@ public struct WebViewHost: NSViewRepresentable {
     }
 
     @MainActor
-    public final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
+    public final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler, BrowserContextMenuDownloadHandling {
         fileprivate let tabID: TabID
         fileprivate var state: WebViewState
         fileprivate var securityPolicy: URLSecurityPolicy
         fileprivate var downloadSafetyPolicy: DownloadSafetyPolicy
         fileprivate var callbacks: BrowserWebViewCallbacks
+        fileprivate var requestedURL: URL?
+        fileprivate var pendingHTTPFallbackURL: URL?
         fileprivate var isActive: Bool
         fileprivate var lastHandledCommandID: UUID?
         fileprivate var lastLoadedRequestedURL: URL?
@@ -420,6 +850,10 @@ public struct WebViewHost: NSViewRepresentable {
         private var httpFallbacksInFlight: Set<URL> = []
         private var downloadSourceMetadata: [ObjectIdentifier: DownloadSourceMetadata] = [:]
         private var downloadDestinations: [ObjectIdentifier: URL] = [:]
+        private var downloadRequests: [ObjectIdentifier: DownloadConfirmationRequest] = [:]
+        private var downloadProgressObservations: [ObjectIdentifier: NSKeyValueObservation] = [:]
+        private var contextMenuDownloadTarget = BrowserContextMenuDownloadTarget()
+        private weak var contextMenuWebView: WKWebView?
 
         init(
             tabID: TabID,
@@ -427,6 +861,8 @@ public struct WebViewHost: NSViewRepresentable {
             securityPolicy: URLSecurityPolicy,
             downloadSafetyPolicy: DownloadSafetyPolicy,
             callbacks: BrowserWebViewCallbacks,
+            requestedURL: URL?,
+            pendingHTTPFallbackURL: URL?,
             isActive: Bool
         ) {
             self.tabID = tabID
@@ -434,6 +870,8 @@ public struct WebViewHost: NSViewRepresentable {
             self.securityPolicy = securityPolicy
             self.downloadSafetyPolicy = downloadSafetyPolicy
             self.callbacks = callbacks
+            self.requestedURL = requestedURL
+            self.pendingHTTPFallbackURL = pendingHTTPFallbackURL
             self.isActive = isActive
         }
 
@@ -442,12 +880,16 @@ public struct WebViewHost: NSViewRepresentable {
             securityPolicy: URLSecurityPolicy,
             downloadSafetyPolicy: DownloadSafetyPolicy,
             callbacks: BrowserWebViewCallbacks,
+            requestedURL: URL?,
+            pendingHTTPFallbackURL: URL?,
             isActive: Bool
         ) {
             self.state = state
             self.securityPolicy = securityPolicy
             self.downloadSafetyPolicy = downloadSafetyPolicy
             self.callbacks = callbacks
+            self.requestedURL = requestedURL
+            self.pendingHTTPFallbackURL = pendingHTTPFallbackURL
             self.isActive = isActive
         }
 
@@ -473,11 +915,15 @@ public struct WebViewHost: NSViewRepresentable {
                 }
             }
 
-            guard let requestedURL = state.requestedURL else {
+            guard let requestedURL else {
                 return
             }
 
             loadRequestedURLIfNeeded(requestedURL, in: webView)
+        }
+
+        fileprivate func publishCurrentState(from webView: WKWebView) {
+            publish(webView, isLoading: webView.isLoading)
         }
 
         public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -605,6 +1051,11 @@ public struct WebViewHost: NSViewRepresentable {
                 if let destinationURL {
                     self.downloadDestinations[identifier] = destinationURL
                     self.downloadSourceMetadata[identifier] = sourceMetadata
+                    self.downloadRequests[identifier] = request
+                    self.observeProgress(for: download, request: request)
+                    self.callbacks.onDownloadStarted(request, destinationURL) { [weak download] in
+                        download?.cancel { _ in }
+                    }
                 } else {
                     self.cleanup(download)
                 }
@@ -617,18 +1068,25 @@ public struct WebViewHost: NSViewRepresentable {
             let identifier = ObjectIdentifier(download)
             let destinationURL = downloadDestinations[identifier]
             let sourceMetadata = downloadSourceMetadata[identifier] ?? .currentPage
+            let request = downloadRequests[identifier]
 
             if let destinationURL {
                 let didApplyQuarantine = downloadSafetyPolicy.applyQuarantineMetadata(
                     to: destinationURL,
                     sourceMetadata: sourceMetadata
                 )
+                if let request {
+                    callbacks.onDownloadFinished(request.id, destinationURL, didApplyQuarantine)
+                }
                 publishSecurityMessage(
                     didApplyQuarantine
                         ? "Download finished: \(destinationURL.lastPathComponent)"
                         : "Download finished, but quarantine metadata could not be applied."
                 )
             } else {
+                if let request {
+                    callbacks.onDownloadFinished(request.id, destinationURL, true)
+                }
                 publishSecurityMessage("Download finished.")
             }
 
@@ -640,6 +1098,9 @@ public struct WebViewHost: NSViewRepresentable {
             didFailWithError error: Error,
             resumeData: Data?
         ) {
+            if let request = downloadRequests[ObjectIdentifier(download)] {
+                callbacks.onDownloadFailed(request.id, "Download failed.")
+            }
             publishSecurityMessage("Download failed.")
             cleanup(download)
         }
@@ -733,6 +1194,87 @@ public struct WebViewHost: NSViewRepresentable {
             decisionHandler(Self.webKitPermissionDecision(for: evaluation))
         }
 
+        public func userContentController(
+            _ userContentController: WKUserContentController,
+            didReceive message: WKScriptMessage
+        ) {
+            guard isActive,
+                  message.name == BrowserContextMenuScript.messageHandlerName else {
+                return
+            }
+
+            contextMenuDownloadTarget = BrowserContextMenuDownloadTarget(messageBody: message.body)
+        }
+
+        func configureContextMenu(_ menu: NSMenu?, in webView: WKWebView) {
+            contextMenuWebView = webView
+            configureContextMenuItems(in: menu?.items)
+        }
+
+        private func configureContextMenuItems(in items: [NSMenuItem]?) {
+            guard let items else {
+                return
+            }
+
+            for item in items {
+                if let kind = BrowserContextMenuDownloadKind.kind(for: item) {
+                    item.target = self
+                    switch kind {
+                    case .image:
+                        item.action = #selector(downloadContextMenuImage(_:))
+                    case .linkedFile:
+                        item.action = #selector(downloadContextMenuLinkedFile(_:))
+                    }
+                }
+
+                configureContextMenuItems(in: item.submenu?.items)
+            }
+        }
+
+        @objc private func downloadContextMenuImage(_ sender: NSMenuItem) {
+            startContextMenuDownload(.image)
+        }
+
+        @objc private func downloadContextMenuLinkedFile(_ sender: NSMenuItem) {
+            startContextMenuDownload(.linkedFile)
+        }
+
+        private func startContextMenuDownload(_ kind: BrowserContextMenuDownloadKind) {
+            guard isActive else {
+                return
+            }
+
+            let targetURL: URL?
+            switch kind {
+            case .image:
+                targetURL = contextMenuDownloadTarget.imageURL
+            case .linkedFile:
+                targetURL = contextMenuDownloadTarget.linkURL
+            }
+
+            guard let targetURL else {
+                publishSecurityMessage("No downloadable URL was found for this menu item.")
+                return
+            }
+
+            guard let webView = contextMenuWebView else {
+                publishSecurityMessage("Download could not start because the web view is unavailable.")
+                return
+            }
+
+            switch securityPolicy.decision(for: targetURL) {
+            case .allowInWebView:
+                publishSecurityMessage(securityPolicy.securityMessage(forAllowedWebURL: targetURL))
+                webView.startDownload(using: URLRequest(url: targetURL)) { [weak self] download in
+                    self?.prepare(download, sourceURL: targetURL)
+                }
+            case .requireExternalApplicationConfirmation, .requireLocalFileConfirmation:
+                publishSecurityMessage("Download was blocked because it left the web download flow.")
+            case .block(let reason):
+                publishSecurityMessage(reason)
+            }
+        }
+
         private func requestConfirmation(
             _ kind: URLConfirmationRequest.Kind,
             url: URL,
@@ -785,8 +1327,28 @@ public struct WebViewHost: NSViewRepresentable {
 
         private func cleanup(_ download: WKDownload) {
             let identifier = ObjectIdentifier(download)
+            downloadProgressObservations.removeValue(forKey: identifier)
             downloadSourceMetadata.removeValue(forKey: identifier)
             downloadDestinations.removeValue(forKey: identifier)
+            downloadRequests.removeValue(forKey: identifier)
+        }
+
+        private func observeProgress(
+            for download: WKDownload,
+            request: DownloadConfirmationRequest
+        ) {
+            let identifier = ObjectIdentifier(download)
+            downloadProgressObservations[identifier] = download.progress.observe(
+                \.fractionCompleted,
+                 options: [.initial, .new]
+            ) { [weak self] progress, _ in
+                Task { @MainActor [weak self] in
+                    self?.callbacks.onDownloadProgress(
+                        request.id,
+                        BrowserDownload.normalizedProgress(progress.fractionCompleted)
+                    )
+                }
+            }
         }
 
         private func publishSecurityMessage(_ message: String?) {
@@ -814,6 +1376,8 @@ public struct WebViewHost: NSViewRepresentable {
         private func beginHTTPSUpgrade(from originalURL: URL, to upgradedURL: URL, in webView: WKWebView) {
             pendingHTTPFallbacksByUpgradeURL[upgradedURL] = originalURL
             httpFallbacksInFlight.remove(originalURL)
+            requestedURL = upgradedURL
+            pendingHTTPFallbackURL = originalURL
             if isActive,
                state.requestedURL != upgradedURL || state.pendingHTTPFallbackURL != originalURL {
                 state.request(upgradedURL, pendingHTTPFallbackURL: originalURL)
@@ -824,6 +1388,8 @@ public struct WebViewHost: NSViewRepresentable {
 
         private func beginHTTPFallback(to fallbackURL: URL, in webView: WKWebView) {
             httpFallbacksInFlight.insert(fallbackURL)
+            requestedURL = fallbackURL
+            pendingHTTPFallbackURL = nil
             if isActive {
                 state.request(fallbackURL)
             }
@@ -837,13 +1403,16 @@ public struct WebViewHost: NSViewRepresentable {
         private func discardHTTPFallback(to fallbackURL: URL) {
             pendingHTTPFallbacksByUpgradeURL = pendingHTTPFallbacksByUpgradeURL.filter { $0.value != fallbackURL }
             httpFallbacksInFlight.remove(fallbackURL)
+            if pendingHTTPFallbackURL == fallbackURL {
+                pendingHTTPFallbackURL = nil
+            }
             if isActive, state.pendingHTTPFallbackURL == fallbackURL {
                 state.pendingHTTPFallbackURL = nil
             }
         }
 
         private func httpFallbackURL(for error: Error) -> URL? {
-            let failedURL = failedNavigationURL(from: error) ?? lastLoadedRequestedURL ?? state.requestedURL
+            let failedURL = failedNavigationURL(from: error) ?? lastLoadedRequestedURL ?? requestedURL
 
             if let failedURL,
                let fallbackURL = pendingHTTPFallbacksByUpgradeURL.removeValue(forKey: failedURL) {
@@ -851,7 +1420,7 @@ public struct WebViewHost: NSViewRepresentable {
             }
 
             guard let failedURL,
-                  let fallbackURL = state.pendingHTTPFallbackURL,
+                  let fallbackURL = pendingHTTPFallbackURL,
                   securityPolicy.isHTTPSUpgradeCandidate(failedURL, for: fallbackURL) else {
                 return nil
             }
@@ -892,6 +1461,34 @@ public struct WebViewHost: NSViewRepresentable {
                     }
                 }
                 self.callbacks.onStateChange(title, url, isLoading, securityMessage)
+            }
+
+            if !isLoading {
+                captureSnapshot(from: webView)
+            }
+        }
+
+        private func captureSnapshot(from webView: WKWebView) {
+            guard isActive,
+                  !webView.bounds.isEmpty else {
+                return
+            }
+
+            let configuration = WKSnapshotConfiguration()
+            configuration.rect = webView.bounds
+            webView.takeSnapshot(with: configuration) { [weak self] image, _ in
+                guard let image else {
+                    return
+                }
+
+                Task { @MainActor in
+                    guard let self,
+                          self.isActive else {
+                        return
+                    }
+
+                    self.callbacks.onSnapshot(image)
+                }
             }
         }
 

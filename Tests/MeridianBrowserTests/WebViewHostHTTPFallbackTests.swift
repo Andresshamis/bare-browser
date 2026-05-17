@@ -29,6 +29,8 @@ final class WebViewHostHTTPFallbackTests: XCTestCase {
                 onDownloadConfirmationRequired: { _, completion in completion(nil) },
                 onSitePermissionRequest: { _, _ in .deny(reason: "Test denies site permission requests.") }
             ),
+            requestedURL: httpsURL,
+            pendingHTTPFallbackURL: httpURL,
             isActive: true
         )
         let webView = WKWebView()

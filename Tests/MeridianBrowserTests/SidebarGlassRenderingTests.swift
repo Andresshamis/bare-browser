@@ -122,16 +122,23 @@ final class SidebarGlassRenderingTests: XCTestCase {
         XCTAssertEqual(SidebarGlassRendering.colorNoiseOpacity(for: grain), 0.30, accuracy: 0.001)
     }
 
-    func testColorNoiseCellSizeTracksScale() {
-        XCTAssertEqual(SidebarGlassRendering.colorNoiseCellSize(forScale: 0), 1.2, accuracy: 0.001)
-        XCTAssertEqual(SidebarGlassRendering.colorNoiseCellSize(forScale: 0.30), 2.345, accuracy: 0.001)
-        XCTAssertEqual(SidebarGlassRendering.colorNoiseCellSize(forScale: 1), 11.2, accuracy: 0.001)
+    func testColorNoiseCellSizeUsesFixedScale() {
+        let settings = SidebarGlassSettings(
+            glassOpacity: 0.60,
+            tintOpacity: 0.20,
+            colorNoiseLevel: 0.60,
+            colorNoiseScale: 1,
+            edgeOpacity: 0.40,
+            shadowOpacity: 0.20,
+            highlightOpacity: 0.20
+        )
+
+        XCTAssertEqual(SidebarGlassRendering.colorNoiseCellSize(), 1.2, accuracy: 0.001)
+        XCTAssertEqual(SidebarGlassRendering.colorNoiseCellSize(for: settings), 1.2, accuracy: 0.001)
     }
 
-    func testColorNoiseTextureCellSizeIsQuantizedForCaching() {
-        XCTAssertEqual(SidebarGlassRendering.colorNoiseTextureCellSize(forScale: 0), 1.25, accuracy: 0.001)
-        XCTAssertEqual(SidebarGlassRendering.colorNoiseTextureCellSize(forScale: 0.30), 2.25, accuracy: 0.001)
-        XCTAssertEqual(SidebarGlassRendering.colorNoiseTextureCellSize(forScale: 1), 11.25, accuracy: 0.001)
+    func testColorNoiseTextureCellSizeUsesFixedScaleForCaching() {
+        XCTAssertEqual(SidebarGlassRendering.colorNoiseTextureCellSize(), 1.25, accuracy: 0.001)
     }
 
     func testSelectedSpaceIconUsesDarkForegroundForVeryLightTint() {
