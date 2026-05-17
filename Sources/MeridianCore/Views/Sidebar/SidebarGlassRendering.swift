@@ -19,6 +19,8 @@ enum SidebarSelectedIconContrast: Equatable {
 }
 
 enum SidebarGlassRendering {
+    private static let fixedColorNoiseScale = 0.0
+
     static func recipe(for settings: SidebarGlassSettings) -> SidebarGlassRecipe {
         let density = clamped(settings.glassOpacity)
         let colorMix = clamped(settings.tintOpacity)
@@ -75,11 +77,19 @@ enum SidebarGlassRendering {
     }
 
     static func colorNoiseCellSize(for settings: SidebarGlassSettings) -> CGFloat {
-        colorNoiseCellSize(forScale: settings.colorNoiseScale)
+        colorNoiseCellSize()
+    }
+
+    static func colorNoiseCellSize() -> CGFloat {
+        colorNoiseCellSize(forScale: fixedColorNoiseScale)
     }
 
     static func colorNoiseCellSize(forScale scale: Double) -> CGFloat {
         CGFloat(1.2 + pow(clamped(scale), 1.8) * 10)
+    }
+
+    static func colorNoiseTextureCellSize() -> CGFloat {
+        colorNoiseTextureCellSize(forScale: fixedColorNoiseScale)
     }
 
     static func colorNoiseTextureCellSize(forScale scale: Double) -> CGFloat {

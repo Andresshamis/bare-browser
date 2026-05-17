@@ -10,7 +10,7 @@ public struct SidebarGlassSettings: Hashable, Codable, Sendable {
         glassOpacity: 0.60,
         tintOpacity: 0,
         colorNoiseLevel: 0,
-        colorNoiseScale: 0.30,
+        colorNoiseScale: 0,
         edgeOpacity: 0.40,
         shadowOpacity: 0.20,
         highlightOpacity: 0.20
@@ -28,7 +28,7 @@ public struct SidebarGlassSettings: Hashable, Codable, Sendable {
         glassOpacity: Double,
         tintOpacity: Double,
         colorNoiseLevel: Double = 0,
-        colorNoiseScale: Double = 0.30,
+        colorNoiseScale: Double = 0,
         edgeOpacity: Double,
         shadowOpacity: Double,
         highlightOpacity: Double

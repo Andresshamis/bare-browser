@@ -124,7 +124,7 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(space.sidebarAppearance.base.tintOpacity, 0, accuracy: 0.001)
         XCTAssertEqual(space.sidebarAppearance.base.glassOpacity, 0.60, accuracy: 0.001)
         XCTAssertEqual(space.sidebarAppearance.base.colorNoiseLevel, 0, accuracy: 0.001)
-        XCTAssertEqual(space.sidebarAppearance.base.colorNoiseScale, 0.30, accuracy: 0.001)
+        XCTAssertEqual(space.sidebarAppearance.base.colorNoiseScale, 0, accuracy: 0.001)
     }
 
     func testCustomizeSpaceUpdatesNameSymbolAndColor() throws {
@@ -886,6 +886,30 @@ final class BrowserStoreTests: XCTestCase {
         for sensitiveComponent in ["user", "pass", "token", "fixture", "section"] {
             XCTAssertFalse(entry.url.absoluteString.contains(sensitiveComponent))
         }
+    }
+
+    func testRepeatedWebViewStateUpdateDoesNotDuplicateHistoryOrPersist() throws {
+        let sessionSpy = BrowserStoreSessionPersistenceSpy()
+        let historySpy = LocalHistoryPersistenceSpy()
+        let store = BrowserStore(
+            sessionPersistence: sessionSpy,
+            localHistoryPersistence: historySpy
+        )
+        let url = URL(string: "https://example.com/article")!
+
+        store.updateActiveTabFromWebView(title: "Example Article", url: url, isLoading: false)
+
+        let firstEntry = try XCTUnwrap(store.historyEntries.first)
+        XCTAssertEqual(firstEntry.visitCount, 1)
+        XCTAssertEqual(historySpy.savedEntries.count, 1)
+        XCTAssertEqual(sessionSpy.savedSnapshots.count, 1)
+
+        store.updateActiveTabFromWebView(title: "Example Article", url: url, isLoading: false)
+
+        let unchangedEntry = try XCTUnwrap(store.historyEntries.first)
+        XCTAssertEqual(unchangedEntry.visitCount, 1)
+        XCTAssertEqual(historySpy.savedEntries.count, 1)
+        XCTAssertEqual(sessionSpy.savedSnapshots.count, 1)
     }
 
     func testPrivateProfileWebViewUpdateDoesNotRecordHistory() {
@@ -1827,6 +1851,73 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertNil(completedURL)
         XCTAssertNil(store.pendingDownloadConfirmation)
         XCTAssertEqual(store.lastUserMessage, request.cancelledMessage)
+    }
+
+    func testPendingDownloadCreatesActiveDownloadItem() throws {
+        let store = BrowserStore()
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "archive.zip",
+            sourceURL: URL(string: "https://example.com/archive.zip")
+        )
+
+        store.requestDownloadConfirmation(request) { _ in }
+
+        let download = try XCTUnwrap(store.primaryActiveDownload)
+        XCTAssertEqual(download.id, request.id)
+        XCTAssertEqual(download.filename, "archive.zip")
+        XCTAssertEqual(download.sourceDescription, "example.com")
+        XCTAssertEqual(download.state, .waitingForDestination)
+    }
+
+    func testApprovedDownloadTracksProgressAndCompletion() throws {
+        let store = BrowserStore()
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let destinationURL = temporaryDirectory.appendingPathComponent("archive.zip")
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "archive.zip",
+            sourceURL: URL(string: "https://example.com/archive.zip")
+        )
+
+        store.requestDownloadConfirmation(request) { _ in }
+        XCTAssertTrue(store.approvePendingDownloadConfirmation(destination: destinationURL))
+        store.updateDownloadProgress(request.id, progress: 0.42)
+        store.finishDownload(request.id, destinationURL: destinationURL, quarantineApplied: true)
+
+        let download = try XCTUnwrap(store.downloads.first { $0.id == request.id })
+        XCTAssertEqual(download.state, .finished)
+        XCTAssertEqual(download.destinationURL, destinationURL)
+        XCTAssertEqual(download.progress, 1)
+        XCTAssertNil(download.failureMessage)
+        XCTAssertTrue(store.activeDownloads.isEmpty)
+    }
+
+    func testCancelDownloadInvokesRegisteredCancellationHandler() throws {
+        let store = BrowserStore()
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "archive.zip",
+            sourceURL: URL(string: "https://example.com/archive.zip")
+        )
+        var didCancel = false
+
+        store.requestDownloadConfirmation(request) { _ in }
+        XCTAssertTrue(
+            store.approvePendingDownloadConfirmation(
+                destination: temporaryDirectory.appendingPathComponent("archive.zip")
+            )
+        )
+        store.registerDownloadCancellation(request.id) {
+            didCancel = true
+        }
+
+        XCTAssertTrue(store.cancelDownload(request.id))
+
+        let download = try XCTUnwrap(store.downloads.first { $0.id == request.id })
+        XCTAssertTrue(didCancel)
+        XCTAssertEqual(download.state, .canceled)
+        XCTAssertTrue(store.activeDownloads.isEmpty)
     }
 
     private func makeTemporaryDirectory() throws -> URL {

@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-public enum SidebarRevealEdge: String, CaseIterable, Identifiable {
+public enum SidebarRevealEdge: String, CaseIterable, Identifiable, Sendable {
     case left
     case right
 
@@ -51,6 +51,7 @@ public final class BrowserStore: ObservableObject {
     @Published public private(set) var pendingSitePermissionRequest: SitePermissionRequest?
     @Published public private(set) var sitePermissionSettings: [SitePermissionSetting]
     @Published public private(set) var historyEntries: [BrowserHistoryEntry]
+    @Published public private(set) var downloads: [BrowserDownload]
 
     public let commandRouter: CommandRouter
     public let urlSecurityPolicy: URLSecurityPolicy
@@ -60,6 +61,7 @@ public final class BrowserStore: ObservableObject {
     private let localHistoryPersistence: LocalHistoryPersisting?
     private var localHistoryStore: LocalHistoryStore
     private var pendingDownloadCompletion: (@MainActor (URL?) -> Void)?
+    private var downloadCancellationHandlers: [UUID: @MainActor () -> Void]
     private var scheduledSessionPersistenceTask: Task<Void, Never>?
 
     public init(
@@ -95,6 +97,7 @@ public final class BrowserStore: ObservableObject {
         self.pendingSitePermissionRequest = nil
         self.sitePermissionSettings = sitePermissionSettings ?? snapshot.sitePermissionSettings
         self.historyEntries = localHistoryStore.entries
+        self.downloads = []
         self.commandRouter = commandRouter
         self.urlSecurityPolicy = urlSecurityPolicy
         self.downloadSafetyPolicy = downloadSafetyPolicy
@@ -103,6 +106,7 @@ public final class BrowserStore: ObservableObject {
         self.localHistoryPersistence = localHistoryPersistence
         self.localHistoryStore = localHistoryStore
         self.pendingDownloadCompletion = nil
+        self.downloadCancellationHandlers = [:]
 
         let didNormalizeLegacySpaceSymbols = normalizeLegacySpaceSymbols()
         let didPruneStaleEmptyTabs = pruneStaleEmptyTabsFromLoadedSession()
@@ -1230,15 +1234,38 @@ public final class BrowserStore: ObservableObject {
 
     public func requestDownloadConfirmation(
         _ request: DownloadConfirmationRequest,
+        date: Date = Date(),
         completion: @escaping @MainActor (URL?) -> Void
     ) {
         cancelPendingDownloadCompletion(message: nil)
 
         switch request.risk {
         case .blocked(let reason):
+            upsertDownload(
+                BrowserDownload(
+                    id: request.id,
+                    filename: request.sanitizedFilename,
+                    sourceDescription: request.sourceDescription,
+                    state: .failed,
+                    startedAt: date,
+                    updatedAt: date,
+                    completedAt: date,
+                    failureMessage: reason
+                )
+            )
             lastUserMessage = reason
             completion(nil)
         case .low, .requiresConfirmation:
+            upsertDownload(
+                BrowserDownload(
+                    id: request.id,
+                    filename: request.sanitizedFilename,
+                    sourceDescription: request.sourceDescription,
+                    state: .waitingForDestination,
+                    startedAt: date,
+                    updatedAt: date
+                )
+            )
             pendingDownloadConfirmation = request
             pendingDownloadCompletion = completion
             lastUserMessage = request.pendingMessage
@@ -1297,6 +1324,7 @@ public final class BrowserStore: ObservableObject {
         pendingDownloadConfirmation = nil
         pendingDownloadCompletion = nil
         isChoosingDownloadDestination = false
+        markDownloadStarted(request.id, destinationURL: destinationURL)
         lastUserMessage = "Download will be saved as \(destinationURL.lastPathComponent)."
         completion(destinationURL)
         return true
@@ -1309,6 +1337,84 @@ public final class BrowserStore: ObservableObject {
         }
 
         cancelPendingDownloadCompletion(message: request.cancelledMessage)
+    }
+
+    public var activeDownloads: [BrowserDownload] {
+        downloads.filter { $0.state.isActive }
+    }
+
+    public var primaryActiveDownload: BrowserDownload? {
+        activeDownloads.first
+    }
+
+    public func registerDownloadCancellation(
+        _ id: UUID,
+        cancel: @escaping @MainActor () -> Void
+    ) {
+        guard downloads.contains(where: { $0.id == id }) else {
+            return
+        }
+
+        downloadCancellationHandlers[id] = cancel
+    }
+
+    @discardableResult
+    public func cancelDownload(_ id: UUID) -> Bool {
+        guard let cancel = downloadCancellationHandlers[id] else {
+            return false
+        }
+
+        cancel()
+        markDownloadCanceled(id)
+        return true
+    }
+
+    public func updateDownloadProgress(
+        _ id: UUID,
+        progress: Double?,
+        date: Date = Date()
+    ) {
+        updateDownload(id) { download in
+            if download.state == .waitingForDestination {
+                download.state = .downloading
+            }
+            download.progress = BrowserDownload.normalizedProgress(progress)
+            download.updatedAt = date
+        }
+    }
+
+    public func finishDownload(
+        _ id: UUID,
+        destinationURL: URL?,
+        quarantineApplied: Bool,
+        date: Date = Date()
+    ) {
+        downloadCancellationHandlers[id] = nil
+        updateDownload(id) { download in
+            download.state = .finished
+            download.destinationURL = destinationURL ?? download.destinationURL
+            download.progress = 1
+            download.updatedAt = date
+            download.completedAt = date
+            download.failureMessage = quarantineApplied ? nil : "Quarantine metadata could not be applied."
+        }
+    }
+
+    public func failDownload(
+        _ id: UUID,
+        message: String = "Download failed.",
+        date: Date = Date()
+    ) {
+        downloadCancellationHandlers[id] = nil
+        updateDownload(id) { download in
+            guard download.state != .canceled else {
+                return
+            }
+            download.state = .failed
+            download.updatedAt = date
+            download.completedAt = date
+            download.failureMessage = message
+        }
     }
 
     public func updateActiveTabFromWebView(
@@ -1336,43 +1442,49 @@ public final class BrowserStore: ObservableObject {
         isLoading: Bool,
         securityMessage: String? = nil
     ) {
-        guard tabs.contains(where: { $0.id == tabID }) else {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == tabID }) else {
             return
         }
 
-        var visitProfileID: ProfileID?
-        var visitURL: URL?
-        var visitTitle: String?
-        updateTab(tabID) { tab in
-            guard tab.content.isWeb else {
-                return
-            }
-            if let title, !title.isEmpty {
-                tab.title = title
-            }
-            tab.url = url ?? tab.url
-            tab.isLoading = isLoading
-            tab.restorationMetadata.lastCommittedURL = url ?? tab.restorationMetadata.lastCommittedURL
-            if let updatedURL = url {
-                updateHTTPSUpgradeFallbackMetadata(for: &tab, committedURL: updatedURL)
-            }
-            visitProfileID = tab.profileID
-            visitURL = tab.url
-            visitTitle = tab.title
+        let currentTab = tabs[tabIndex]
+        guard currentTab.content.isWeb else {
+            return
         }
-        if !isLoading {
-            recordHistoryVisit(title: visitTitle, url: visitURL, profileID: visitProfileID)
+
+        var updatedTab = currentTab
+        if let title, !title.isEmpty {
+            updatedTab.title = title
         }
+        updatedTab.url = url ?? updatedTab.url
+        updatedTab.isLoading = isLoading
+        updatedTab.restorationMetadata.lastCommittedURL = url ?? updatedTab.restorationMetadata.lastCommittedURL
+        if let updatedURL = url {
+            updateHTTPSUpgradeFallbackMetadata(for: &updatedTab, committedURL: updatedURL)
+        }
+
+        let didChangeTabState = updatedTab != currentTab
+        if didChangeTabState {
+            tabs[tabIndex] = updatedTab
+        }
+
+        let completedNavigation = !isLoading
+            && (currentTab.isLoading || (url != nil && url != currentTab.url))
+        if completedNavigation {
+            recordHistoryVisit(title: updatedTab.title, url: updatedTab.url, profileID: updatedTab.profileID)
+        }
+
         if tabID == selectedTabID {
             if let securityMessage {
                 publishStatusMessage(securityMessage)
-            } else if let statusURL = url ?? visitURL {
+            } else if let statusURL = url ?? updatedTab.url {
                 updatePageSecurityStatus(for: statusURL)
             } else {
                 clearCurrentPageSecurityStatus()
             }
         }
-        persistSession()
+        if didChangeTabState {
+            persistSession()
+        }
     }
 
     public func publishStatusMessage(_ message: String?) {
@@ -1805,14 +1917,81 @@ public final class BrowserStore: ObservableObject {
     }
 
     private func cancelPendingDownloadCompletion(message: String?) {
+        let canceledDownloadID = pendingDownloadConfirmation?.id
         let completion = pendingDownloadCompletion
         pendingDownloadConfirmation = nil
         pendingDownloadCompletion = nil
         isChoosingDownloadDestination = false
+        if let canceledDownloadID {
+            markDownloadCanceled(canceledDownloadID)
+        }
         if let message {
             lastUserMessage = message
         }
         completion?(nil)
+    }
+
+    private func markDownloadStarted(
+        _ id: UUID,
+        destinationURL: URL,
+        date: Date = Date()
+    ) {
+        updateDownload(id) { download in
+            download.destinationURL = destinationURL
+            download.filename = destinationURL.lastPathComponent
+            download.state = .downloading
+            download.progress = 0
+            download.updatedAt = date
+        }
+    }
+
+    private func markDownloadCanceled(
+        _ id: UUID,
+        date: Date = Date()
+    ) {
+        downloadCancellationHandlers[id] = nil
+        updateDownload(id) { download in
+            guard download.state.isActive else {
+                return
+            }
+            download.state = .canceled
+            download.updatedAt = date
+            download.completedAt = date
+            download.failureMessage = "Download was canceled."
+        }
+    }
+
+    private func upsertDownload(_ download: BrowserDownload) {
+        if let index = downloads.firstIndex(where: { $0.id == download.id }) {
+            downloads[index] = download
+        } else {
+            downloads.insert(download, at: 0)
+        }
+        sortDownloads()
+    }
+
+    private func updateDownload(
+        _ id: UUID,
+        mutate: (inout BrowserDownload) -> Void
+    ) {
+        guard let index = downloads.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+
+        mutate(&downloads[index])
+        sortDownloads()
+    }
+
+    private func sortDownloads() {
+        downloads.sort { lhs, rhs in
+            if lhs.state.isActive != rhs.state.isActive {
+                return lhs.state.isActive
+            }
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
     }
 
     private func schedulePersistSession(date: Date = Date()) {
