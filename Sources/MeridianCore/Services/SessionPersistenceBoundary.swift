@@ -10,6 +10,14 @@ public enum SessionPersistenceBoundary {
         let persistentSitePermissionSettings = snapshot.sitePermissionSettings.filter { setting in
             setting.persistsBeyondSession && persistentProfileIDs.contains(setting.profileID)
         }
+        let persistentDownloads = snapshot.downloads.compactMap { download -> BrowserDownload? in
+            guard let profileID = download.profileID,
+                  persistentProfileIDs.contains(profileID) else {
+                return nil
+            }
+
+            return persistedDownload(download, capturedAt: snapshot.capturedAt)
+        }
 
         var persistentSpaces = snapshot.spaces.filter { persistentProfileIDs.contains($0.profileID) }
         let persistentSpaceIDs = Set(persistentSpaces.map(\.id))
@@ -94,8 +102,25 @@ public enum SessionPersistenceBoundary {
             selectedSpaceID: selectedSpaceID,
             selectedTabID: selectedTabID,
             capturedAt: snapshot.capturedAt,
-            sitePermissionSettings: persistentSitePermissionSettings
+            sitePermissionSettings: persistentSitePermissionSettings,
+            downloads: persistentDownloads
         )
+    }
+
+    private static func persistedDownload(
+        _ download: BrowserDownload,
+        capturedAt: Date
+    ) -> BrowserDownload {
+        guard download.state.isActive else {
+            return download
+        }
+
+        var download = download
+        download.state = .failed
+        download.updatedAt = capturedAt
+        download.completedAt = capturedAt
+        download.failureMessage = "Download was interrupted when Bare Browser closed."
+        return download
     }
 
     private static func repairedSelectedSpaceID(

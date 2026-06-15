@@ -112,9 +112,9 @@ public struct URLConfirmationRequest: Identifiable, Equatable, Sendable {
     public var confirmationMessage: String {
         switch kind {
         case .externalApplication:
-            return "Meridian will hand this link to another app only if you approve.\n\nLink: \(displayURL)\nSource: \(sourceDescription)"
+            return "Bare Browser will hand this link to another app only if you approve.\n\nLink: \(displayURL)\nSource: \(sourceDescription)"
         case .localFile:
-            return "Meridian blocked local file access until you approve opening it outside the web view.\n\nFile: \(displayURL)\nSource: \(sourceDescription)"
+            return "Bare Browser blocked local file access until you approve opening it outside the web view.\n\nFile: \(displayURL)\nSource: \(sourceDescription)"
         }
     }
 

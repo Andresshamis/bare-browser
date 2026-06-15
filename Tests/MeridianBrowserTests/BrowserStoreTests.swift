@@ -852,6 +852,16 @@ final class BrowserStoreTests: XCTestCase {
         _ = store.requestSitePermission(kind: .camera, origin: origin, profileID: profileID)
         let requestID = try XCTUnwrap(store.pendingSitePermissionRequest?.id)
         _ = store.resolvePendingSitePermission(.allow, requestID: requestID)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let downloadDestination = temporaryDirectory.appendingPathComponent("archive.zip")
+        let downloadRequest = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "archive.zip",
+            sourceURL: URL(string: "https://example.com/archive.zip")
+        )
+        store.requestDownloadConfirmation(downloadRequest, profileID: profileID) { _ in }
+        XCTAssertTrue(store.approvePendingDownloadConfirmation(destination: downloadDestination))
+        store.finishDownload(downloadRequest.id, destinationURL: downloadDestination, quarantineApplied: true)
 
         let snapshot = store.snapshot(date: Date(timeIntervalSince1970: 10))
         let data = try JSONEncoder().encode(snapshot)
@@ -862,12 +872,18 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(decoded.selectedTabID, snapshot.selectedTabID)
         XCTAssertEqual(decoded.sitePermissionSettings.count, 1)
         XCTAssertEqual(decoded.sitePermissionSettings.first?.origin.serializedOrigin, "https://camera.example")
+        XCTAssertEqual(decoded.downloads.count, 1)
+        XCTAssertEqual(decoded.downloads.first?.id, downloadRequest.id)
+        XCTAssertEqual(decoded.downloads.first?.profileID, profileID)
+        XCTAssertEqual(decoded.downloads.first?.state, .finished)
 
         var legacyObject = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         legacyObject.removeValue(forKey: "sitePermissionSettings")
+        legacyObject.removeValue(forKey: "downloads")
         let legacyData = try JSONSerialization.data(withJSONObject: legacyObject)
         let legacyDecoded = try JSONDecoder().decode(BrowserSessionSnapshot.self, from: legacyData)
         XCTAssertTrue(legacyDecoded.sitePermissionSettings.isEmpty)
+        XCTAssertTrue(legacyDecoded.downloads.isEmpty)
     }
 
     func testWebViewUpdateRecordsPublicHistoryEntry() throws {
@@ -1278,6 +1294,32 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertNil(store.lastUserMessage)
     }
 
+    func testWebViewFaviconUpdateStoresFaviconURL() throws {
+        let store = BrowserStore()
+        let tabID = try XCTUnwrap(store.selectedTabID)
+        let faviconURL = try XCTUnwrap(URL(string: "https://example.com/favicon.png"))
+
+        store.updateTabFavicon(faviconURL, for: tabID)
+
+        XCTAssertEqual(store.tabs.first { $0.id == tabID }?.faviconURL, faviconURL)
+    }
+
+    func testWebViewUpdateClearsFaviconWhenCommittedURLChanges() throws {
+        let store = BrowserStore()
+        let tabID = try XCTUnwrap(store.selectedTabID)
+        let faviconURL = try XCTUnwrap(URL(string: "https://example.com/favicon.png"))
+
+        store.updateTabFavicon(faviconURL, for: tabID)
+        store.updateTabFromWebView(
+            tabID: tabID,
+            title: "New Site",
+            url: try XCTUnwrap(URL(string: "https://other.example")),
+            isLoading: false
+        )
+
+        XCTAssertNil(store.tabs.first { $0.id == tabID }?.faviconURL)
+    }
+
     func testWebViewHTTPSUpdateClearsStaleInsecureStatusMessage() {
         let store = BrowserStore()
         let httpURL = URL(string: "http://example.com")!
@@ -1498,12 +1540,12 @@ final class BrowserStoreTests: XCTestCase {
 
         XCTAssertEqual(
             result,
-            .deny(reason: "Notifications permissions are not supported by Meridian on this WebKit version.")
+            .deny(reason: "Notifications permissions are not supported by Bare Browser on this WebKit version.")
         )
         XCTAssertNil(store.pendingSitePermissionRequest)
         XCTAssertEqual(
             store.lastUserMessage,
-            "Notifications permissions are not supported by Meridian on this WebKit version."
+            "Notifications permissions are not supported by Bare Browser on this WebKit version."
         )
     }
 
@@ -1563,7 +1605,7 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(store.setSitePermissionDecision(.allow, for: .notifications, origin: origin, profileID: profileID))
         XCTAssertEqual(
             store.lastUserMessage,
-            "Notifications permissions are not supported by Meridian on this WebKit version."
+            "Notifications permissions are not supported by Bare Browser on this WebKit version."
         )
 
         XCTAssertFalse(store.setSitePermissionDecision(.allow, for: .autoplay, origin: origin, profileID: profileID))
@@ -1864,9 +1906,42 @@ final class BrowserStoreTests: XCTestCase {
 
         let download = try XCTUnwrap(store.primaryActiveDownload)
         XCTAssertEqual(download.id, request.id)
+        XCTAssertEqual(download.profileID, store.activeProfile?.id)
         XCTAssertEqual(download.filename, "archive.zip")
         XCTAssertEqual(download.sourceDescription, "example.com")
         XCTAssertEqual(download.state, .waitingForDestination)
+    }
+
+    func testPendingDownloadCanBeScopedToExplicitProfile() throws {
+        let store = BrowserStore()
+        let workProfile = store.createPersistentProfile(name: "Work")
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "brief.pdf",
+            sourceURL: URL(string: "https://example.com/brief.pdf")
+        )
+
+        store.requestDownloadConfirmation(request, profileID: workProfile.id) { _ in }
+
+        let download = try XCTUnwrap(store.primaryActiveDownload)
+        XCTAssertEqual(download.profileID, workProfile.id)
+    }
+
+    func testDownloadRecordsAreSavedInSessionSnapshots() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let request = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "archive.zip",
+            sourceURL: URL(string: "https://example.com/archive.zip")
+        )
+
+        store.requestDownloadConfirmation(request, profileID: profileID) { _ in }
+        store.flushScheduledSessionPersistence(date: Date(timeIntervalSince1970: 20))
+
+        let savedDownload = try XCTUnwrap(spy.savedSnapshots.last?.downloads.first)
+        XCTAssertEqual(savedDownload.id, request.id)
+        XCTAssertEqual(savedDownload.profileID, profileID)
+        XCTAssertEqual(savedDownload.state, .waitingForDestination)
     }
 
     func testApprovedDownloadTracksProgressAndCompletion() throws {

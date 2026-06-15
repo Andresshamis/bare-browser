@@ -18,7 +18,6 @@ struct SidebarColorNoiseOverlay<ClipShape: Shape>: View {
                     .frame(width: proxy.size.width, height: proxy.size.height)
             }
             .opacity(opacity)
-            .blendMode(.color)
             .clipShape(shape)
             .allowsHitTesting(false)
             .accessibilityHidden(true)

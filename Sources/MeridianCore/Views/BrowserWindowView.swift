@@ -26,6 +26,7 @@ private enum BrowserSidebarSizing {
 
 public struct BrowserWindowView: View {
     @ObservedObject private var store: BrowserStore
+    @Environment(\.colorScheme) private var colorScheme
     @StateObject private var webViewState = WebViewState()
     @StateObject private var webViewRegistry = BrowserWebViewRegistry()
     @StateObject private var contentPresentationState = BrowserContentPresentationState()
@@ -34,6 +35,7 @@ public struct BrowserWindowView: View {
     @State private var sidebarResizeLiveWidth: CGFloat?
     @State private var sidebarChromeTheme: SidebarChromeTheme?
     @State private var autoPresentedDownloadID: UUID?
+    @State private var activityPageIsSelected = false
     private let dataStoreProvider = ProfileWebsiteDataStoreProvider()
     private let floatingSidebarInset: CGFloat = 8
     private let floatingSidebarCornerRadius: CGFloat = 12
@@ -96,8 +98,6 @@ public struct BrowserWindowView: View {
                 }
             }
             .animation(.snappy(duration: 0.16), value: store.isCommandBarPresented)
-            .animation(sidebarVisibilityAnimation, value: store.sidebarIsVisible)
-            .animation(sidebarPinnedStateAnimation, value: store.sidebarIsLockedOpen)
             .onAppear {
                 normalizeStoredSidebarWidth()
                 presentPendingDownloadSavePanelIfNeeded()
@@ -140,15 +140,27 @@ public struct BrowserWindowView: View {
     }
 
     private var browserSurface: some View {
+        GeometryReader { proxy in
+            browserSurfaceContent(availableHeight: proxy.size.height)
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: sidebarRevealAlignment)
+                .clipped()
+        }
+        .focusedSceneValue(\.browserNavigationCommandContext, browserNavigationCommandContext)
+    }
+
+    private func browserSurfaceContent(availableHeight: CGFloat) -> some View {
         ZStack(alignment: sidebarRevealAlignment) {
             browserDetail
                 .padding(sidebarPaddingEdge, store.sidebarIsLockedOpen ? sidebarReservedWidth : 0)
+                .animation(sidebarPinnedStateAnimation, value: store.sidebarIsLockedOpen)
                 .zIndex(0)
 
-            sidebarOverlay
+            sidebarOverlay(availableHeight: availableHeight)
                 .offset(x: sidebarVisibilityOffset)
-                .opacity(sidebarVisibilityOpacity)
                 .allowsHitTesting(sidebarShouldBeMounted)
+                .accessibilityHidden(!sidebarShouldBeMounted)
+                .animation(sidebarVisibilityAnimation, value: store.sidebarIsVisible)
+                .animation(sidebarPinnedStateAnimation, value: store.sidebarIsLockedOpen)
                 .zIndex(2)
 
             if !sidebarShouldBeMounted {
@@ -156,12 +168,11 @@ public struct BrowserWindowView: View {
                     store.revealSidebar()
                 }
                 .frame(width: sidebarRevealHotZoneWidth)
-                .frame(maxHeight: .infinity)
+                .frame(height: max(availableHeight, 0))
                 .accessibilityHidden(true)
                 .zIndex(3)
             }
         }
-        .focusedSceneValue(\.browserNavigationCommandContext, browserNavigationCommandContext)
     }
 
     private var browserDetail: some View {
@@ -171,14 +182,15 @@ public struct BrowserWindowView: View {
             presentationState: contentPresentationState,
             webViewRegistry: webViewRegistry,
             dataStoreProvider: dataStoreProvider,
+            activityPageIsSelected: $activityPageIsSelected,
             webContentMouseExclusionRegion: webContentMouseExclusionRegion
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private var sidebarOverlay: some View {
-        sidebarShell
+    private func sidebarOverlay(availableHeight: CGFloat) -> some View {
+        sidebarShell(availableHeight: availableHeight)
             .background(
                 Group {
                     if store.sidebarIsVisible && !store.sidebarIsLockedOpen {
@@ -193,9 +205,9 @@ public struct BrowserWindowView: View {
             )
     }
 
-    private var sidebarShell: some View {
+    private func sidebarShell(availableHeight: CGFloat) -> some View {
         sidebar
-            .frame(width: sidebarWidth)
+            .frame(width: sidebarWidth, height: sidebarBodyHeight(for: availableHeight))
             .padding(.vertical, sidebarOuterInset)
             .padding(sidebarPaddingEdge, sidebarOuterInset)
     }
@@ -209,6 +221,18 @@ public struct BrowserWindowView: View {
         let tintColor = Color(hex: chromeTheme.tintHex)
         let floatingSettings = appearance.base
         let pinnedSettings = appearance.pinnedSettings
+        let contentSettings = store.sidebarIsLockedOpen ? pinnedSettings : floatingSettings
+        let contentForegroundWhiteAmount = sidebarForegroundWhiteAmount(
+            for: chromeTheme,
+            settings: contentSettings
+        )
+        let contentForegroundColor = Color(
+            .sRGB,
+            red: contentForegroundWhiteAmount,
+            green: contentForegroundWhiteAmount,
+            blue: contentForegroundWhiteAmount,
+            opacity: 1
+        )
 
         return ZStack {
             pinnedSidebarChrome(settings: pinnedSettings, tintColor: tintColor, shape: shape)
@@ -222,8 +246,15 @@ public struct BrowserWindowView: View {
                 store: store,
                 webViewState: webViewState,
                 presentationState: contentPresentationState,
+                activityPageIsSelected: $activityPageIsSelected,
                 updateSidebarChromeTheme: { sidebarChromeTheme = $0 }
             )
+            .foregroundStyle(
+                contentForegroundColor,
+                contentForegroundColor.opacity(0.70),
+                contentForegroundColor.opacity(0.46)
+            )
+            .environment(\.sidebarForegroundColor, contentForegroundColor)
         }
         .frame(maxHeight: .infinity)
         .clipShape(shape)
@@ -231,6 +262,7 @@ public struct BrowserWindowView: View {
             shape.stroke(.separator.opacity(floatingSettings.edgeOpacity), lineWidth: 0.5)
                 .opacity(floatingOpacity)
         }
+        .compositingGroup()
         .shadow(
             color: tintColor.opacity(SidebarGlassRendering.shadowOpacity(for: floatingSettings) * floatingOpacity),
             radius: 18,
@@ -255,47 +287,7 @@ public struct BrowserWindowView: View {
         tintColor: Color,
         settings: SidebarGlassSettings
     ) -> some View {
-        shape
-            .fill(.clear)
-            .glassEffect(.regular.tint(tintColor.opacity(SidebarGlassRendering.glassTintOpacity(for: settings))).interactive(false), in: shape)
-            .compositingGroup()
-            .overlay {
-                sidebarTintOverlay(shape: shape, tintColor: tintColor, settings: settings)
-            }
-            .overlay {
-                SidebarColorNoiseOverlay(
-                    level: settings.colorNoiseLevel,
-                    shape: shape
-                )
-            }
-    }
-
-    private func sidebarTintOverlay(
-        shape: UnevenRoundedRectangle,
-        tintColor: Color,
-        settings: SidebarGlassSettings
-    ) -> some View {
-        let recipe = SidebarGlassRendering.recipe(for: settings)
-
-        return ZStack {
-            shape
-                .fill(Color(nsColor: .windowBackgroundColor).opacity(recipe.neutralFillOpacity))
-
-            shape
-                .fill(tintColor.opacity(recipe.themeFillOpacity))
-
-            LinearGradient(
-                colors: [
-                    .white.opacity(recipe.neutralHighlightOpacity),
-                    tintColor.opacity(recipe.themeHighlightOpacity),
-                    .clear
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .clipShape(shape)
-        }
-        .allowsHitTesting(false)
+        SidebarGlassMaterial(shape: shape, tintColor: tintColor, settings: settings)
     }
 
     private var selectedSidebarChromeTheme: SidebarChromeTheme {
@@ -306,8 +298,23 @@ public struct BrowserWindowView: View {
         return SidebarChromeTheme.theme(for: selectedSpace)
     }
 
+    private func sidebarForegroundWhiteAmount(
+        for chromeTheme: SidebarChromeTheme,
+        settings: SidebarGlassSettings
+    ) -> Double {
+        SidebarGlassRendering.foregroundWhiteAmount(
+            for: settings,
+            tintHex: chromeTheme.tintHex,
+            baseWhiteAmount: colorScheme == .dark ? 1 : 0
+        )
+    }
+
     private var sidebarOuterInset: CGFloat {
         store.sidebarIsLockedOpen ? 0 : floatingSidebarInset
+    }
+
+    private func sidebarBodyHeight(for availableHeight: CGFloat) -> CGFloat {
+        max(0, availableHeight - sidebarOuterInset * 2)
     }
 
     private var sidebarShape: UnevenRoundedRectangle {
@@ -387,10 +394,6 @@ public struct BrowserWindowView: View {
 
     private var sidebarShouldBeMounted: Bool {
         store.sidebarIsLockedOpen || store.sidebarIsVisible
-    }
-
-    private var sidebarVisibilityOpacity: Double {
-        sidebarShouldBeMounted ? 1 : 0
     }
 
     private var sidebarVisibilityOffset: CGFloat {
@@ -562,8 +565,7 @@ private struct SidebarWindowRevealMonitor: NSViewRepresentable {
         nsView.sidebarIsLockedOpen = sidebarIsLockedOpen
         nsView.reveal = reveal
         nsView.window?.acceptsMouseMovedEvents = true
-        nsView.startPointerTimerIfNeeded()
-        nsView.installEventMonitorIfNeeded()
+        nsView.syncPointerObservation()
     }
 }
 
@@ -691,18 +693,29 @@ private final class SidebarResizeNSView: NSView {
 
 private final class SidebarWindowRevealNSView: NSView {
     var edge: SidebarRevealEdge = .left
-    var sidebarIsVisible = true
-    var sidebarIsLockedOpen = true
+    var sidebarIsVisible = true {
+        didSet {
+            if !sidebarIsVisible {
+                revealIsPending = false
+            }
+            syncPointerObservation()
+        }
+    }
+    var sidebarIsLockedOpen = true {
+        didSet {
+            syncPointerObservation()
+        }
+    }
     var reveal: (@MainActor () -> Void)?
 
     private var pointerTimer: Timer?
     private var eventMonitor: Any?
+    private var revealIsPending = false
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         window?.acceptsMouseMovedEvents = true
-        startPointerTimerIfNeeded()
-        installEventMonitorIfNeeded()
+        syncPointerObservation()
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -713,7 +726,20 @@ private final class SidebarWindowRevealNSView: NSView {
         }
     }
 
-    func startPointerTimerIfNeeded() {
+    func syncPointerObservation() {
+        guard window != nil,
+              !sidebarIsLockedOpen,
+              !sidebarIsVisible else {
+            stopPointerTimer()
+            removeEventMonitor()
+            return
+        }
+
+        startPointerTimerIfNeeded()
+        installEventMonitorIfNeeded()
+    }
+
+    private func startPointerTimerIfNeeded() {
         guard pointerTimer == nil else {
             return
         }
@@ -761,6 +787,7 @@ private final class SidebarWindowRevealNSView: NSView {
     private func revealIfPointerIsAtWindowEdge() {
         guard !sidebarIsLockedOpen,
               !sidebarIsVisible,
+              !revealIsPending,
               let window else {
             return
         }
@@ -772,7 +799,22 @@ private final class SidebarWindowRevealNSView: NSView {
         let windowPoint = window.convertPoint(fromScreen: NSEvent.mouseLocation)
         let contentPoint = contentView.convert(windowPoint, from: nil)
         if contentPoint.isAt(edge: edge, width: sidebarRevealHotZoneWidth, in: contentView.bounds) {
-            Task { @MainActor in reveal?() }
+            triggerReveal()
+        }
+    }
+
+    private func triggerReveal() {
+        guard !revealIsPending else {
+            return
+        }
+
+        revealIsPending = true
+        Task { @MainActor [weak self] in
+            self?.reveal?()
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            if self?.sidebarIsVisible == false {
+                self?.revealIsPending = false
+            }
         }
     }
 }
@@ -994,6 +1036,7 @@ private final class SidebarRevealTrackingNSView: NSView {
     var reveal: (@MainActor () -> Void)?
     private var hoverTrackingArea: NSTrackingArea?
     private var pointerTimer: Timer?
+    private var revealIsPending = false
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -1071,7 +1114,16 @@ private final class SidebarRevealTrackingNSView: NSView {
     }
 
     private func triggerReveal() {
-        Task { @MainActor in reveal?() }
+        guard !revealIsPending else {
+            return
+        }
+
+        revealIsPending = true
+        Task { @MainActor [weak self] in
+            self?.reveal?()
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            self?.revealIsPending = false
+        }
     }
 }
 
@@ -1483,7 +1535,7 @@ private struct WindowChromeController: NSViewRepresentable {
 
 private extension NSWindow {
     func applyMeridianChrome() {
-        title = "Meridian Browser"
+        title = "Bare Browser"
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         titlebarSeparatorStyle = .none

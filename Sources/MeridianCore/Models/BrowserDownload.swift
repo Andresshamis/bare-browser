@@ -17,8 +17,9 @@ public enum BrowserDownloadState: String, Codable, Sendable {
     }
 }
 
-public struct BrowserDownload: Identifiable, Equatable, Sendable {
+public struct BrowserDownload: Identifiable, Equatable, Codable, Sendable {
     public var id: UUID
+    public var profileID: ProfileID?
     public var filename: String
     public var sourceDescription: String
     public var destinationURL: URL?
@@ -31,6 +32,7 @@ public struct BrowserDownload: Identifiable, Equatable, Sendable {
 
     public init(
         id: UUID = UUID(),
+        profileID: ProfileID? = nil,
         filename: String,
         sourceDescription: String,
         destinationURL: URL? = nil,
@@ -42,6 +44,7 @@ public struct BrowserDownload: Identifiable, Equatable, Sendable {
         failureMessage: String? = nil
     ) {
         self.id = id
+        self.profileID = profileID
         self.filename = filename
         self.sourceDescription = sourceDescription
         self.destinationURL = destinationURL

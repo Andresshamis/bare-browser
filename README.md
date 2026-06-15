@@ -1,10 +1,10 @@
-# Meridian Browser
+# Bare Browser
 
-Meridian Browser is an open-source, native macOS browser project built with SwiftUI and WebKit.
+Bare Browser is an open-source, native macOS browser project built with SwiftUI and WebKit.
 
 The product direction is a sidebar-first browsing workflow with spaces, pinned tabs,
 favorites/essentials, folders, profiles, split views, a native command bar, and
-minimal top chrome. Meridian uses original branding, assets, text, and
+minimal top chrome. Bare Browser uses original branding, assets, text, and
 implementation.
 
 ## Status
@@ -40,6 +40,14 @@ history results.
 - Xcode 26.x with the macOS 26 SDK
 - Swift 6.2 or later
 
+## Repository Notes
+
+The public product name is Bare Browser. The Swift package, module names, and
+some internal symbols still use the historical `Meridian*` naming.
+
+First-party app assets live under `Resources/`. Do not add third-party assets
+without documenting their source and license.
+
 ## Build And Test
 
 ```sh
@@ -49,7 +57,7 @@ swift test
 ```
 
 `script/build_and_run.sh` stages the SwiftPM GUI executable into
-`dist/Meridian Browser.app` before launching it, which gives the app foreground
+`dist/Bare Browser.app` before launching it, which gives the app foreground
 macOS bundle behavior that `swift run MeridianBrowser` does not reliably provide.
 It also supports `--debug`, `--logs`, `--subsystem-logs`, and `--verify`.
 
@@ -62,13 +70,13 @@ the Xcode app/UI test host and owner-approved signing setup are available.
 
 ## Privacy And Diagnostics
 
-Meridian does not collect product analytics, browsing telemetry, page contents,
+Bare Browser does not collect product analytics, browsing telemetry, page contents,
 URLs, credentials, cookies, tokens, or private browsing data. The current app has
 no analytics SDK, tracking endpoint, or network reporting path.
 
 Developer diagnostics are local only. `script/build_and_run.sh --logs` streams
-local OS log entries for the Meridian process, and `--subsystem-logs` streams
-local OS log entries for Meridian's bundle subsystem. These modes do not send
+local OS log entries for the Bare Browser process, and `--subsystem-logs` streams
+local OS log entries for Bare Browser's bundle subsystem. These modes do not send
 diagnostic data off the machine.
 
 ## Documentation
@@ -80,6 +88,13 @@ diagnostic data off the machine.
 - [Test Plan](Docs/TestPlan.md)
 - [Release Checklist](Docs/ReleaseChecklist.md)
 
+## Contributing And Security
+
+- [Contributing](CONTRIBUTING.md)
+- [Security Policy](SECURITY.md)
+- [Support](SUPPORT.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+
 ## License
 
-Meridian Browser is released under the MIT License. See [LICENSE](LICENSE).
+Bare Browser is released under the MIT License. See [LICENSE](LICENSE).

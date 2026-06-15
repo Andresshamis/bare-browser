@@ -20,6 +20,12 @@ enum SidebarSelectedIconContrast: Equatable {
 
 enum SidebarGlassRendering {
     private static let fixedColorNoiseScale = 0.0
+    private static let maximumColorNoiseOpacity = 0.09
+    private static let minimumTintInfluenceForFixedForeground = 0.28
+    private static let fullTintInfluenceForFixedForeground = 0.60
+    private static let maximumDensityForDarkForeground = 0.72
+    private static let maximumColorMixForDarkForeground = 0.72
+    private static let minimumLuminanceForDarkForeground = 0.82
 
     static func recipe(for settings: SidebarGlassSettings) -> SidebarGlassRecipe {
         let density = clamped(settings.glassOpacity)
@@ -73,7 +79,7 @@ enum SidebarGlassRendering {
     }
 
     static func colorNoiseOpacity(forLevel level: Double) -> Double {
-        pow(clamped(level), 1.10) * 0.30
+        pow(clamped(level), 1.10) * maximumColorNoiseOpacity
     }
 
     static func colorNoiseCellSize(for settings: SidebarGlassSettings) -> CGFloat {
@@ -102,11 +108,44 @@ enum SidebarGlassRendering {
         let recipe = recipe(for: settings)
         let tintInfluence = recipe.themeFillOpacity + recipe.themeGlassTintOpacity
 
-        guard tintInfluence >= 0.18 else {
+        guard tintInfluence >= minimumTintInfluenceForFixedForeground else {
             return .adaptive
         }
 
-        return relativeLuminance(forHex: tintHex) >= 0.72 ? .dark : .light
+        let canUseDarkForeground = recipe.density <= maximumDensityForDarkForeground
+            && recipe.colorMix <= maximumColorMixForDarkForeground
+
+        return canUseDarkForeground
+            && relativeLuminance(forHex: tintHex) >= minimumLuminanceForDarkForeground
+            ? .dark
+            : .light
+    }
+
+    static func foregroundWhiteAmount(
+        for settings: SidebarGlassSettings,
+        tintHex: String,
+        baseWhiteAmount: Double
+    ) -> Double {
+        let recipe = recipe(for: settings)
+        let tintInfluence = recipe.themeFillOpacity + recipe.themeGlassTintOpacity
+        let base = clamped(baseWhiteAmount)
+
+        guard tintInfluence >= minimumTintInfluenceForFixedForeground else {
+            return base
+        }
+
+        let canUseDarkForeground = recipe.density <= maximumDensityForDarkForeground
+            && recipe.colorMix <= maximumColorMixForDarkForeground
+        let target = canUseDarkForeground
+            && relativeLuminance(forHex: tintHex) >= minimumLuminanceForDarkForeground
+            ? 0.0
+            : 1.0
+        let progress = clamped(
+            (tintInfluence - minimumTintInfluenceForFixedForeground)
+                / (fullTintInfluenceForFixedForeground - minimumTintInfluenceForFixedForeground)
+        )
+
+        return base + (target - base) * smoothStep(progress)
     }
 
     private static func relativeLuminance(forHex hex: String) -> Double {
@@ -128,6 +167,11 @@ enum SidebarGlassRendering {
 
     private static func clamped(_ value: Double) -> Double {
         min(max(value, 0), 1)
+    }
+
+    private static func smoothStep(_ value: Double) -> Double {
+        let value = clamped(value)
+        return value * value * (3 - 2 * value)
     }
 }
 

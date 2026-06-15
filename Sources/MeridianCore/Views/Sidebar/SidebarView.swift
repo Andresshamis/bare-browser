@@ -1,12 +1,26 @@
 import AppKit
 import SwiftUI
 
+private struct SidebarForegroundColorEnvironmentKey: EnvironmentKey {
+    static let defaultValue = Color.primary
+}
+
+extension EnvironmentValues {
+    var sidebarForegroundColor: Color {
+        get { self[SidebarForegroundColorEnvironmentKey.self] }
+        set { self[SidebarForegroundColorEnvironmentKey.self] = newValue }
+    }
+}
+
 private let sidebarLockControlAnimation = Animation.smooth(duration: 0.24, extraBounce: 0)
 
 private enum SidebarHeaderMetrics {
     static let trafficLightEdgeInset: CGFloat = 12
     static let controlRowHeight: CGFloat = 24
     static let controlRowBottomInset: CGFloat = 7
+    static let compactAddressControlsHeight: CGFloat = 34
+    static let pageContentTopInset: CGFloat = 20
+    static let pageContentBottomInset: CGFloat = 12
     static let inlineControlHeight: CGFloat = 14
     static let spaceSwitcherButtonSize: CGFloat = 26
     static let spaceSwitcherGlyphSize: CGFloat = 26
@@ -26,18 +40,23 @@ public struct SidebarView: View {
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var webViewState: WebViewState
     @ObservedObject private var presentationState: BrowserContentPresentationState
+    @Binding private var activityPageIsSelected: Bool
     @State private var window: NSWindow?
+    @State private var previewedSpaceID: SpaceID?
+    @State private var pagerNavigationRequest: SidebarSpacePagerNavigationRequest?
     private let updateSidebarChromeTheme: (SidebarChromeTheme?) -> Void
 
     public init(
         store: BrowserStore,
         webViewState: WebViewState,
         presentationState: BrowserContentPresentationState,
+        activityPageIsSelected: Binding<Bool> = .constant(false),
         updateSidebarChromeTheme: @escaping (SidebarChromeTheme?) -> Void = { _ in }
     ) {
         self.store = store
         self.webViewState = webViewState
         self.presentationState = presentationState
+        self._activityPageIsSelected = activityPageIsSelected
         self.updateSidebarChromeTheme = updateSidebarChromeTheme
     }
 
@@ -116,11 +135,19 @@ public struct SidebarView: View {
     }
 
     private var compactAddressButton: some View {
-        SidebarAddressControls(store: store, presentationState: presentationState)
+        SidebarAddressControls(
+            store: store,
+            presentationState: presentationState,
+            isActivitySelected: activityPageIsSelected
+        )
     }
 
     private var commandTargetTabID: TabID? {
-        presentationState.activeContentTabID ?? store.selectedTabID
+        guard !activityPageIsSelected else {
+            return nil
+        }
+
+        return presentationState.activeContentTabID ?? store.selectedTabID
     }
 
     private var commandTargetTab: BrowserTab? {
@@ -134,16 +161,22 @@ public struct SidebarView: View {
     private var spaceSwitcher: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: SidebarHeaderMetrics.spaceSwitcherSpacing) {
+                Button {
+                    showActivity()
+                } label: {
+                    ActivitySwitcherButtonLabel(isSelected: isActivitySelected)
+                }
+                .buttonStyle(.plain)
+                .help("History and Downloads")
+                .accessibilityLabel("History and Downloads")
+
                 ForEach(store.sidebarSpaces) { space in
                     Button {
-                        selectSpace(space.id)
+                        showSpace(space.id)
                     } label: {
                         SpaceSwitcherButtonLabel(
                             space: space,
-                            sidebarSettings: store.sidebarIsLockedOpen
-                                ? space.sidebarAppearance.pinnedSettings
-                                : space.sidebarAppearance.base,
-                            isSelected: store.selectedSpaceID == space.id
+                            isSelected: visualSelectedSpaceID == space.id
                         )
                     }
                     .buttonStyle(.plain)
@@ -159,7 +192,7 @@ public struct SidebarView: View {
                         Divider()
 
                         Button {
-                            selectSpace(space.id)
+                            showSpace(space.id)
                         } label: {
                             Label("Switch to Space", systemImage: "arrow.right.circle")
                         }
@@ -194,34 +227,64 @@ public struct SidebarView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, SidebarHeaderMetrics.spaceSwitcherVerticalInset)
         }
-        .animation(SidebarSpacePagerMetrics.selectionAnimation, value: store.selectedSpaceID)
     }
 
     @ViewBuilder
     private var spacePager: some View {
         SidebarSpacePagerView(
             snapshot: makeSpacePagerSnapshot(),
+            navigationRequest: pagerNavigationRequest,
             selectTab: { store.selectTab($0) },
             closeTab: { store.closeTab($0.id) },
             setTabPlacement: { tabID, placement in store.setTabPlacement(placement, for: tabID) },
-            moveTab: { tabID, direction in store.moveTab(tabID, direction) },
+            moveTab: { tabID, direction in
+                withAnimation(SidebarTabReorderInteractionMetrics.animation) {
+                    _ = store.moveTab(tabID, direction)
+                }
+            },
             moveTabBefore: { draggedTabID, placement, tabID in
-                store.moveTab(draggedTabID, to: placement, before: tabID)
+                withAnimation(SidebarTabReorderInteractionMetrics.animation) {
+                    store.moveTab(draggedTabID, to: placement, before: tabID)
+                }
             },
             moveTabToPlacement: { draggedTabID, placement in
-                store.moveTab(draggedTabID, to: placement)
+                withAnimation(SidebarTabReorderInteractionMetrics.animation) {
+                    store.moveTab(draggedTabID, to: placement)
+                }
             },
             moveTabToFolder: { draggedTabID, folderID, targetTabID in
-                store.moveTab(draggedTabID, toFolder: folderID, before: targetTabID)
+                withAnimation(SidebarTabReorderInteractionMetrics.animation) {
+                    store.moveTab(draggedTabID, toFolder: folderID, before: targetTabID)
+                }
             },
             createFolder: { name, spaceID, parentFolderID in
                 store.createFolder(name: name, in: spaceID, parentFolderID: parentFolderID)
             },
             customizeSpace: { beginCustomizing($0) },
-            selectSpace: { store.selectSpace($0) },
-            previewSpace: { setAddressPreviewSpace($0) },
+            openHistoryEntry: { openHistoryEntry($0) },
+            revealDownload: { revealDownload($0) },
+            selectSpace: { selectSpace($0) },
+            selectAuxiliaryPage: { selectAuxiliaryPage($0) },
+            previewSpace: { setPreviewSpace($0) },
             updateSidebarChromeTheme: updateSidebarChromeTheme
         )
+    }
+
+    private var visualSelectedSpaceID: SpaceID? {
+        previewedSpaceID ?? (selectedAuxiliaryPageID == nil ? store.selectedSpaceID : nil)
+    }
+
+    private var isActivitySelected: Bool {
+        previewedSpaceID == nil && selectedAuxiliaryPageID == .activity
+    }
+
+    private var selectedAuxiliaryPageID: SidebarSpacePagerPageID? {
+        get {
+            activityPageIsSelected ? .activity : nil
+        }
+        nonmutating set {
+            activityPageIsSelected = newValue == .activity
+        }
     }
 
     private func selectSpace(_ id: SpaceID) {
@@ -229,108 +292,47 @@ public struct SidebarView: View {
             return
         }
 
-        withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
+        presentationState.beginSnapshotHandoff(to: addressPreviewTabID(for: id))
+        withTransaction(Transaction(animation: nil)) {
             store.selectSpace(id)
         }
     }
 
+    private func showSpace(_ id: SpaceID) {
+        selectedAuxiliaryPageID = nil
+        pagerNavigationRequest = SidebarSpacePagerNavigationRequest(pageID: .space(id))
+        selectSpace(id)
+    }
+
+    private func showActivity() {
+        selectedAuxiliaryPageID = .activity
+        pagerNavigationRequest = SidebarSpacePagerNavigationRequest(pageID: .activity)
+        setPreviewSpace(nil)
+    }
+
+    private func selectAuxiliaryPage(_ pageID: SidebarSpacePagerPageID?) {
+        selectedAuxiliaryPageID = pageID
+    }
+
     private func makeSpacePagerSnapshot() -> SidebarSpacePagerSnapshot {
         let activeSpaces = store.sidebarSpaces
-        let selectedIndex = selectedSpaceIndex(in: activeSpaces)
-        let pageIndices = Array(activeSpaces.indices)
-        let pageSpaceIDs = Set(activeSpaces.map(\.id))
-        let foldersByID = Dictionary(
-            uniqueKeysWithValues: store.folders
-                .lazy
-                .filter { pageSpaceIDs.contains($0.parentSpaceID) }
-                .map { ($0.id, $0) }
+        let spacePages = SidebarSpacePageSnapshotBuilder.spacePages(
+            activeSpaces: activeSpaces,
+            folders: store.folders,
+            tabs: store.tabs
         )
-        let foldersBySpaceID = Dictionary(grouping: foldersByID.values, by: \.parentSpaceID)
-        let directTabIDs = activeSpaces.flatMap { space in
-            space.favoriteTabIDs + space.pinnedTabIDs + space.regularTabIDs
-        }
-        let folderTabIDs = foldersByID.values.flatMap(\.tabIDs)
-        let visibleTabIDs = Set(directTabIDs + folderTabIDs)
-        let tabsByID = Dictionary(
-            uniqueKeysWithValues: store.tabs
-                .lazy
-                .filter { visibleTabIDs.contains($0.id) }
-                .map { ($0.id, $0) }
+        let activityPage = SidebarActivityPageSnapshot(
+            profiles: store.profiles,
+            downloads: store.downloads,
+            historyEntries: store.historyEntries
         )
-        let pages = pageIndices.map { index in
-            let space = activeSpaces[index]
-            let focusedTabID = SidebarSpacePagerFocus.focusedTabID(
-                for: space,
-                folders: foldersBySpaceID[space.id, default: []],
-                tabsByID: tabsByID
-            )
-
-            return SidebarSpacePageSnapshot(
-                index: index,
-                space: space,
-                favoriteTabs: tabItems(for: space.favoriteTabIDs, focusedTabID: focusedTabID, tabsByID: tabsByID),
-                pinnedTabs: tabItems(for: space.pinnedTabIDs, focusedTabID: focusedTabID, tabsByID: tabsByID),
-                folders: folderItems(
-                    for: space.folderIDs,
-                    focusedTabID: focusedTabID,
-                    foldersByID: foldersByID,
-                    tabsByID: tabsByID
-                ),
-                regularTabs: tabItems(for: space.regularTabIDs, focusedTabID: focusedTabID, tabsByID: tabsByID)
-            )
-        }
 
         return SidebarSpacePagerSnapshot(
-            selectedIndex: selectedIndex,
+            selectedSpacePageID: store.selectedSpaceID.map(SidebarSpacePagerPageID.space),
+            selectedAuxiliaryPageID: selectedAuxiliaryPageID,
             spaceCount: activeSpaces.count,
-            pages: pages
+            pages: [.activity(activityPage)] + spacePages.map(SidebarSpacePagerPageSnapshot.space)
         )
-    }
-
-    private func selectedSpaceIndex(in activeSpaces: [BrowserSpace]) -> Int? {
-        guard let selectedSpaceID = store.selectedSpaceID else {
-            return nil
-        }
-        return activeSpaces.firstIndex { $0.id == selectedSpaceID }
-    }
-
-    private func tabItems(
-        for ids: [TabID],
-        focusedTabID: TabID?,
-        tabsByID: [TabID: BrowserTab]
-    ) -> [SidebarTabItemSnapshot] {
-        let orderedTabs = ids.compactMap { tabsByID[$0] }
-        return orderedTabs.enumerated().map { index, tab in
-            return SidebarTabItemSnapshot(
-                tab: tab,
-                isSelected: SidebarSpacePagerFocus.isFocused(tabID: tab.id, focusedTabID: focusedTabID),
-                canMoveUp: index > 0,
-                canMoveDown: index < orderedTabs.count - 1
-            )
-        }
-    }
-
-    private func folderItems(
-        for ids: [FolderID],
-        focusedTabID: TabID?,
-        foldersByID: [FolderID: BrowserFolder],
-        tabsByID: [TabID: BrowserTab]
-    ) -> [SidebarFolderItemSnapshot] {
-        ids.compactMap { id in
-            guard let folder = foldersByID[id] else {
-                return nil
-            }
-            return SidebarFolderItemSnapshot(
-                folder: folder,
-                tabs: tabItems(for: folder.tabIDs, focusedTabID: focusedTabID, tabsByID: tabsByID),
-                childFolders: folderItems(
-                    for: folder.childFolderIDs,
-                    focusedTabID: focusedTabID,
-                    foldersByID: foldersByID,
-                    tabsByID: tabsByID
-                )
-            )
-        }
     }
 
     private func close(_ tab: BrowserTab) {
@@ -341,8 +343,37 @@ public struct SidebarView: View {
         _ = store.openSpaceCustomizer(for: space.id)
     }
 
-    private func setAddressPreviewSpace(_ spaceID: SpaceID?) {
-        presentationState.setPreviewTabID(addressPreviewTabID(for: spaceID))
+    private func openHistoryEntry(_ entry: BrowserHistoryEntry) {
+        let matchingSpaceID: SpaceID?
+        if store.selectedSpace?.profileID == entry.profileID {
+            matchingSpaceID = store.selectedSpaceID
+        } else {
+            matchingSpaceID = store.sidebarSpaces.first { $0.profileID == entry.profileID }?.id
+        }
+
+        if let matchingSpaceID {
+            showSpace(matchingSpaceID)
+        }
+
+        store.open(entry.url)
+    }
+
+    private func revealDownload(_ download: BrowserDownload) {
+        guard let destinationURL = download.destinationURL else {
+            return
+        }
+
+        NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
+    }
+
+    private func setPreviewSpace(_ spaceID: SpaceID?) {
+        previewedSpaceID = spaceID
+        let previewTabID = addressPreviewTabID(for: spaceID)
+
+        withTransaction(Transaction(animation: nil)) {
+            presentationState.setPreviewTabID(previewTabID)
+            presentationState.setPreviewStartPageSpaceID(previewTabID == nil ? spaceID : nil)
+        }
     }
 
     private func addressPreviewTabID(for spaceID: SpaceID?) -> TabID? {
@@ -366,11 +397,18 @@ private struct ActiveSitePermissionContext {
 private struct SidebarAddressControls: View {
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var presentationState: BrowserContentPresentationState
+    let isActivitySelected: Bool
+    @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
     @State private var didCopyCurrentURL = false
 
-    init(store: BrowserStore, presentationState: BrowserContentPresentationState) {
+    init(
+        store: BrowserStore,
+        presentationState: BrowserContentPresentationState,
+        isActivitySelected: Bool
+    ) {
         self.store = store
         self.presentationState = presentationState
+        self.isActivitySelected = isActivitySelected
     }
 
     var body: some View {
@@ -387,6 +425,7 @@ private struct SidebarAddressControls: View {
 
                         Text(addressText)
                             .font(.caption)
+                            .foregroundStyle(sidebarForegroundColor)
                             .lineLimit(1)
                             .truncationMode(.middle)
 
@@ -425,9 +464,14 @@ private struct SidebarAddressControls: View {
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
+        .frame(height: SidebarHeaderMetrics.compactAddressControlsHeight, alignment: .top)
     }
 
     private var presentedTab: BrowserTab? {
+        guard !isActivitySelected else {
+            return nil
+        }
+
         if let previewTabID = presentationState.previewTabID,
            let previewTab = store.tabs.first(where: { $0.id == previewTabID }) {
             return previewTab
@@ -460,6 +504,10 @@ private struct SidebarAddressControls: View {
     }
 
     private var addressText: String {
+        if isActivitySelected {
+            return "Activity"
+        }
+
         if let tab = presentedTab,
            !tab.content.isWeb {
             return tab.title
@@ -471,6 +519,10 @@ private struct SidebarAddressControls: View {
     }
 
     private var siteSymbolName: String {
+        if isActivitySelected {
+            return "clock.arrow.circlepath"
+        }
+
         guard presentedTab?.content.isWeb != false else {
             return "slider.horizontal.3"
         }
@@ -513,7 +565,9 @@ private struct SidebarAddressControls: View {
         } label: {
             Image(systemName: sitePermissionMenuSymbolName)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(sidebarForegroundColor)
+                .foregroundColor(sidebarForegroundColor)
                 .frame(width: 26, height: 26)
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .overlay {
@@ -523,6 +577,8 @@ private struct SidebarAddressControls: View {
         }
         .menuStyle(.borderlessButton)
         .buttonStyle(.plain)
+        .tint(sidebarForegroundColor)
+        .foregroundStyle(sidebarForegroundColor)
         .help("Site permissions")
         .accessibilityLabel("Site permissions")
     }
@@ -651,18 +707,15 @@ struct SpaceCustomizationDraft: Identifiable {
 
 private struct SpaceSwitcherButtonLabel: View {
     let space: BrowserSpace
-    let sidebarSettings: SidebarGlassSettings
     let isSelected: Bool
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
 
     var body: some View {
-        let selectedForegroundColor = selectedIconForegroundColor
-
         SpaceIconGlyph(
             symbolName: space.symbolName,
             colorHex: space.colorHex,
             size: SidebarHeaderMetrics.spaceSwitcherGlyphSize,
-            foregroundColor: isSelected ? selectedForegroundColor : .secondary
+            foregroundColor: sidebarForegroundColor
         )
         .opacity(isSelected ? 1 : 0.74)
         .scaleEffect(isSelected ? 1.06 : 1)
@@ -675,23 +728,34 @@ private struct SpaceSwitcherButtonLabel: View {
             height: SidebarHeaderMetrics.spaceSwitcherButtonSize
         )
         .contentShape(Rectangle())
-    }
-
-    private var selectedIconForegroundColor: Color {
-        let tintHex = space.sidebarAppearance.tintHex(forSpaceColorHex: space.colorHex)
-
-        switch SidebarGlassRendering.selectedSpaceIconContrast(for: sidebarSettings, tintHex: tintHex) {
-        case .adaptive:
-            return colorScheme == .dark ? .white : .black
-        case .dark:
-            return .black
-        case .light:
-            return .white
-        }
+        .animation(SidebarSpacePagerMetrics.selectionAnimation, value: isSelected)
     }
 }
 
-private struct SpaceIconGlyph: View {
+private struct ActivitySwitcherButtonLabel: View {
+    let isSelected: Bool
+    @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
+
+    var body: some View {
+        Image(systemName: "clock.arrow.circlepath")
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(sidebarForegroundColor)
+            .frame(
+                width: SidebarHeaderMetrics.spaceSwitcherIconFrameSize,
+                height: SidebarHeaderMetrics.spaceSwitcherIconFrameSize
+            )
+            .opacity(isSelected ? 1 : 0.74)
+            .scaleEffect(isSelected ? 1.06 : 1)
+            .frame(
+                width: SidebarHeaderMetrics.spaceSwitcherButtonSize,
+                height: SidebarHeaderMetrics.spaceSwitcherButtonSize
+            )
+            .contentShape(Rectangle())
+            .animation(SidebarSpacePagerMetrics.selectionAnimation, value: isSelected)
+    }
+}
+
+struct SpaceIconGlyph: View {
     let symbolName: String
     let colorHex: String
     let size: CGFloat
@@ -721,15 +785,25 @@ private struct SpaceIconGlyph: View {
     }
 }
 
+@MainActor
 private enum SpaceIconOpticalCentering {
+    private static var cachedOffsets: [String: CGFloat] = [:]
+
     static func yOffset(for symbolName: String, pointSize: CGFloat) -> CGFloat {
+        let cacheKey = "\(symbolName)#\(Int((pointSize * 100).rounded()))"
+        if let cachedOffset = cachedOffsets[cacheKey] {
+            return cachedOffset
+        }
+
         guard let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)) else {
             return 0
         }
 
         let offset = image.alignmentRect.midY - image.size.height / 2
-        return abs(offset) < 0.25 ? 0 : offset
+        let normalizedOffset = abs(offset) < 0.25 ? 0 : offset
+        cachedOffsets[cacheKey] = normalizedOffset
+        return normalizedOffset
     }
 }
 
@@ -1230,16 +1304,25 @@ struct SpaceCustomizationView: View {
     @ObservedObject private var store: BrowserStore
     let space: BrowserSpace
     let profiles: [BrowserProfile]
+    let deferredIconGridDelayNanoseconds: UInt64?
 
     @State private var draftName: String
     @State private var selectedIconCategoryID: String
+    @State private var showsIconSection: Bool
 
-    init(store: BrowserStore, space: BrowserSpace, profiles: [BrowserProfile]) {
+    init(
+        store: BrowserStore,
+        space: BrowserSpace,
+        profiles: [BrowserProfile],
+        deferredIconGridDelayNanoseconds: UInt64? = 420_000_000
+    ) {
         self.store = store
         self.space = space
         self.profiles = profiles
+        self.deferredIconGridDelayNanoseconds = deferredIconGridDelayNanoseconds
         _draftName = State(initialValue: space.name)
         _selectedIconCategoryID = State(initialValue: SpaceCustomizationSheet.initialIconCategoryID(for: space.symbolName))
+        _showsIconSection = State(initialValue: deferredIconGridDelayNanoseconds == nil)
     }
 
     var body: some View {
@@ -1252,7 +1335,9 @@ struct SpaceCustomizationView: View {
                     sidebarMaterialSection
                 }
 
-                iconSection
+                if showsIconSection {
+                    iconSection
+                }
             }
             .padding(.horizontal, 34)
             .padding(.vertical, 30)
@@ -1261,6 +1346,9 @@ struct SpaceCustomizationView: View {
         }
         .scrollIndicators(.visible)
         .background(.background)
+        .task(id: deferredIconSectionTaskID) {
+            await revealDeferredIconSectionIfNeeded()
+        }
         .onDisappear {
             store.flushScheduledSessionPersistence()
         }
@@ -1494,8 +1582,30 @@ struct SpaceCustomizationView: View {
         [GridItem(.adaptive(minimum: 430), spacing: 18, alignment: .top)]
     }
 
+    private var deferredIconSectionTaskID: String {
+        "\(space.id.uuidString)-\(deferredIconGridDelayNanoseconds ?? 0)"
+    }
+
     private var tintPresetColumns: [GridItem] {
         [GridItem(.adaptive(minimum: 92), spacing: 8)]
+    }
+
+    @MainActor
+    private func revealDeferredIconSectionIfNeeded() async {
+        guard let deferredIconGridDelayNanoseconds,
+              !showsIconSection else {
+            return
+        }
+
+        try? await Task.sleep(nanoseconds: deferredIconGridDelayNanoseconds)
+
+        guard !Task.isCancelled else {
+            return
+        }
+
+        withTransaction(Transaction(animation: nil)) {
+            showsIconSection = true
+        }
     }
 
     private func settingBinding(_ keyPath: WritableKeyPath<SidebarGlassSettings, Double>) -> Binding<Double> {
@@ -1545,6 +1655,170 @@ struct SpaceCustomizationView: View {
             sidebarAppearance: appearance,
             persistImmediately: false
         )
+    }
+}
+
+struct SpaceCustomizationPreviewShell: View {
+    let space: BrowserSpace
+    var profileName: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                customizationHeader
+
+                LazyVGrid(columns: pageColumns, alignment: .leading, spacing: 18) {
+                    identityPreview
+                    sidebarPreview
+                }
+            }
+            .padding(.horizontal, 34)
+            .padding(.vertical, 30)
+            .frame(maxWidth: 1100, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .top)
+        }
+        .scrollIndicators(.visible)
+        .background(.background)
+    }
+
+    private var customizationHeader: some View {
+        HStack(spacing: 18) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(hex: themeColorHex).opacity(0.16))
+
+                SpaceIconGlyph(
+                    symbolName: space.symbolName,
+                    colorHex: space.colorHex,
+                    size: 52,
+                    foregroundColor: .secondary
+                )
+            }
+            .frame(width: 72, height: 72)
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color(hex: themeColorHex).opacity(0.28), lineWidth: 0.8)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Customize Space")
+                    .font(.title3.weight(.semibold))
+
+                Text(displayName)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var identityPreview: some View {
+        SpaceCustomizationPanel(title: "Identity", systemName: "person.text.rectangle") {
+            VStack(alignment: .leading, spacing: 16) {
+                previewValue(title: "Name", value: displayName)
+
+                Divider()
+
+                previewValue(title: "Profile", value: profileName ?? "Current Profile")
+            }
+        }
+    }
+
+    private var sidebarPreview: some View {
+        SpaceCustomizationPanel(title: "Sidebar", systemName: "sidebar.leading") {
+            VStack(alignment: .leading, spacing: 15) {
+                HStack(spacing: 10) {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(hex: themeColorHex))
+                        .frame(width: 34, height: 34)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(.white.opacity(0.42), lineWidth: 0.7)
+                        }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Theme Color")
+                            .font(.caption.weight(.semibold))
+                        Text(themeColorSubtitle)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+
+                Divider()
+
+                previewSlider(title: "Color", value: space.sidebarAppearance.base.tintOpacity)
+                previewSlider(title: "Density", value: space.sidebarAppearance.base.glassOpacity)
+                previewSlider(title: "Color Noise", value: space.sidebarAppearance.base.colorNoiseLevel)
+            }
+        }
+    }
+
+    private func previewValue(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.callout)
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+    }
+
+    private func previewSlider(title: String, value: Double) -> some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 92, alignment: .leading)
+
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.12))
+                    Capsule()
+                        .fill(Color.primary.opacity(0.28))
+                        .frame(width: max(0, min(1, value)) * proxy.size.width)
+                }
+            }
+            .frame(height: 4)
+
+            Text("\(Int((value * 100).rounded()))")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 30, alignment: .trailing)
+        }
+    }
+
+    private var displayName: String {
+        let trimmedName = space.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedName.isEmpty ? "Untitled Space" : trimmedName
+    }
+
+    private var themeColorHex: String {
+        space.sidebarAppearance.tintHex(forSpaceColorHex: space.colorHex)
+    }
+
+    private var themeColorSubtitle: String {
+        switch space.sidebarAppearance.tintSource {
+        case .spaceColor:
+            return "Uses saved space color"
+        case .custom:
+            return space.sidebarAppearance.tintHex.uppercased()
+        }
+    }
+
+    private var pageColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 430), spacing: 18, alignment: .top)]
     }
 }
 
@@ -1868,17 +2142,12 @@ private struct SidebarPinButton: View {
         isLockedOpen ? "Use auto-hide sidebar" : "Pin sidebar open"
     }
 
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                Image(systemName: "pin")
-                    .opacity(isLockedOpen ? 0 : 1)
-                Image(systemName: "pin.fill")
-                    .opacity(isLockedOpen ? 1 : 0)
-            }
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: 26, height: SidebarHeaderMetrics.inlineControlHeight)
+	var body: some View {
+		Button(action: action) {
+			Image(systemName: "sidebar.leading")
+				.font(.system(size: 11, weight: .semibold))
+				.foregroundStyle(.secondary)
+				.frame(width: 26, height: SidebarHeaderMetrics.inlineControlHeight)
             .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .background {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -1926,10 +2195,68 @@ private struct WindowReader: NSViewRepresentable {
     }
 }
 
+enum SidebarSpacePagerPageID: Hashable, Sendable {
+    case activity
+    case space(SpaceID)
+
+    var spaceID: SpaceID? {
+        if case .space(let id) = self {
+            return id
+        }
+        return nil
+    }
+}
+
+struct SidebarSpacePagerNavigationRequest: Equatable, Sendable {
+    let id = UUID()
+    let pageID: SidebarSpacePagerPageID
+}
+
 struct SidebarSpacePagerSnapshot: Equatable, Sendable {
-    let selectedIndex: Int?
+    let selectedSpacePageID: SidebarSpacePagerPageID?
+    let selectedAuxiliaryPageID: SidebarSpacePagerPageID?
     let spaceCount: Int
-    let pages: [SidebarSpacePageSnapshot]
+    let pages: [SidebarSpacePagerPageSnapshot]
+
+    var pageCount: Int {
+        pages.count
+    }
+}
+
+enum SidebarSpacePagerPageSnapshot: Identifiable, Equatable, Sendable {
+    case activity(SidebarActivityPageSnapshot)
+    case space(SidebarSpacePageSnapshot)
+
+    var id: SidebarSpacePagerPageID {
+        switch self {
+        case .activity:
+            return .activity
+        case .space(let page):
+            return .space(page.id)
+        }
+    }
+
+    var space: BrowserSpace? {
+        if case .space(let page) = self {
+            return page.space
+        }
+        return nil
+    }
+
+    var chromeTheme: SidebarChromeTheme {
+        switch self {
+        case .activity:
+            return .standard
+        case .space(let page):
+            return SidebarChromeTheme.theme(for: page.space)
+        }
+    }
+}
+
+struct SidebarActivityPageSnapshot: Equatable, Sendable {
+    let profiles: [BrowserProfile]
+    let downloads: [BrowserDownload]
+    let historyEntries: [BrowserHistoryEntry]
 }
 
 struct SidebarSpacePageSnapshot: Identifiable, Equatable, Sendable {
@@ -1968,6 +2295,7 @@ struct SidebarTabItemSnapshot: Identifiable, Equatable, Sendable {
 
 private struct SidebarSpacePagerView: View {
     let snapshot: SidebarSpacePagerSnapshot
+    let navigationRequest: SidebarSpacePagerNavigationRequest?
     let selectTab: (TabID) -> Void
     let closeTab: (BrowserTab) -> Void
     let setTabPlacement: (TabID, BrowserTabPlacement) -> Void
@@ -1977,11 +2305,14 @@ private struct SidebarSpacePagerView: View {
     let moveTabToFolder: (TabID, FolderID, TabID?) -> Bool
     let createFolder: (String, SpaceID, FolderID?) -> BrowserFolder?
     let customizeSpace: (BrowserSpace) -> Void
+    let openHistoryEntry: (BrowserHistoryEntry) -> Void
+    let revealDownload: (BrowserDownload) -> Void
     let selectSpace: (SpaceID) -> Void
+    let selectAuxiliaryPage: (SidebarSpacePagerPageID?) -> Void
     let previewSpace: (SpaceID?) -> Void
     let updateSidebarChromeTheme: (SidebarChromeTheme?) -> Void
 
-    @State private var scrollPositionPageID: SpaceID?
+    @State private var scrollPositionPageID: SidebarSpacePagerPageID?
     @State private var scrollIsActive = false
 
     var body: some View {
@@ -1991,19 +2322,7 @@ private struct SidebarSpacePagerView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 0) {
                     ForEach(snapshot.pages) { page in
-                        SidebarSpacePageView(
-                            page: page,
-                            selectTab: selectTab,
-                            closeTab: closeTab,
-                            setTabPlacement: setTabPlacement,
-                            moveTab: moveTab,
-                            moveTabBefore: moveTabBefore,
-                            moveTabToPlacement: moveTabToPlacement,
-                            moveTabToFolder: moveTabToFolder,
-                            createFolder: createFolder,
-                            customizeSpace: customizeSpace
-                        )
-                        .equatable()
+                        pageView(page)
                         .id(page.id)
                         .frame(width: pageWidth, height: proxy.size.height, alignment: .top)
                     }
@@ -2018,20 +2337,46 @@ private struct SidebarSpacePagerView: View {
             }
             .scrollTargetBehavior(.paging)
             .scrollPosition(id: $scrollPositionPageID)
-            .scrollDisabled(snapshot.spaceCount <= 1)
+            .scrollDisabled(snapshot.pageCount <= 1)
             .onAppear {
                 syncScrollPositionToSelection(animated: false)
                 previewSpace(nil)
                 updateSidebarChromeTheme(selectedChromeTheme)
             }
             .onChange(of: selectedPageID) { _, _ in
+                guard !scrollIsActive else {
+                    return
+                }
+
+                syncScrollPositionToSelection(animated: true)
+                previewSpace(nil)
+                updateSidebarChromeTheme(selectedChromeTheme)
+            }
+            .onChange(of: snapshot.selectedSpacePageID) { _, _ in
+                selectAuxiliaryPage(nil)
                 syncScrollPositionToSelection(animated: true)
                 if !scrollIsActive {
                     previewSpace(nil)
+                    updateSidebarChromeTheme(selectedChromeTheme)
+                }
+            }
+            .onChange(of: navigationRequest) { _, request in
+                guard let request else {
+                    return
+                }
+
+                if case .space = request.pageID {
+                    selectAuxiliaryPage(nil)
+                } else {
+                    selectAuxiliaryPage(request.pageID)
+                }
+
+                withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
+                    scrollPositionPageID = request.pageID
                 }
             }
             .onChange(of: scrollPositionPageID) { _, newValue in
-                previewSpace(newValue)
+                previewPage(newValue)
             }
             .onChange(of: snapshot) { _, _ in
                 if !scrollIsActive {
@@ -2048,9 +2393,9 @@ private struct SidebarSpacePagerView: View {
                 }
             }
             .onScrollGeometryChange(for: SidebarChromeTheme?.self) { geometry in
-                SidebarChromeTheme.interpolated(
-                    spaces: snapshot.pages.map(\.space),
-                    fractionalIndex: Double(geometry.contentOffset.x / pageWidth)
+                SidebarSpacePagerChrome.theme(
+                    for: snapshot.pages,
+                    fractionalPageIndex: Double(geometry.contentOffset.x / pageWidth)
                 )
             } action: { _, newTheme in
                 updateSidebarChromeTheme(newTheme)
@@ -2062,20 +2407,44 @@ private struct SidebarSpacePagerView: View {
         }
     }
 
+    @ViewBuilder
+    private func pageView(_ page: SidebarSpacePagerPageSnapshot) -> some View {
+        switch page {
+        case .activity(let snapshot):
+            SidebarActivityPageView(
+                snapshot: snapshot,
+                openHistoryEntry: openHistoryEntry,
+                revealDownload: revealDownload
+            )
+            .equatable()
+        case .space(let snapshot):
+            SidebarSpacePageView(
+                page: snapshot,
+                selectTab: selectTab,
+                closeTab: closeTab,
+                setTabPlacement: setTabPlacement,
+                moveTab: moveTab,
+                moveTabBefore: moveTabBefore,
+                moveTabToPlacement: moveTabToPlacement,
+                moveTabToFolder: moveTabToFolder,
+                createFolder: createFolder,
+                customizeSpace: customizeSpace
+            )
+            .equatable()
+        }
+    }
+
     private var selectedChromeTheme: SidebarChromeTheme? {
         guard let selectedPageID,
               let selectedPage = snapshot.pages.first(where: { $0.id == selectedPageID }) else {
             return nil
         }
 
-        return SidebarChromeTheme.theme(for: selectedPage.space)
+        return selectedPage.chromeTheme
     }
 
-    private var selectedPageID: SpaceID? {
-        guard let selectedIndex = snapshot.selectedIndex else {
-            return nil
-        }
-        return snapshot.pages.first { $0.index == selectedIndex }?.id
+    private var selectedPageID: SidebarSpacePagerPageID? {
+        snapshot.selectedAuxiliaryPageID ?? snapshot.selectedSpacePageID
     }
 
     private func syncScrollPositionToSelection(animated: Bool) {
@@ -2093,7 +2462,22 @@ private struct SidebarSpacePagerView: View {
         }
     }
 
-    private func commitPageIfNeeded(_ pageID: SpaceID?) {
+    private func previewPage(_ pageID: SidebarSpacePagerPageID?) {
+        withTransaction(Transaction(animation: nil)) {
+            switch pageID {
+            case .activity:
+                selectAuxiliaryPage(.activity)
+                previewSpace(nil)
+            case .space(let spaceID):
+                selectAuxiliaryPage(nil)
+                previewSpace(spaceID)
+            case nil:
+                previewSpace(nil)
+            }
+        }
+    }
+
+    private func commitPageIfNeeded(_ pageID: SidebarSpacePagerPageID?) {
         guard let committedPageID = SidebarSpacePagerSelection.committedPageID(
             scrollPositionPageID: pageID,
             selectedPageID: selectedPageID,
@@ -2102,16 +2486,34 @@ private struct SidebarSpacePagerView: View {
             return
         }
 
-        selectSpace(committedPageID)
+        switch committedPageID {
+        case .activity:
+            selectAuxiliaryPage(.activity)
+        case .space(let spaceID):
+            selectAuxiliaryPage(nil)
+            selectSpace(spaceID)
+        }
+    }
+}
+
+struct SidebarSpacePagerChrome {
+    static func theme(
+        for pages: [SidebarSpacePagerPageSnapshot],
+        fractionalPageIndex: Double
+    ) -> SidebarChromeTheme? {
+        SidebarChromeTheme.interpolated(
+            themes: pages.map(\.chromeTheme),
+            fractionalIndex: fractionalPageIndex
+        )
     }
 }
 
 struct SidebarSpacePagerSelection {
     static func committedPageID(
-        scrollPositionPageID: SpaceID?,
-        selectedPageID: SpaceID?,
-        pageIDs: [SpaceID]
-    ) -> SpaceID? {
+        scrollPositionPageID: SidebarSpacePagerPageID?,
+        selectedPageID: SidebarSpacePagerPageID?,
+        pageIDs: [SidebarSpacePagerPageID]
+    ) -> SidebarSpacePagerPageID? {
         guard let scrollPositionPageID,
               scrollPositionPageID != selectedPageID,
               pageIDs.contains(scrollPositionPageID) else {
@@ -2136,6 +2538,527 @@ struct SidebarSpacePagerFocus {
     }
 }
 
+struct SidebarSpacePageSnapshotBuilder {
+    static func spacePages(
+        activeSpaces: [BrowserSpace],
+        folders: [BrowserFolder],
+        tabs: [BrowserTab]
+    ) -> [SidebarSpacePageSnapshot] {
+        let pageSpaceIDs = Set(activeSpaces.map(\.id))
+        let foldersByID = Dictionary(
+            uniqueKeysWithValues: folders
+                .lazy
+                .filter { pageSpaceIDs.contains($0.parentSpaceID) }
+                .map { ($0.id, $0) }
+        )
+        let foldersBySpaceID = Dictionary(grouping: foldersByID.values, by: \.parentSpaceID)
+        let directTabIDs = activeSpaces.flatMap { space in
+            space.favoriteTabIDs + space.pinnedTabIDs + space.regularTabIDs
+        }
+        let folderTabIDs = foldersByID.values.flatMap(\.tabIDs)
+        let visibleTabIDs = Set(directTabIDs + folderTabIDs)
+        let tabsByID = Dictionary(
+            uniqueKeysWithValues: tabs
+                .lazy
+                .filter { visibleTabIDs.contains($0.id) }
+                .map { ($0.id, $0) }
+        )
+
+        return activeSpaces.indices.map { index in
+            let space = activeSpaces[index]
+            let focusedTabID = SidebarSpacePagerFocus.focusedTabID(
+                for: space,
+                folders: foldersBySpaceID[space.id, default: []],
+                tabsByID: tabsByID
+            )
+
+            return SidebarSpacePageSnapshot(
+                index: index,
+                space: space,
+                favoriteTabs: tabItems(for: space.favoriteTabIDs, focusedTabID: focusedTabID, tabsByID: tabsByID),
+                pinnedTabs: tabItems(for: space.pinnedTabIDs, focusedTabID: focusedTabID, tabsByID: tabsByID),
+                folders: folderItems(
+                    for: space.folderIDs,
+                    focusedTabID: focusedTabID,
+                    foldersByID: foldersByID,
+                    tabsByID: tabsByID
+                ),
+                regularTabs: tabItems(for: space.regularTabIDs, focusedTabID: focusedTabID, tabsByID: tabsByID)
+            )
+        }
+    }
+
+    private static func tabItems(
+        for ids: [TabID],
+        focusedTabID: TabID?,
+        tabsByID: [TabID: BrowserTab]
+    ) -> [SidebarTabItemSnapshot] {
+        let orderedTabs = ids.compactMap { tabsByID[$0] }
+        return orderedTabs.enumerated().map { index, tab in
+            SidebarTabItemSnapshot(
+                tab: tab,
+                isSelected: SidebarSpacePagerFocus.isFocused(tabID: tab.id, focusedTabID: focusedTabID),
+                canMoveUp: index > 0,
+                canMoveDown: index < orderedTabs.count - 1
+            )
+        }
+    }
+
+    private static func folderItems(
+        for ids: [FolderID],
+        focusedTabID: TabID?,
+        foldersByID: [FolderID: BrowserFolder],
+        tabsByID: [TabID: BrowserTab]
+    ) -> [SidebarFolderItemSnapshot] {
+        ids.compactMap { id in
+            guard let folder = foldersByID[id] else {
+                return nil
+            }
+
+            return SidebarFolderItemSnapshot(
+                folder: folder,
+                tabs: tabItems(for: folder.tabIDs, focusedTabID: focusedTabID, tabsByID: tabsByID),
+                childFolders: folderItems(
+                    for: folder.childFolderIDs,
+                    focusedTabID: focusedTabID,
+                    foldersByID: foldersByID,
+                    tabsByID: tabsByID
+                )
+            )
+        }
+    }
+}
+
+private enum SidebarActivityMode: CaseIterable, Identifiable {
+    case history
+    case downloads
+
+    var id: Self {
+        self
+    }
+
+    var title: String {
+        switch self {
+        case .history:
+            return "History"
+        case .downloads:
+            return "Downloads"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .history:
+            return "clock"
+        case .downloads:
+            return "arrow.down.circle"
+        }
+    }
+}
+
+private struct SidebarActivityPageView: View, Equatable {
+    nonisolated let snapshot: SidebarActivityPageSnapshot
+    let openHistoryEntry: (BrowserHistoryEntry) -> Void
+    let revealDownload: (BrowserDownload) -> Void
+
+    @State private var selectedProfileID: ProfileID?
+    @State private var selectedMode: SidebarActivityMode = .history
+    @State private var profileFilterIsPresented = false
+
+    nonisolated static func == (lhs: SidebarActivityPageView, rhs: SidebarActivityPageView) -> Bool {
+        lhs.snapshot == rhs.snapshot
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    header
+                    modeButtons
+                    selectedSection
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, SidebarHeaderMetrics.pageContentTopInset)
+                .padding(.bottom, SidebarHeaderMetrics.pageContentBottomInset)
+                .frame(width: max(geometry.size.width, 1), alignment: .topLeading)
+                .frame(minHeight: 1, alignment: .topLeading)
+                .background(EnclosingScrollIndicatorHider())
+            }
+            .scrollIndicators(.hidden)
+            .background(EnclosingScrollIndicatorHider())
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onChange(of: snapshot.profiles.map(\.id)) { _, profileIDs in
+            guard let selectedProfileID,
+                  !profileIDs.contains(selectedProfileID) else {
+                return
+            }
+
+            self.selectedProfileID = nil
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text("Activity")
+                .font(.headline.weight(.semibold))
+
+            Spacer(minLength: 0)
+
+            profileFilterMenu
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
+    }
+
+    private var modeButtons: some View {
+        HStack(spacing: 6) {
+            ForEach(SidebarActivityMode.allCases) { mode in
+                modeButton(mode)
+            }
+        }
+        .padding(.horizontal, 2)
+    }
+
+    private func modeButton(_ mode: SidebarActivityMode) -> some View {
+        let isSelected = selectedMode == mode
+        let count = activityCount(for: mode)
+
+        return Button {
+            selectedMode = mode
+        } label: {
+            VStack(spacing: 6) {
+                Image(systemName: mode.symbolName)
+                    .font(.system(size: 19, weight: .semibold))
+                    .frame(height: 22, alignment: .center)
+
+                Text(mode.title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(maxWidth: .infinity, minHeight: 58)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? Color.primary.opacity(0.10) : Color.clear)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.primary.opacity(isSelected ? 0.16 : 0.08), lineWidth: 1)
+            }
+            .overlay(alignment: .topTrailing) {
+                activityCountBadge(count, isSelected: isSelected)
+                    .padding(.top, 4)
+                    .padding(.trailing, 4)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+        .accessibilityLabel("\(mode.title), \(count)")
+        .help(mode.title)
+    }
+
+    private func activityCountBadge(_ count: Int, isSelected: Bool) -> some View {
+        Text("\(count)")
+            .font(.caption2.weight(.semibold))
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+            .padding(.horizontal, 5)
+            .frame(minWidth: 18)
+            .frame(height: 16)
+            .background {
+                Capsule()
+                    .fill(Color.primary.opacity(isSelected ? 0.14 : 0.08))
+            }
+            .accessibilityHidden(true)
+    }
+
+    private var profileFilterMenu: some View {
+        Button {
+            profileFilterIsPresented.toggle()
+        } label: {
+            Image(systemName: selectedProfileID == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(selectedProfileID == nil ? Color.secondary : Color.primary)
+                .frame(width: 28, height: 28)
+                .background {
+                    Circle()
+                        .fill(Color.primary.opacity(selectedProfileID == nil ? 0.06 : 0.12))
+                }
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .frame(width: 28, height: 28)
+        .popover(isPresented: $profileFilterIsPresented, arrowEdge: .trailing) {
+            profileFilterPopover
+        }
+        .help("Filter by profile")
+        .accessibilityLabel("Filter by profile")
+        .accessibilityValue(profileFilterTitle)
+    }
+
+    private var profileFilterPopover: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            profileFilterButton(title: "All Profiles", profileID: nil)
+
+            if !snapshot.profiles.isEmpty {
+                Divider()
+            }
+
+            ForEach(snapshot.profiles) { profile in
+                profileFilterButton(title: profile.name, profileID: profile.id)
+            }
+        }
+        .padding(8)
+        .frame(width: 220, alignment: .topLeading)
+    }
+
+    private func profileFilterButton(title: String, profileID: ProfileID?) -> some View {
+        Button {
+            selectedProfileID = profileID
+            profileFilterIsPresented = false
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: selectedProfileID == profileID ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(selectedProfileID == profileID ? Color.accentColor : Color.secondary)
+                    .frame(width: 16)
+
+                Text(title)
+                    .font(.callout)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var selectedSection: some View {
+        switch selectedMode {
+        case .history:
+            historySection
+        case .downloads:
+            downloadsSection
+        }
+    }
+
+    @ViewBuilder
+    private var downloadsSection: some View {
+        SidebarSectionHeader(title: "Downloads", symbolName: "arrow.down.circle")
+        if filteredDownloads.isEmpty {
+            activityEmptyRow("No downloads", symbolName: "tray")
+        } else {
+            ForEach(filteredDownloads.prefix(10)) { download in
+                downloadRow(download)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var historySection: some View {
+        SidebarSectionHeader(title: "History", symbolName: "clock")
+        if filteredHistoryEntries.isEmpty {
+            activityEmptyRow("No history", symbolName: "clock.badge.questionmark")
+        } else {
+            ForEach(filteredHistoryEntries.prefix(18)) { entry in
+                historyRow(entry)
+            }
+        }
+    }
+
+    private func downloadRow(_ download: BrowserDownload) -> some View {
+        Button {
+            revealDownload(download)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Image(systemName: downloadSymbolName(for: download))
+                        .foregroundStyle(downloadSymbolStyle(for: download))
+                        .frame(width: 16)
+
+                    Text(download.filename)
+                        .font(.callout)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    Spacer(minLength: 0)
+                }
+
+                HStack(spacing: 6) {
+                    Text(downloadStatusText(for: download))
+                    Text("-")
+                    Text(profileName(for: download.profileID))
+                    Spacer(minLength: 0)
+                    Text(download.updatedAt, style: .relative)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                if download.state.isActive {
+                    ProgressView(value: download.progress)
+                        .controlSize(.small)
+                }
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(download.destinationURL == nil)
+        .help(download.destinationURL == nil ? downloadStatusText(for: download) : "Show in Finder")
+    }
+
+    private func historyRow(_ entry: BrowserHistoryEntry) -> some View {
+        Button {
+            openHistoryEntry(entry)
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "globe")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.title)
+                        .font(.callout)
+                        .lineLimit(1)
+                    Text(entry.displayHost)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    HStack(spacing: 6) {
+                        Text(profileName(for: entry.profileID))
+                        Text("-")
+                        Text(entry.lastVisitedAt, style: .relative)
+                        if entry.visitCount > 1 {
+                            Text("-")
+                            Text("\(entry.visitCount) visits")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(entry.url.absoluteString)
+    }
+
+    private func activityEmptyRow(_ title: String, symbolName: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbolName)
+                .foregroundStyle(.tertiary)
+                .frame(width: 16)
+            Text(title)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var filteredDownloads: [BrowserDownload] {
+        guard let selectedProfileID else {
+            return snapshot.downloads
+        }
+
+        return snapshot.downloads.filter { $0.profileID == selectedProfileID }
+    }
+
+    private var filteredHistoryEntries: [BrowserHistoryEntry] {
+        guard let selectedProfileID else {
+            return snapshot.historyEntries
+        }
+
+        return snapshot.historyEntries.filter { $0.profileID == selectedProfileID }
+    }
+
+    private var profileFilterTitle: String {
+        guard let selectedProfileID else {
+            return "All Profiles"
+        }
+
+        return profileName(for: selectedProfileID)
+    }
+
+    private func activityCount(for mode: SidebarActivityMode) -> Int {
+        switch mode {
+        case .history:
+            return filteredHistoryEntries.count
+        case .downloads:
+            return filteredDownloads.count
+        }
+    }
+
+    private func profileName(for profileID: ProfileID?) -> String {
+        guard let profileID,
+              let profile = snapshot.profiles.first(where: { $0.id == profileID }) else {
+            return "Unknown Profile"
+        }
+
+        return profile.name
+    }
+
+    private func downloadStatusText(for download: BrowserDownload) -> String {
+        switch download.state {
+        case .waitingForDestination:
+            return "Waiting"
+        case .downloading:
+            if let percent = download.progressPercent {
+                return "Downloading \(percent)%"
+            }
+            return "Downloading"
+        case .finished:
+            return "Finished"
+        case .failed:
+            return download.failureMessage ?? "Failed"
+        case .canceled:
+            return "Canceled"
+        }
+    }
+
+    private func downloadSymbolName(for download: BrowserDownload) -> String {
+        switch download.state {
+        case .waitingForDestination:
+            return "questionmark.folder"
+        case .downloading:
+            return "arrow.down.circle"
+        case .finished:
+            return "checkmark.circle"
+        case .failed:
+            return "exclamationmark.triangle"
+        case .canceled:
+            return "xmark.circle"
+        }
+    }
+
+    private func downloadSymbolStyle(for download: BrowserDownload) -> AnyShapeStyle {
+        switch download.state {
+        case .finished:
+            return AnyShapeStyle(.green)
+        case .failed:
+            return AnyShapeStyle(.yellow)
+        case .canceled:
+            return AnyShapeStyle(.secondary)
+        case .waitingForDestination, .downloading:
+            return AnyShapeStyle(.tint)
+        }
+    }
+}
+
 private struct SidebarSpacePageView: View, Equatable {
     nonisolated let page: SidebarSpacePageSnapshot
     let selectTab: (TabID) -> Void
@@ -2148,6 +3071,8 @@ private struct SidebarSpacePageView: View, Equatable {
     let createFolder: (String, SpaceID, FolderID?) -> BrowserFolder?
     let customizeSpace: (BrowserSpace) -> Void
 
+    @State private var tabDropState = SidebarTabDropState()
+
     nonisolated static func == (lhs: SidebarSpacePageView, rhs: SidebarSpacePageView) -> Bool {
         lhs.page == rhs.page
     }
@@ -2155,12 +3080,7 @@ private struct SidebarSpacePageView: View, Equatable {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 12) {
-                tabSection(
-                    "Essentials",
-                    tabs: page.favoriteTabs,
-                    symbolName: "sparkle",
-                    placement: .favorite
-                )
+                favoriteTabGrid
                 tabSection(
                     "Pinned",
                     tabs: page.pinnedTabs,
@@ -2176,13 +3096,15 @@ private struct SidebarSpacePageView: View, Equatable {
                 )
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 12)
+            .padding(.top, SidebarHeaderMetrics.pageContentTopInset)
+            .padding(.bottom, SidebarHeaderMetrics.pageContentBottomInset)
             .frame(maxWidth: .infinity, minHeight: 1, alignment: .topLeading)
             .contentShape(Rectangle())
             .background(EnclosingScrollIndicatorHider())
         }
         .scrollIndicators(.hidden)
         .background(EnclosingScrollIndicatorHider())
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .contextMenu {
             Button {
                 _ = createFolder("New Folder", page.space.id, nil)
@@ -2201,6 +3123,22 @@ private struct SidebarSpacePageView: View, Equatable {
     }
 
     @ViewBuilder
+    private var favoriteTabGrid: some View {
+        if !page.favoriteTabs.isEmpty {
+            SidebarFavoriteTabGrid(
+                tabs: page.favoriteTabs,
+                selectTab: selectTab,
+                closeTab: closeTab,
+                setTabPlacement: setTabPlacement,
+                moveTab: moveTab,
+                moveTabBefore: moveTabBefore,
+                moveTabToPlacement: moveTabToPlacement,
+                tabDropState: $tabDropState
+            )
+        }
+    }
+
+    @ViewBuilder
     private func tabSection(
         _ title: String,
         tabs: [SidebarTabItemSnapshot],
@@ -2208,20 +3146,39 @@ private struct SidebarSpacePageView: View, Equatable {
         placement: BrowserTabPlacement
     ) -> some View {
         if !tabs.isEmpty {
-            SidebarSectionHeader(title: title, symbolName: symbolName)
-            ForEach(tabs) { item in
-                tabRow(item, placement: placement, allowsDropBefore: true)
-            }
+            let resetToken = tabDropResetToken(for: tabs)
+            let indexedTabs = Array(tabs.enumerated())
 
-            Color.clear
-                .frame(height: 8)
-                .dropDestination(for: String.self) { values, _ in
-                    guard let value = values.first,
-                          let draggedTabID = UUID(uuidString: value) else {
-                        return false
+            VStack(alignment: .leading, spacing: 0) {
+                SidebarSectionHeader(title: title, symbolName: symbolName)
+
+                ForEach(indexedTabs, id: \.element.id) { offset, item in
+                    let upperTarget = tabDropTargetBefore(item, placement: placement)
+                    let lowerTarget = tabDropTargetAfter(offset: offset, tabs: tabs, placement: placement)
+
+                    SidebarTabDropSlot(
+                        slotID: upperTarget.slotID,
+                        resetToken: resetToken,
+                        dropState: $tabDropState
+                    ) { draggedTabID in
+                        upperTarget.moveTab(draggedTabID)
                     }
-                    return moveTabToPlacement(draggedTabID, placement)
+
+                    tabRow(
+                        item,
+                        upperDropTarget: upperTarget,
+                        lowerDropTarget: lowerTarget
+                    )
                 }
+
+                SidebarTabDropSlot(
+                    slotID: tabDropSlotID(placement: placement, targetTabID: nil),
+                    resetToken: resetToken,
+                    dropState: $tabDropState
+                ) { draggedTabID in
+                    moveTabToPlacement(draggedTabID, placement)
+                }
+            }
         }
     }
 
@@ -2238,36 +3195,75 @@ private struct SidebarSpacePageView: View, Equatable {
                 setTabPlacement: setTabPlacement,
                 moveTab: moveTab,
                 moveTabToFolder: moveTabToFolder,
-                createFolder: createFolder
+                createFolder: createFolder,
+                tabDropState: $tabDropState
             )
         }
     }
 
     private func tabRow(
         _ item: SidebarTabItemSnapshot,
-        placement: BrowserTabPlacement,
-        allowsDropBefore: Bool,
-        moveBeforeInContainer: ((TabID) -> Bool)? = nil
+        upperDropTarget: SidebarTabDropTarget,
+        lowerDropTarget: SidebarTabDropTarget
     ) -> some View {
-        SidebarTabRow(
-            tab: item.tab,
-            isSelected: item.isSelected,
-            select: { selectTab(item.tab.id) },
-            close: { closeTab(item.tab) },
-            setPlacement: { placement in setTabPlacement(item.tab.id, placement) },
-            move: { direction in moveTab(item.tab.id, direction) },
-            canMoveUp: item.canMoveUp,
-            canMoveDown: item.canMoveDown,
-            moveBefore: { draggedTabID in
-                if let moveBeforeInContainer {
-                    return moveBeforeInContainer(draggedTabID)
-                }
-                guard allowsDropBefore else {
-                    return false
-                }
-                return moveTabBefore(draggedTabID, placement, item.tab.id)
+        SidebarTabDropRegion(
+            upperTarget: upperDropTarget,
+            lowerTarget: lowerDropTarget,
+            dropState: $tabDropState
+        ) {
+            SidebarTabRow(
+                tab: item.tab,
+                isSelected: item.isSelected,
+                select: { selectTab(item.tab.id) },
+                close: { closeTab(item.tab) },
+                setPlacement: { placement in setTabPlacement(item.tab.id, placement) },
+                move: { direction in moveTab(item.tab.id, direction) },
+                canMoveUp: item.canMoveUp,
+                canMoveDown: item.canMoveDown,
+                dragStarted: { tabDropState.beginDrag() }
+            )
+        }
+    }
+
+    private func tabDropResetToken(for tabs: [SidebarTabItemSnapshot]) -> String {
+        tabs.map { $0.tab.id.uuidString }.joined(separator: "|")
+    }
+
+    private func tabDropSlotID(placement: BrowserTabPlacement, targetTabID: TabID?) -> String {
+        let target = targetTabID?.uuidString ?? "tail"
+        return "\(page.space.id.uuidString)-\(placement)-\(target)"
+    }
+
+    private func tabDropTargetBefore(
+        _ item: SidebarTabItemSnapshot,
+        placement: BrowserTabPlacement
+    ) -> SidebarTabDropTarget {
+        SidebarTabDropTarget(
+            slotID: tabDropSlotID(placement: placement, targetTabID: item.tab.id)
+        ) { draggedTabID in
+            moveTabBefore(draggedTabID, placement, item.tab.id)
+        }
+    }
+
+    private func tabDropTargetAfter(
+        offset: Int,
+        tabs: [SidebarTabItemSnapshot],
+        placement: BrowserTabPlacement
+    ) -> SidebarTabDropTarget {
+        if tabs.indices.contains(offset + 1) {
+            let nextTabID = tabs[offset + 1].tab.id
+            return SidebarTabDropTarget(
+                slotID: tabDropSlotID(placement: placement, targetTabID: nextTabID)
+            ) { draggedTabID in
+                moveTabBefore(draggedTabID, placement, nextTabID)
             }
-        )
+        }
+
+        return SidebarTabDropTarget(
+            slotID: tabDropSlotID(placement: placement, targetTabID: nil)
+        ) { draggedTabID in
+            moveTabToPlacement(draggedTabID, placement)
+        }
     }
 }
 
@@ -2340,32 +3336,14 @@ private final class EnclosingScrollIndicatorHidingView: NSView {
         DispatchQueue.main.async { [weak self] in
             self?.configureMatchingScrollViews()
         }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-            self?.configureMatchingScrollViews()
-        }
     }
 
     private func configureMatchingScrollViews() {
-        if let nearestScrollView {
-            configure(nearestScrollView)
-        }
-
-        guard let contentView = window?.contentView else {
+        guard let nearestScrollView else {
             return
         }
 
-        let indicatorFrame = convert(bounds, to: nil).insetBy(dx: -2, dy: -2)
-        guard !indicatorFrame.isEmpty else {
-            return
-        }
-
-        for scrollView in scrollViews(in: contentView) {
-            let scrollFrame = scrollView.convert(scrollView.bounds, to: nil)
-            if scrollFrame.intersects(indicatorFrame) {
-                configure(scrollView)
-            }
-        }
+        configure(nearestScrollView)
     }
 
     private var nearestScrollView: NSScrollView? {
@@ -2382,32 +3360,22 @@ private final class EnclosingScrollIndicatorHidingView: NSView {
 
     private func configure(_ scrollView: NSScrollView) {
         scrollView.autohidesScrollers = true
+        scrollView.usesPredominantAxisScrolling = true
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets()
+        scrollView.scrollerInsets = NSEdgeInsets()
 
         if axes.hidesHorizontal {
             scrollView.hasHorizontalScroller = false
             scrollView.horizontalScroller?.isHidden = true
-            scrollView.horizontalScroller = nil
+            scrollView.horizontalScrollElasticity = .none
         }
 
         if axes.hidesVertical {
             scrollView.hasVerticalScroller = false
             scrollView.verticalScroller?.isHidden = true
-            scrollView.verticalScroller = nil
+            scrollView.verticalScrollElasticity = .none
         }
-    }
-
-    private func scrollViews(in root: NSView) -> [NSScrollView] {
-        var result: [NSScrollView] = []
-
-        if let scrollView = root as? NSScrollView {
-            result.append(scrollView)
-        }
-
-        for subview in root.subviews {
-            result.append(contentsOf: scrollViews(in: subview))
-        }
-
-        return result
     }
 }
 
@@ -2421,6 +3389,7 @@ private struct SidebarFolderTreeView: View {
     let moveTab: (TabID, BrowserTabReorderDirection) -> Void
     let moveTabToFolder: (TabID, FolderID, TabID?) -> Bool
     let createFolder: (String, SpaceID, FolderID?) -> BrowserFolder?
+    @Binding var tabDropState: SidebarTabDropState
 
     var body: some View {
         ForEach(folders) { folderItem in
@@ -2433,7 +3402,8 @@ private struct SidebarFolderTreeView: View {
                 setTabPlacement: setTabPlacement,
                 moveTab: moveTab,
                 moveTabToFolder: moveTabToFolder,
-                createFolder: createFolder
+                createFolder: createFolder,
+                tabDropState: $tabDropState
             )
         }
     }
@@ -2449,9 +3419,13 @@ private struct SidebarFolderNodeView: View {
     let moveTab: (TabID, BrowserTabReorderDirection) -> Void
     let moveTabToFolder: (TabID, FolderID, TabID?) -> Bool
     let createFolder: (String, SpaceID, FolderID?) -> BrowserFolder?
+    @Binding var tabDropState: SidebarTabDropState
 
     var body: some View {
         DisclosureGroup(isExpanded: .constant(!folderItem.folder.isCollapsed)) {
+            let resetToken = tabDropResetToken(for: folderItem.tabs)
+            let indexedTabs = Array(folderItem.tabs.enumerated())
+
             VStack(alignment: .leading, spacing: 2) {
                 SidebarFolderTreeView(
                     folders: folderItem.childFolders,
@@ -2462,22 +3436,27 @@ private struct SidebarFolderNodeView: View {
                     setTabPlacement: setTabPlacement,
                     moveTab: moveTab,
                     moveTabToFolder: moveTabToFolder,
-                    createFolder: createFolder
+                    createFolder: createFolder,
+                    tabDropState: $tabDropState
                 )
 
-                ForEach(folderItem.tabs) { item in
-                    SidebarTabRow(
-                        tab: item.tab,
-                        isSelected: item.isSelected,
-                        select: { selectTab(item.tab.id) },
-                        close: { closeTab(item.tab) },
-                        setPlacement: { placement in setTabPlacement(item.tab.id, placement) },
-                        move: { direction in moveTab(item.tab.id, direction) },
-                        canMoveUp: item.canMoveUp,
-                        canMoveDown: item.canMoveDown,
-                        moveBefore: { draggedTabID in
-                            moveTabToFolder(draggedTabID, folderItem.folder.id, item.tab.id)
-                        }
+                ForEach(indexedTabs, id: \.element.id) { offset, item in
+                    let upperTarget = tabDropTargetBefore(item)
+                    let lowerTarget = tabDropTargetAfter(offset: offset, tabs: folderItem.tabs)
+
+                    SidebarTabDropSlot(
+                        slotID: upperTarget.slotID,
+                        resetToken: resetToken,
+                        dropState: $tabDropState
+                    ) { draggedTabID in
+                        upperTarget.moveTab(draggedTabID)
+                    }
+                    .padding(.leading, folderContentIndent)
+
+                    tabRow(
+                        item,
+                        upperDropTarget: upperTarget,
+                        lowerDropTarget: lowerTarget
                     )
                     .padding(.leading, folderContentIndent)
                 }
@@ -2489,6 +3468,7 @@ private struct SidebarFolderNodeView: View {
             folderLabel
                 .padding(.leading, folderLabelIndent)
                 .dropDestination(for: String.self) { values, _ in
+                    clearDropTargetAfterDrop()
                     guard let value = values.first,
                           let draggedTabID = UUID(uuidString: value) else {
                         return false
@@ -2521,16 +3501,46 @@ private struct SidebarFolderNodeView: View {
     }
 
     private var folderDropTail: some View {
-        Color.clear
-            .frame(height: 10)
+        SidebarTabDropSlot(
+            slotID: tabDropSlotID(targetTabID: nil),
+            resetToken: tabDropResetToken(for: folderItem.tabs),
+            dropState: $tabDropState
+        ) { draggedTabID in
+            moveTabToFolder(draggedTabID, folderItem.folder.id, nil)
+        }
             .padding(.leading, folderContentIndent)
-            .dropDestination(for: String.self) { values, _ in
-                guard let value = values.first,
-                      let draggedTabID = UUID(uuidString: value) else {
-                    return false
-                }
-                return moveTabToFolder(draggedTabID, folderItem.folder.id, nil)
-            }
+    }
+
+    private func tabRow(
+        _ item: SidebarTabItemSnapshot,
+        upperDropTarget: SidebarTabDropTarget,
+        lowerDropTarget: SidebarTabDropTarget
+    ) -> some View {
+        SidebarTabDropRegion(
+            upperTarget: upperDropTarget,
+            lowerTarget: lowerDropTarget,
+            dropState: $tabDropState
+        ) {
+            SidebarTabRow(
+                tab: item.tab,
+                isSelected: item.isSelected,
+                select: { selectTab(item.tab.id) },
+                close: { closeTab(item.tab) },
+                setPlacement: { placement in setTabPlacement(item.tab.id, placement) },
+                move: { direction in moveTab(item.tab.id, direction) },
+                canMoveUp: item.canMoveUp,
+                canMoveDown: item.canMoveDown,
+                dragStarted: { tabDropState.beginDrag() }
+            )
+        }
+    }
+
+    private func clearDropTargetAfterDrop() {
+        var transaction = Transaction()
+        transaction.animation = nil
+        withTransaction(transaction) {
+            tabDropState.finishDrop()
+        }
     }
 
     private var folderLabelIndent: CGFloat {
@@ -2539,6 +3549,43 @@ private struct SidebarFolderNodeView: View {
 
     private var folderContentIndent: CGFloat {
         CGFloat(nestingLevel + 1) * 16
+    }
+
+    private func tabDropResetToken(for tabs: [SidebarTabItemSnapshot]) -> String {
+        tabs.map { $0.tab.id.uuidString }.joined(separator: "|")
+    }
+
+    private func tabDropSlotID(targetTabID: TabID?) -> String {
+        let target = targetTabID?.uuidString ?? "tail"
+        return "\(folderItem.folder.id.uuidString)-\(target)"
+    }
+
+    private func tabDropTargetBefore(_ item: SidebarTabItemSnapshot) -> SidebarTabDropTarget {
+        SidebarTabDropTarget(
+            slotID: tabDropSlotID(targetTabID: item.tab.id)
+        ) { draggedTabID in
+            moveTabToFolder(draggedTabID, folderItem.folder.id, item.tab.id)
+        }
+    }
+
+    private func tabDropTargetAfter(
+        offset: Int,
+        tabs: [SidebarTabItemSnapshot]
+    ) -> SidebarTabDropTarget {
+        if tabs.indices.contains(offset + 1) {
+            let nextTabID = tabs[offset + 1].tab.id
+            return SidebarTabDropTarget(
+                slotID: tabDropSlotID(targetTabID: nextTabID)
+            ) { draggedTabID in
+                moveTabToFolder(draggedTabID, folderItem.folder.id, nextTabID)
+            }
+        }
+
+        return SidebarTabDropTarget(
+            slotID: tabDropSlotID(targetTabID: nil)
+        ) { draggedTabID in
+            moveTabToFolder(draggedTabID, folderItem.folder.id, nil)
+        }
     }
 }
 
