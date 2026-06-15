@@ -1,11 +1,40 @@
 # Bare Browser
 
-Bare Browser is an open-source, native macOS browser project built with SwiftUI and WebKit.
+Bare Browser is an open-source, native macOS browser project built with SwiftUI
+and WebKit.
 
-The product direction is a sidebar-first browsing workflow with spaces, pinned tabs,
-favorites/essentials, folders, profiles, split views, a native command bar, and
-minimal top chrome. Bare Browser uses original branding, assets, text, and
-implementation.
+It exists because a certain kind of browser user got left hanging.
+
+Arc proved that browsers did not have to be rows of tabs stapled to the top of a
+window. It made browsing feel spatial, personal, and a little more like a real
+workspace. Then The Browser Company shifted its focus to Dia, and Arc moved into
+maintenance mode: still running, still receiving security/Chromium updates, but
+no longer the active product with a future roadmap. For people who had built
+their day around that model, that left a very specific hole.
+
+There are interesting alternatives. Zen Browser is promising. Orion has real Mac
+energy. Safari is solid. But none of them quite scratch this itch for me: a
+browser that is open source, sidebar-first, WebKit-based, SwiftUI/AppKit-native,
+and shaped like it actually belongs on macOS instead of feeling like a
+cross-platform skin.
+
+Bare Browser is the reaction to that gap.
+
+It is not an Arc clone. It uses original branding, assets, text, and
+implementation. The goal is to keep the part that mattered: spaces,
+pinned/essential tabs, folders, profiles, split views, a native command bar,
+minimal top chrome, and a calm Mac app sensibility.
+
+The bet is simple: a browser can be opinionated without being noisy, powerful
+without becoming a cockpit, and native without giving up the weird ideas that
+made recent browser experiments feel alive.
+
+Context:
+
+- The Browser Company's 2025
+  [letter to Arc members](https://browsercompany.substack.com/p/letter-to-arc-members-2025).
+- The Verge's coverage of
+  [Arc feature development stopping](https://www.theverge.com/news/674603/arc-browser-development-stopped-dia-browser-company).
 
 ## Status
 
