@@ -23,7 +23,7 @@
 - URL navigation is centralized in `URLSecurityPolicy`.
 - Unsafe script/data schemes are blocked.
 - External app and `file://` links create a pending native confirmation before any external handoff, retaining the target URL for approval while reducing source page context to a sanitized host or scheme label.
-- Non-local HTTP main-frame navigations are HTTPS-first where practical: explicit opens and WebKit main-frame HTTP actions first attempt the HTTPS equivalent, while localhost and loopback URLs remain HTTP for local development. If a tracked HTTPS upgrade attempt falls back to HTTP, Meridian shows the generic insecure-transport status message without embedding the full URL.
+- Non-local HTTP main-frame navigations are HTTPS-first where practical: explicit opens and WebKit main-frame HTTP actions first attempt the HTTPS equivalent, while localhost and loopback URLs remain HTTP for local development. If a tracked HTTPS upgrade attempt falls back to HTTP, Bare Browser shows the generic insecure-transport status message without embedding the full URL.
 - TLS certificate failures are not silently downgraded to HTTP fallback.
 - WebKit downloads are routed through a native save-location confirmation before bytes are written.
 - The download policy sanitizes candidate filenames, avoids existing destination paths, blocks installer-like packages, and requires explicit confirmation for executable-like extensions.
@@ -39,7 +39,7 @@
 - Autoplay is configured to require a user gesture by default.
 - App Sandbox entitlement file includes only sandbox and outbound network client entitlement.
 - A small `WKContentRuleList` blocks common tracker/ad endpoints without request interception hacks.
-- Meridian does not collect product analytics, browsing telemetry, page contents, URLs, credentials, cookies, tokens, or private browsing data; developer log modes stream only local OS logs.
+- Bare Browser does not collect product analytics, browsing telemetry, page contents, URLs, credentials, cookies, tokens, or private browsing data; developer log modes stream only local OS logs.
 
 ## Required Follow-Up
 

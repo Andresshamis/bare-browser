@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest an improvement for Bare Browser.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow or limitation should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should Bare Browser do?
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy and Security Considerations
+      description: Note any impact on browsing data, profile isolation, permissions, downloads, external apps, or local files.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered

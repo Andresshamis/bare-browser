@@ -9,7 +9,9 @@ public struct SidebarTabRow: View {
     private let move: (BrowserTabReorderDirection) -> Void
     private let canMoveUp: Bool
     private let canMoveDown: Bool
-    private let moveBefore: (TabID) -> Bool
+    private let dragStarted: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
     @State private var isHovered = false
 
     public init(
@@ -21,7 +23,7 @@ public struct SidebarTabRow: View {
         move: @escaping (BrowserTabReorderDirection) -> Void = { _ in },
         canMoveUp: Bool = false,
         canMoveDown: Bool = false,
-        moveBefore: @escaping (TabID) -> Bool = { _ in false }
+        dragStarted: @escaping () -> Void = {}
     ) {
         self.tab = tab
         self.isSelected = isSelected
@@ -31,21 +33,12 @@ public struct SidebarTabRow: View {
         self.move = move
         self.canMoveUp = canMoveUp
         self.canMoveDown = canMoveDown
-        self.moveBefore = moveBefore
+        self.dragStarted = dragStarted
     }
 
     public var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.tertiary)
-                .frame(width: 10)
-                .opacity(isHovered ? 1 : 0)
-                .accessibilityHidden(true)
-
-            Image(systemName: iconName)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
+            SidebarTabFaviconView(tab: tab, size: 16, fallbackSymbolName: iconName)
                 .frame(width: 16)
                 .accessibilityHidden(true)
 
@@ -79,13 +72,11 @@ public struct SidebarTabRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: select)
         .onHover { isHovered = $0 }
-        .draggable(tab.id.uuidString)
-        .dropDestination(for: String.self) { values, _ in
-            guard let value = values.first,
-                  let draggedTabID = UUID(uuidString: value) else {
-                return false
-            }
-            return moveBefore(draggedTabID)
+        .onDrag {
+            dragStarted()
+            return NSItemProvider(object: tab.id.uuidString as NSString)
+        } preview: {
+            dragPreview
         }
         .contextMenu {
             Button("Add to Essentials") {
@@ -122,8 +113,35 @@ public struct SidebarTabRow: View {
         .accessibilityLabel(tab.title)
     }
 
+    private var dragPreview: some View {
+        HStack(spacing: 8) {
+            SidebarTabFaviconView(tab: tab, size: 16, fallbackSymbolName: iconName)
+                .frame(width: 16)
+
+            Text(tab.title)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .frame(width: 220, height: 34, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.16), radius: 16, y: 8)
+    }
+
     private var selectionBackground: some ShapeStyle {
-        isSelected ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear)
+        isSelected
+            ? AnyShapeStyle(sidebarForegroundColor.opacity(selectionBackgroundOpacity))
+            : AnyShapeStyle(.clear)
+    }
+
+    private var selectionBackgroundOpacity: Double {
+        colorScheme == .dark ? 0.12 : 0.055
     }
 
     private var iconName: String {

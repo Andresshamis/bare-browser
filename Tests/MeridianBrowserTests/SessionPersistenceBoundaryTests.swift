@@ -22,6 +22,25 @@ final class SessionPersistenceBoundaryTests: XCTestCase {
             requestID: try XCTUnwrap(store.pendingSitePermissionRequest?.id),
             date: Date(timeIntervalSince1970: 1)
         )
+        let publicDownload = BrowserDownload(
+            profileID: publicProfileID,
+            filename: "public.pdf",
+            sourceDescription: "public.example",
+            destinationURL: URL(fileURLWithPath: "/tmp/public.pdf"),
+            state: .finished,
+            startedAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2),
+            completedAt: Date(timeIntervalSince1970: 2)
+        )
+        let interruptedDownload = BrowserDownload(
+            profileID: publicProfileID,
+            filename: "interrupted.zip",
+            sourceDescription: "public.example",
+            state: .downloading,
+            progress: 0.4,
+            startedAt: Date(timeIntervalSince1970: 3),
+            updatedAt: Date(timeIntervalSince1970: 4)
+        )
         let privateProfile = store.createProfile(name: "Private Session", ephemeral: true)
         let privateSpace = store.createSpace(name: "Private Space", profileID: privateProfile.id)
         let privateFolder = try XCTUnwrap(store.createFolder(name: "Private Folder", in: privateSpace.id))
@@ -58,13 +77,38 @@ final class SessionPersistenceBoundaryTests: XCTestCase {
             store.tabs[privateTabIndex].splitViewID = splitViewID
         }
 
-        let persisted = store.persistentSnapshot(date: Date(timeIntervalSince1970: 10))
+        var snapshot = store.snapshot(date: Date(timeIntervalSince1970: 10))
+        snapshot.downloads = [
+            publicDownload,
+            interruptedDownload,
+            BrowserDownload(
+                profileID: privateProfile.id,
+                filename: "private-secret.pdf",
+                sourceDescription: "private-download.example",
+                destinationURL: URL(fileURLWithPath: "/tmp/private-secret.pdf"),
+                state: .finished,
+                startedAt: Date(timeIntervalSince1970: 5),
+                updatedAt: Date(timeIntervalSince1970: 6),
+                completedAt: Date(timeIntervalSince1970: 6)
+            )
+        ]
+        let persisted = SessionPersistenceBoundary.persistentSnapshot(
+            from: snapshot,
+            fallback: SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 10))
+        )
 
         XCTAssertFalse(persisted.profiles.contains { $0.id == privateProfile.id })
         XCTAssertFalse(persisted.spaces.contains { $0.id == privateSpace.id })
         XCTAssertFalse(persisted.folders.contains { $0.id == privateFolder.id })
         XCTAssertFalse(persisted.tabs.contains { $0.id == privateTab.id })
         XCTAssertFalse(persisted.splitViews.contains { $0.id == splitViewID })
+        XCTAssertEqual(persisted.downloads.count, 2)
+        XCTAssertTrue(persisted.downloads.contains { $0.id == publicDownload.id })
+        XCTAssertFalse(persisted.downloads.contains { $0.profileID == privateProfile.id })
+        let persistedInterrupted = try XCTUnwrap(persisted.downloads.first { $0.id == interruptedDownload.id })
+        XCTAssertEqual(persistedInterrupted.state, .failed)
+        XCTAssertEqual(persistedInterrupted.completedAt, Date(timeIntervalSince1970: 10))
+        XCTAssertEqual(persistedInterrupted.failureMessage, "Download was interrupted when Bare Browser closed.")
         XCTAssertEqual(persisted.sitePermissionSettings.count, 1)
         XCTAssertEqual(persisted.sitePermissionSettings.first?.origin.serializedOrigin, "https://camera.example")
         XCTAssertEqual(persisted.sitePermissionSettings.first?.profileID, publicProfileID)
@@ -81,6 +125,8 @@ final class SessionPersistenceBoundaryTests: XCTestCase {
         XCTAssertFalse(lowercasedPayload.contains(privateSpace.id.uuidString.lowercased()))
         XCTAssertFalse(lowercasedPayload.contains(privateTab.id.uuidString.lowercased()))
         XCTAssertFalse(payload.contains("private-permission.example"))
+        XCTAssertFalse(payload.contains("private-secret.pdf"))
+        XCTAssertFalse(payload.contains("private-download.example"))
     }
 
     func testPersistentSnapshotFallsBackWhenOnlyPrivateStateRemains() {

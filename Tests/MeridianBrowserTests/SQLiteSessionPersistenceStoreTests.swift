@@ -61,6 +61,32 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
             requestID: try XCTUnwrap(store.pendingSitePermissionRequest?.id),
             date: Date(timeIntervalSince1970: 2.75)
         )
+        let publicDownloadRequest = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "public-download.pdf",
+            sourceURL: URL(string: "https://public-download.example/file.pdf")
+        )
+        let publicDownloadURL = directory.appendingPathComponent("public-download.pdf")
+        store.requestDownloadConfirmation(publicDownloadRequest, profileID: publicProfileID) { _ in }
+        XCTAssertTrue(store.approvePendingDownloadConfirmation(destination: publicDownloadURL))
+        store.finishDownload(
+            publicDownloadRequest.id,
+            destinationURL: publicDownloadURL,
+            quarantineApplied: true,
+            date: Date(timeIntervalSince1970: 2.8)
+        )
+        let privateDownloadRequest = store.downloadSafetyPolicy.confirmationRequest(
+            suggestedFilename: "private-secret.pdf",
+            sourceURL: URL(string: "https://private-download.example/secret.pdf")
+        )
+        let privateDownloadURL = directory.appendingPathComponent("private-secret.pdf")
+        store.requestDownloadConfirmation(privateDownloadRequest, profileID: privateProfile.id) { _ in }
+        XCTAssertTrue(store.approvePendingDownloadConfirmation(destination: privateDownloadURL))
+        store.finishDownload(
+            privateDownloadRequest.id,
+            destinationURL: privateDownloadURL,
+            quarantineApplied: true,
+            date: Date(timeIntervalSince1970: 2.9)
+        )
         let persistence = SQLiteSessionPersistenceStore(databaseURL: databaseURL)
 
         try persistence.saveSnapshot(
@@ -76,13 +102,18 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
         XCTAssertFalse(result.snapshot.tabs.contains { $0.id == privateTab.id })
         XCTAssertEqual(result.snapshot.sitePermissionSettings.count, 1)
         XCTAssertEqual(result.snapshot.sitePermissionSettings.first?.origin.serializedOrigin, "https://camera.example")
+        XCTAssertTrue(result.snapshot.downloads.contains { $0.id == publicDownloadRequest.id })
+        XCTAssertFalse(result.snapshot.downloads.contains { $0.id == privateDownloadRequest.id })
         XCTAssertEqual(result.snapshot.selectedSpaceID, publicSpaceID)
         XCTAssertEqual(result.snapshot.selectedTabID, publicTab.id)
 
         let rawDatabase = String(decoding: try Data(contentsOf: databaseURL), as: UTF8.self)
         XCTAssertTrue(rawDatabase.contains("camera.example"))
+        XCTAssertTrue(rawDatabase.contains("public-download.pdf"))
         XCTAssertFalse(rawDatabase.contains("private.example"))
         XCTAssertFalse(rawDatabase.contains("private-permission.example"))
+        XCTAssertFalse(rawDatabase.contains("private-download.example"))
+        XCTAssertFalse(rawDatabase.contains("private-secret.pdf"))
         XCTAssertFalse(rawDatabase.contains("secret"))
         XCTAssertFalse(rawDatabase.contains("token"))
         XCTAssertFalse(rawDatabase.contains(privateProfile.id.uuidString))

@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible Bare Browser bug.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include browsing history, cookies, credentials, tokens, private URLs, or personal data.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: List the smallest reliable reproduction steps.
+      placeholder: |
+        1. Open Bare Browser
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS Version
+      placeholder: "macOS Tahoe 26.x"
+  - type: input
+    id: xcode
+    attributes:
+      label: Xcode Version
+      placeholder: "Xcode 26.x"
+  - type: input
+    id: swift
+    attributes:
+      label: Swift Version
+      placeholder: "Swift 6.2"
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Notes

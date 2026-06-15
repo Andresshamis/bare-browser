@@ -12,6 +12,7 @@ public struct BrowserSessionSnapshot: Codable, Equatable, Sendable {
         case selectedTabID
         case capturedAt
         case sitePermissionSettings
+        case downloads
     }
 
     public var schemaVersion: Int
@@ -24,6 +25,7 @@ public struct BrowserSessionSnapshot: Codable, Equatable, Sendable {
     public var selectedTabID: TabID?
     public var capturedAt: Date
     public var sitePermissionSettings: [SitePermissionSetting]
+    public var downloads: [BrowserDownload]
 
     public init(
         schemaVersion: Int = 1,
@@ -35,7 +37,8 @@ public struct BrowserSessionSnapshot: Codable, Equatable, Sendable {
         selectedSpaceID: SpaceID? = nil,
         selectedTabID: TabID? = nil,
         capturedAt: Date = Date(),
-        sitePermissionSettings: [SitePermissionSetting] = []
+        sitePermissionSettings: [SitePermissionSetting] = [],
+        downloads: [BrowserDownload] = []
     ) {
         self.schemaVersion = schemaVersion
         self.profiles = profiles
@@ -47,6 +50,7 @@ public struct BrowserSessionSnapshot: Codable, Equatable, Sendable {
         self.selectedTabID = selectedTabID
         self.capturedAt = capturedAt
         self.sitePermissionSettings = sitePermissionSettings
+        self.downloads = downloads
     }
 
     public init(from decoder: Decoder) throws {
@@ -63,6 +67,10 @@ public struct BrowserSessionSnapshot: Codable, Equatable, Sendable {
         self.sitePermissionSettings = try container.decodeIfPresent(
             [SitePermissionSetting].self,
             forKey: .sitePermissionSettings
+        ) ?? []
+        self.downloads = try container.decodeIfPresent(
+            [BrowserDownload].self,
+            forKey: .downloads
         ) ?? []
     }
 }

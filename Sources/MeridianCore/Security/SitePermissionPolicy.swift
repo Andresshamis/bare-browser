@@ -267,6 +267,6 @@ public struct SitePermissionPolicy: Sendable {
     }
 
     private func unsupportedReason(for kind: SitePermissionKind) -> String {
-        "\(kind.displayTitle) permissions are not supported by Meridian on this WebKit version."
+        "\(kind.displayTitle) permissions are not supported by Bare Browser on this WebKit version."
     }
 }

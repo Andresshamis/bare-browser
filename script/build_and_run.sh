@@ -1,20 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PRODUCT_NAME="Bare Browser"
 MODE="${1:-run}"
-EXECUTABLE_NAME="MeridianBrowser"
-PRODUCT_NAME="Meridian Browser"
-BUNDLE_ID="app.meridianbrowser.MeridianBrowser"
+SWIFT_PRODUCT_NAME="MeridianBrowser"
+LEGACY_EXECUTABLE_NAME="MeridianBrowser"
+EXECUTABLE_NAME="$PRODUCT_NAME"
+BUNDLE_ID="app.barebrowser.BareBrowser"
 MIN_SYSTEM_VERSION="26.0"
 SWIFT_CONFIGURATION="debug"
+APP_ICON_NAME="MammothLogo"
+APP_ICON_FILE="$APP_ICON_NAME.icon"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$PRODUCT_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
+APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$EXECUTABLE_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
+APP_ICON_SOURCE="$ROOT_DIR/Resources/$APP_ICON_FILE"
+APP_ICON_PARTIAL_PLIST="$DIST_DIR/AppIconPartialInfo.plist"
+APP_ICON_ACTOOL_OUTPUT="$DIST_DIR/AppIconActoolOutput.plist"
 
 cd "$ROOT_DIR"
 
@@ -25,14 +33,33 @@ case "$MODE" in
 esac
 
 pkill -x "$EXECUTABLE_NAME" >/dev/null 2>&1 || true
+if [[ "$LEGACY_EXECUTABLE_NAME" != "$EXECUTABLE_NAME" ]]; then
+  pkill -x "$LEGACY_EXECUTABLE_NAME" >/dev/null 2>&1 || true
+fi
 
 swift build -c "$SWIFT_CONFIGURATION"
-BUILD_BINARY="$(swift build -c "$SWIFT_CONFIGURATION" --show-bin-path)/$EXECUTABLE_NAME"
+BUILD_BINARY="$(swift build -c "$SWIFT_CONFIGURATION" --show-bin-path)/$SWIFT_PRODUCT_NAME"
 
 rm -rf "$APP_BUNDLE"
-mkdir -p "$APP_MACOS"
+mkdir -p "$APP_MACOS" "$APP_RESOURCES"
 cp "$BUILD_BINARY" "$APP_BINARY"
 chmod +x "$APP_BINARY"
+
+if [[ ! -d "$APP_ICON_SOURCE" ]]; then
+  echo "error: missing app icon source: $APP_ICON_SOURCE" >&2
+  exit 1
+fi
+
+if ! xcrun actool \
+  --compile "$APP_RESOURCES" \
+  --platform macosx \
+  --minimum-deployment-target "$MIN_SYSTEM_VERSION" \
+  --app-icon "$APP_ICON_NAME" \
+  --output-partial-info-plist "$APP_ICON_PARTIAL_PLIST" \
+  "$APP_ICON_SOURCE" >"$APP_ICON_ACTOOL_OUTPUT"; then
+  cat "$APP_ICON_ACTOOL_OUTPUT" >&2
+  exit 1
+fi
 
 cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -45,6 +72,10 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$EXECUTABLE_NAME</string>
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
+  <key>CFBundleIconFile</key>
+  <string>$APP_ICON_NAME</string>
+  <key>CFBundleIconName</key>
+  <string>$APP_ICON_NAME</string>
   <key>CFBundleName</key>
   <string>$PRODUCT_NAME</string>
   <key>CFBundlePackageType</key>

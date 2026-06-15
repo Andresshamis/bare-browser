@@ -3,8 +3,11 @@ import AppKit
 @MainActor
 public final class BrowserContentPresentationState: ObservableObject {
     @Published public private(set) var previewTabID: TabID?
+    @Published public private(set) var previewStartPageSpaceID: SpaceID?
     @Published public private(set) var activeContentTabID: TabID?
-    @Published private var tabSnapshots: [TabID: NSImage] = [:]
+    @Published public private(set) var snapshotHandoffTabID: TabID?
+    private var snapshotHandoffID: UUID?
+    private var tabSnapshots: [TabID: NSImage] = [:]
 
     public init() {}
 
@@ -16,12 +19,56 @@ public final class BrowserContentPresentationState: ObservableObject {
         previewTabID = tabID
     }
 
+    public func setPreviewStartPageSpaceID(_ spaceID: SpaceID?) {
+        guard previewStartPageSpaceID != spaceID else {
+            return
+        }
+
+        previewStartPageSpaceID = spaceID
+    }
+
     public func setActiveContentTabID(_ tabID: TabID?) {
         guard activeContentTabID != tabID else {
             return
         }
 
         activeContentTabID = tabID
+    }
+
+    @discardableResult
+    public func beginSnapshotHandoff(to tabID: TabID?) -> UUID? {
+        guard let tabID,
+              tabSnapshots[tabID] != nil else {
+            clearSnapshotHandoff()
+            return nil
+        }
+
+        let handoffID = UUID()
+        snapshotHandoffID = handoffID
+        snapshotHandoffTabID = tabID
+        return handoffID
+    }
+
+    public func snapshotHandoffToken(for tabID: TabID) -> UUID? {
+        guard snapshotHandoffTabID == tabID else {
+            return nil
+        }
+
+        return snapshotHandoffID
+    }
+
+    public func completeSnapshotHandoff(_ handoffID: UUID?, for tabID: TabID) {
+        guard snapshotHandoffID == handoffID,
+              snapshotHandoffTabID == tabID else {
+            return
+        }
+
+        clearSnapshotHandoff()
+    }
+
+    public func clearSnapshotHandoff() {
+        snapshotHandoffID = nil
+        snapshotHandoffTabID = nil
     }
 
     public func storeSnapshot(_ image: NSImage, for tabID: TabID) {
@@ -31,6 +78,9 @@ public final class BrowserContentPresentationState: ObservableObject {
             return
         }
 
+        if previewTabID == tabID && activeContentTabID != tabID {
+            objectWillChange.send()
+        }
         tabSnapshots[tabID] = image
     }
 
@@ -44,6 +94,10 @@ public final class BrowserContentPresentationState: ObservableObject {
 
     public func removeSnapshots(keeping tabIDs: Set<TabID>) {
         tabSnapshots = tabSnapshots.filter { tabIDs.contains($0.key) }
+        if let snapshotHandoffTabID,
+           !tabIDs.contains(snapshotHandoffTabID) {
+            clearSnapshotHandoff()
+        }
     }
 }
 

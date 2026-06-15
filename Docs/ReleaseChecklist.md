@@ -1,5 +1,11 @@
 # Release Checklist
 
+- Confirm the working tree contains only intentional source, docs, tests, and first-party assets.
+- Run a full-history secret scan before changing repository visibility.
+- Confirm GitHub issues, pull requests, comments, branches, and release metadata are safe to make public.
+- Keep public-facing community files current: `SECURITY.md`, `CONTRIBUTING.md`, issue templates, pull request template, support notes, and code of conduct.
+- Verify third-party assets, fonts, generated images, and copied text have documented provenance and compatible licenses.
+- Use meaningful commits for public history; squash or reword private work-in-progress commits before publishing.
 - Add an Xcode project or generated project workflow for app bundle packaging.
 - Set final bundle identifier and signing team.
 - Enable App Sandbox.

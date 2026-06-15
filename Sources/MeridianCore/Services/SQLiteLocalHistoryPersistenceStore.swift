@@ -13,7 +13,7 @@ public enum LocalHistoryPersistenceRecoveryReason: Equatable, Sendable {
         case .noSavedHistory:
             return nil
         case .unreadableStore, .corruptPayload, .unsupportedSchema, .repairedHistory:
-            return "Meridian restored local history from a clean state because saved history was unavailable."
+            return "Bare Browser restored local history from a clean state because saved history was unavailable."
         }
     }
 }
@@ -42,6 +42,8 @@ public final class SQLiteLocalHistoryPersistenceStore: LocalHistoryPersisting {
     public static let currentSchemaVersion = 1
 
     private static let recordID = "main"
+    private static let supportDirectoryName = "Bare Browser"
+    private static let legacySupportDirectoryName = "Meridian Browser"
     private static let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     public let databaseURL: URL
@@ -75,9 +77,20 @@ public final class SQLiteLocalHistoryPersistenceStore: LocalHistoryPersisting {
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
 
-        return applicationSupport
-            .appendingPathComponent("Meridian Browser", isDirectory: true)
-            .appendingPathComponent("History.sqlite3", isDirectory: false)
+        let databaseFilename = "History.sqlite3"
+        let currentURL = applicationSupport
+            .appendingPathComponent(supportDirectoryName, isDirectory: true)
+            .appendingPathComponent(databaseFilename, isDirectory: false)
+
+        if fileManager.fileExists(atPath: currentURL.path) {
+            return currentURL
+        }
+
+        let legacyURL = applicationSupport
+            .appendingPathComponent(legacySupportDirectoryName, isDirectory: true)
+            .appendingPathComponent(databaseFilename, isDirectory: false)
+
+        return fileManager.fileExists(atPath: legacyURL.path) ? legacyURL : currentURL
     }
 
     public func loadHistory(profiles: [BrowserProfile]) -> LocalHistoryPersistenceLoadResult {

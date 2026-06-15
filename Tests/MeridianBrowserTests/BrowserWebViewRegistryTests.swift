@@ -1,5 +1,6 @@
 import Foundation
 @testable import MeridianCore
+import SwiftUI
 import WebKit
 import XCTest
 
@@ -21,6 +22,21 @@ final class BrowserWebViewRegistryTests: XCTestCase {
 
         XCTAssertNil(firstWebView.superview)
         XCTAssertNil(secondWebView.superview)
+    }
+
+    func testContainerSuspendsActiveWebViewWithoutUnmountingIt() {
+        let container = BrowserWebViewContainerView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        let webView = WKWebView()
+
+        container.attach(webView)
+        container.suspendActiveWebView()
+
+        XCTAssertTrue(webView.superview === container)
+        XCTAssertEqual(webView.alphaValue, 0)
+
+        XCTAssertTrue(container.attach(webView))
+        XCTAssertTrue(webView.superview === container)
+        XCTAssertEqual(webView.alphaValue, 1)
     }
 
     func testRegistryReusesSessionForSameTab() {
@@ -170,6 +186,72 @@ final class BrowserWebViewRegistryTests: XCTestCase {
         XCTAssertEqual(registry.liveSessionCount, 1)
     }
 
+    func testWebContentAppearanceMapsSystemColorSchemeToAppKitAppearance() {
+        XCTAssertEqual(BrowserWebContentAppearance.appearanceName(for: .dark), .darkAqua)
+        XCTAssertEqual(BrowserWebContentAppearance.appearanceName(for: .light), .aqua)
+        XCTAssertEqual(BrowserWebContentAppearance.underPageBackgroundColor(for: .dark), .black)
+        XCTAssertEqual(BrowserWebContentAppearance.underPageBackgroundColor(for: .light), .white)
+    }
+
+    func testRegistryAppliesColorSchemeToCachedWebViews() {
+        let fixture = RegistryFixture()
+        let registry = BrowserWebViewRegistry(capacity: 8)
+        let firstTab = fixture.tab(title: "First")
+        let secondTab = fixture.tab(title: "Second")
+        let state = WebViewState()
+
+        let firstSession = registry.session(
+            for: firstTab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+        let secondSession = registry.session(
+            for: secondTab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+
+        registry.applyColorScheme(.dark)
+
+        XCTAssertEqual(firstSession.webView.appearance?.name, .darkAqua)
+        XCTAssertEqual(secondSession.webView.appearance?.name, .darkAqua)
+        XCTAssertBlack(firstSession.webView.underPageBackgroundColor)
+        XCTAssertBlack(secondSession.webView.underPageBackgroundColor)
+    }
+
+    func testWebContentAppearanceAdvertisesDarkColorSchemeToPageCSS() {
+        let webView = WKWebView()
+        let navigationObserver = WebViewNavigationObserver()
+        let pageLoaded = expectation(description: "HTML page loaded")
+        navigationObserver.onFinish = {
+            pageLoaded.fulfill()
+        }
+        webView.navigationDelegate = navigationObserver
+
+        BrowserWebContentAppearance.apply(.dark, to: webView)
+        webView.loadHTMLString("<!doctype html><meta name=\"color-scheme\" content=\"light dark\">", baseURL: nil)
+        wait(for: [pageLoaded], timeout: 3)
+
+        let mediaQueryEvaluated = expectation(description: "CSS color scheme evaluated")
+        webView.evaluateJavaScript("matchMedia('(prefers-color-scheme: dark)').matches") { result, error in
+            XCTAssertNil(error)
+            XCTAssertEqual(result as? Bool, true)
+            mediaQueryEvaluated.fulfill()
+        }
+
+        wait(for: [mediaQueryEvaluated], timeout: 3)
+    }
+
     func testRegistryRecreatesSessionWhenTabProfileChanges() {
         let fixture = RegistryFixture()
         let registry = BrowserWebViewRegistry(capacity: 8)
@@ -206,6 +288,30 @@ final class BrowserWebViewRegistryTests: XCTestCase {
         XCTAssertEqual(registry.liveSessionCount, 1)
     }
 
+}
+
+private func XCTAssertBlack(
+    _ color: NSColor?,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) {
+    guard let color = color?.usingColorSpace(.sRGB) else {
+        XCTFail("Expected a color", file: file, line: line)
+        return
+    }
+
+    XCTAssertEqual(color.redComponent, 0, accuracy: 0.001, file: file, line: line)
+    XCTAssertEqual(color.greenComponent, 0, accuracy: 0.001, file: file, line: line)
+    XCTAssertEqual(color.blueComponent, 0, accuracy: 0.001, file: file, line: line)
+    XCTAssertEqual(color.alphaComponent, 1, accuracy: 0.001, file: file, line: line)
+}
+
+private final class WebViewNavigationObserver: NSObject, WKNavigationDelegate {
+    var onFinish: (() -> Void)?
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        onFinish?()
+    }
 }
 
 @MainActor

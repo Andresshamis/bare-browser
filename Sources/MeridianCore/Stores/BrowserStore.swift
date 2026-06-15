@@ -97,7 +97,7 @@ public final class BrowserStore: ObservableObject {
         self.pendingSitePermissionRequest = nil
         self.sitePermissionSettings = sitePermissionSettings ?? snapshot.sitePermissionSettings
         self.historyEntries = localHistoryStore.entries
-        self.downloads = []
+        self.downloads = snapshot.downloads
         self.commandRouter = commandRouter
         self.urlSecurityPolicy = urlSecurityPolicy
         self.downloadSafetyPolicy = downloadSafetyPolicy
@@ -107,6 +107,7 @@ public final class BrowserStore: ObservableObject {
         self.localHistoryStore = localHistoryStore
         self.pendingDownloadCompletion = nil
         self.downloadCancellationHandlers = [:]
+        sortDownloads()
 
         let didNormalizeLegacySpaceSymbols = normalizeLegacySpaceSymbols()
         let didPruneStaleEmptyTabs = pruneStaleEmptyTabsFromLoadedSession()
@@ -159,7 +160,8 @@ public final class BrowserStore: ObservableObject {
             selectedSpaceID: selectedSpaceID,
             selectedTabID: selectedTabID,
             capturedAt: date,
-            sitePermissionSettings: sitePermissionSettings
+            sitePermissionSettings: sitePermissionSettings,
+            downloads: downloads
         )
     }
 
@@ -918,6 +920,7 @@ public final class BrowserStore: ObservableObject {
                 tab.content = .web
                 tab.title = Self.defaultTitle(for: url)
                 tab.url = url
+                tab.faviconURL = nil
                 tab.restorationMetadata.lastCommittedURL = url
                 tab.isLoading = true
             }
@@ -1234,16 +1237,19 @@ public final class BrowserStore: ObservableObject {
 
     public func requestDownloadConfirmation(
         _ request: DownloadConfirmationRequest,
+        profileID: ProfileID? = nil,
         date: Date = Date(),
         completion: @escaping @MainActor (URL?) -> Void
     ) {
         cancelPendingDownloadCompletion(message: nil)
+        let resolvedProfileID = profileID ?? activeProfile?.id
 
         switch request.risk {
         case .blocked(let reason):
             upsertDownload(
                 BrowserDownload(
                     id: request.id,
+                    profileID: resolvedProfileID,
                     filename: request.sanitizedFilename,
                     sourceDescription: request.sourceDescription,
                     state: .failed,
@@ -1259,6 +1265,7 @@ public final class BrowserStore: ObservableObject {
             upsertDownload(
                 BrowserDownload(
                     id: request.id,
+                    profileID: resolvedProfileID,
                     filename: request.sanitizedFilename,
                     sourceDescription: request.sourceDescription,
                     state: .waitingForDestination,
@@ -1455,6 +1462,9 @@ public final class BrowserStore: ObservableObject {
         if let title, !title.isEmpty {
             updatedTab.title = title
         }
+        if let url, url != currentTab.url {
+            updatedTab.faviconURL = nil
+        }
         updatedTab.url = url ?? updatedTab.url
         updatedTab.isLoading = isLoading
         updatedTab.restorationMetadata.lastCommittedURL = url ?? updatedTab.restorationMetadata.lastCommittedURL
@@ -1485,6 +1495,21 @@ public final class BrowserStore: ObservableObject {
         if didChangeTabState {
             persistSession()
         }
+    }
+
+    public func updateTabFavicon(_ faviconURL: URL?, for tabID: TabID) {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == tabID }),
+              tabs[tabIndex].content.isWeb else {
+            return
+        }
+
+        let resolvedFaviconURL = faviconURL.flatMap(Self.normalizedWebFaviconURL)
+        guard tabs[tabIndex].faviconURL != resolvedFaviconURL else {
+            return
+        }
+
+        tabs[tabIndex].faviconURL = resolvedFaviconURL
+        persistSession()
     }
 
     public func publishStatusMessage(_ message: String?) {
@@ -1968,6 +1993,7 @@ public final class BrowserStore: ObservableObject {
             downloads.insert(download, at: 0)
         }
         sortDownloads()
+        schedulePersistSession(date: download.updatedAt)
     }
 
     private func updateDownload(
@@ -1979,7 +2005,9 @@ public final class BrowserStore: ObservableObject {
         }
 
         mutate(&downloads[index])
+        let updatedAt = downloads[index].updatedAt
         sortDownloads()
+        schedulePersistSession(date: updatedAt)
     }
 
     private func sortDownloads() {
@@ -2040,7 +2068,7 @@ public final class BrowserStore: ObservableObject {
                 fallback: SessionSnapshotFactory.initial(date: date)
             )
         } catch {
-            lastUserMessage = "Session changes could not be saved. Meridian will keep browsing state in memory for this run."
+            lastUserMessage = "Session changes could not be saved. Bare Browser will keep browsing state in memory for this run."
         }
     }
 
@@ -2052,7 +2080,7 @@ public final class BrowserStore: ObservableObject {
         do {
             try localHistoryPersistence.saveHistory(localHistoryStore.entries, profiles: profiles)
         } catch {
-            lastUserMessage = "History changes could not be saved. Meridian will keep history in memory for this run."
+            lastUserMessage = "History changes could not be saved. Bare Browser will keep history in memory for this run."
         }
     }
 
@@ -2061,6 +2089,14 @@ public final class BrowserStore: ObservableObject {
             return "New Tab"
         }
         return url.host(percentEncoded: false) ?? url.absoluteString
+    }
+
+    private static func normalizedWebFaviconURL(_ url: URL) -> URL? {
+        guard let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return nil
+        }
+        return url
     }
 
     private static func isStaleEmptyTab(_ tab: BrowserTab) -> Bool {

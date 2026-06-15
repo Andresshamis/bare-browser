@@ -32,11 +32,18 @@ public struct SidebarChromeTheme: Equatable, Sendable {
         spaces: [BrowserSpace],
         fractionalIndex: Double
     ) -> SidebarChromeTheme? {
-        guard !spaces.isEmpty else {
+        interpolated(themes: spaces.map(theme(for:)), fractionalIndex: fractionalIndex)
+    }
+
+    public static func interpolated(
+        themes: [SidebarChromeTheme],
+        fractionalIndex: Double
+    ) -> SidebarChromeTheme? {
+        guard !themes.isEmpty else {
             return nil
         }
 
-        let lastIndex = spaces.count - 1
+        let lastIndex = themes.count - 1
         let boundedIndex = min(
             max(fractionalIndex.isFinite ? fractionalIndex : 0, 0),
             Double(lastIndex)
@@ -45,20 +52,20 @@ public struct SidebarChromeTheme: Equatable, Sendable {
         let upperIndex = Int(ceil(boundedIndex))
 
         guard lowerIndex != upperIndex else {
-            return theme(for: spaces[lowerIndex])
+            return themes[lowerIndex]
         }
 
         let progress = boundedIndex - Double(lowerIndex)
-        let lowerSpace = spaces[lowerIndex]
-        let upperSpace = spaces[upperIndex]
-        let lowerAppearance = lowerSpace.sidebarAppearance
-        let upperAppearance = upperSpace.sidebarAppearance
-        let lowerTint = RGBHexColor(hex: lowerAppearance.tintHex(forSpaceColorHex: lowerSpace.colorHex))
-        let upperTint = RGBHexColor(hex: upperAppearance.tintHex(forSpaceColorHex: upperSpace.colorHex))
+        let lowerTheme = themes[lowerIndex]
+        let upperTheme = themes[upperIndex]
+        let lowerAppearance = lowerTheme.appearance
+        let upperAppearance = upperTheme.appearance
+        let lowerTint = RGBHexColor(hex: lowerTheme.tintHex)
+        let upperTint = RGBHexColor(hex: upperTheme.tintHex)
         let blendedTintHex = RGBHexColor.interpolated(from: lowerTint, to: upperTint, progress: progress).hexString
         let blendedSpaceColorHex = RGBHexColor.interpolated(
-            from: RGBHexColor(hex: lowerSpace.colorHex),
-            to: RGBHexColor(hex: upperSpace.colorHex),
+            from: RGBHexColor(hex: lowerTheme.spaceColorHex),
+            to: RGBHexColor(hex: upperTheme.spaceColorHex),
             progress: progress
         ).hexString
 

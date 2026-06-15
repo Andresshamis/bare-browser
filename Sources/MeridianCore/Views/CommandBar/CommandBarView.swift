@@ -40,99 +40,93 @@ public struct CommandBarView: View {
         let hasResults = !results.isEmpty
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
 
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
+        GlassEffectContainer(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
 
-                CommandBarTextField(
-                    text: $query,
-                    placeholder: "Search or enter address",
-                    focusRequest: store.commandBarFocusRequest,
-                    submit: submit,
-                    cancel: { store.hideCommandBar() }
-                )
-                .frame(height: 28)
+                    CommandBarTextField(
+                        text: $query,
+                        placeholder: "Search or enter address",
+                        focusRequest: store.commandBarFocusRequest,
+                        submit: submit,
+                        cancel: { store.hideCommandBar() }
+                    )
+                    .frame(height: 28)
 
-                if !query.isEmpty {
-                    Button {
-                        query = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help("Clear")
-                }
-            }
-            .padding(.horizontal, 12)
-            .frame(height: CommandBarMetrics.searchAreaHeight)
-
-            if hasResults {
-                Divider()
-                    .frame(height: CommandBarMetrics.dividerHeight)
-
-                VStack(spacing: CommandBarMetrics.resultRowSpacing) {
-                    ForEach(results) { result in
+                    if !query.isEmpty {
                         Button {
-                            store.activateCommandBarResult(result, browserActionHandler: performBrowserAction)
+                            query = ""
                         } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: result.symbolName)
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 16)
-                                Text(result.title)
-                                    .lineLimit(1)
-                                Spacer()
-                                Text(result.subtitle)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                Text(result.kindLabel)
-                                    .foregroundStyle(.tertiary)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 54, alignment: .trailing)
-                            }
-                            .font(.system(size: 13))
-                            .padding(.horizontal, 12)
-                            .frame(height: CommandBarMetrics.resultRowHeight)
+                            Image(systemName: "xmark.circle.fill")
                         }
                         .buttonStyle(.plain)
-                        .contextMenu {
-                            if case .history(let entry) = result {
-                                Button("Delete History Entry", role: .destructive) {
-                                    store.deleteHistoryEntry(entry.id, profileID: entry.profileID)
+                        .foregroundStyle(.secondary)
+                        .help("Clear")
+                    }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: CommandBarMetrics.searchAreaHeight)
+
+                if hasResults {
+                    Divider()
+                        .frame(height: CommandBarMetrics.dividerHeight)
+
+                    VStack(spacing: CommandBarMetrics.resultRowSpacing) {
+                        ForEach(results) { result in
+                            Button {
+                                store.activateCommandBarResult(result, browserActionHandler: performBrowserAction)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: result.symbolName)
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 16)
+                                    Text(result.title)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text(result.subtitle)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                    Text(result.kindLabel)
+                                        .foregroundStyle(.tertiary)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .frame(width: 54, alignment: .trailing)
+                                }
+                                .font(.system(size: 13))
+                                .padding(.horizontal, 12)
+                                .frame(height: CommandBarMetrics.resultRowHeight)
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                if case .history(let entry) = result {
+                                    Button("Delete History Entry", role: .destructive) {
+                                        store.deleteHistoryEntry(entry.id, profileID: entry.profileID)
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    if results.count < CommandBarMetrics.maximumVisibleResults {
-                        Spacer(minLength: 0)
+                        if results.count < CommandBarMetrics.maximumVisibleResults {
+                            Spacer(minLength: 0)
+                        }
                     }
+                    .frame(height: CommandBarMetrics.resultsAreaHeight - CommandBarMetrics.resultsBottomPadding, alignment: .top)
+                    .padding(.bottom, CommandBarMetrics.resultsBottomPadding)
+                    .transition(.opacity)
                 }
-                .frame(height: CommandBarMetrics.resultsAreaHeight - CommandBarMetrics.resultsBottomPadding, alignment: .top)
-                .padding(.bottom, CommandBarMetrics.resultsBottomPadding)
-                .transition(.opacity)
             }
-        }
-        .frame(
-            width: CommandBarMetrics.width,
-            height: hasResults ? CommandBarMetrics.expandedHeight : CommandBarMetrics.compactHeight,
-            alignment: .topLeading
-        )
-        .contentShape(shape)
-        .background {
-            GlassEffectContainer(spacing: 0) {
-                shape
-                    .fill(.clear)
-                    .glassEffect(.regular.tint(.white.opacity(0.08)).interactive(false), in: shape)
-                    .glassEffectID("commandBarSurface", in: glassNamespace)
-                    .glassEffectTransition(.matchedGeometry)
-                    .compositingGroup()
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
+            .frame(
+                width: CommandBarMetrics.width,
+                height: hasResults ? CommandBarMetrics.expandedHeight : CommandBarMetrics.compactHeight,
+                alignment: .topLeading
+            )
+            .contentShape(shape)
+            .glassEffect(.regular.interactive(false), in: shape)
+            .glassEffectID("commandBarSurface", in: glassNamespace)
+            .glassEffectTransition(.matchedGeometry)
+            .compositingGroup()
         }
         .overlay(
             shape.stroke(.separator.opacity(0.45), lineWidth: 0.5)
@@ -341,6 +335,10 @@ private struct CommandBarTextField: NSViewRepresentable {
 
 private final class FocusableCommandBarTextField: NSTextField {
     var onMouseDown: (() -> Void)?
+
+    override var allowsVibrancy: Bool {
+        true
+    }
 
     override var acceptsFirstResponder: Bool {
         true

@@ -34,7 +34,7 @@ struct MeridianBrowserApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Meridian Browser") {
+        WindowGroup("Bare Browser") {
             BrowserWindowView(store: store)
                 .frame(minWidth: 900, minHeight: 620)
                 .onChange(of: scenePhase) { _, phase in

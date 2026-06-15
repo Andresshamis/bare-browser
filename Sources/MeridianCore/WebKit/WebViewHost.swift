@@ -11,6 +11,9 @@ private let webViewLogger = Logger(
 
 private enum BrowserContextMenuScript {
     static let messageHandlerName = "meridianContextMenuTarget"
+    @MainActor static var contentWorld: WKContentWorld {
+        WKContentWorld.defaultClient
+    }
 
     static let source = """
     (() => {
@@ -96,6 +99,74 @@ private enum BrowserContextMenuScript {
         }, true);
     })();
     """
+}
+
+private enum BrowserFaviconScript {
+    static let source = """
+    (() => {
+        const absoluteURL = value => {
+            if (!value || typeof value !== "string") {
+                return null;
+            }
+            try {
+                return new URL(value, document.baseURI).href;
+            } catch {
+                return null;
+            }
+        };
+
+        const sizeScore = sizes => {
+            if (!sizes || sizes.toLowerCase() === "any") {
+                return 0;
+            }
+            return sizes
+                .split(/\\s+/)
+                .map(value => {
+                    const match = value.match(/^(\\d+)x(\\d+)$/i);
+                    return match ? Number(match[1]) * Number(match[2]) : 0;
+                })
+                .reduce((best, value) => Math.max(best, value), 0);
+        };
+
+        const candidates = Array.from(document.querySelectorAll("link[rel][href]"))
+            .map(link => {
+                const relTokens = (link.getAttribute("rel") || "")
+                    .toLowerCase()
+                    .split(/\\s+/)
+                    .filter(Boolean);
+                const href = absoluteURL(link.getAttribute("href"));
+                if (!href) {
+                    return null;
+                }
+
+                const relScore = relTokens.includes("apple-touch-icon") ||
+                    relTokens.includes("apple-touch-icon-precomposed") ? 400 :
+                    relTokens.includes("icon") ? 300 :
+                    relTokens.includes("shortcut") && relTokens.includes("icon") ? 250 :
+                    relTokens.includes("mask-icon") ? 100 :
+                    0;
+                if (relScore === 0) {
+                    return null;
+                }
+
+                return {
+                    href,
+                    score: relScore + Math.min(sizeScore(link.getAttribute("sizes")), 10000)
+                };
+            })
+            .filter(Boolean)
+            .sort((lhs, rhs) => rhs.score - lhs.score);
+
+        return candidates.length ? candidates[0].href : absoluteURL("/favicon.ico");
+    })()
+    """
+
+    static func url(from value: Any?) -> URL? {
+        guard let string = value as? String else {
+            return nil;
+        }
+        return URL(string: string)
+    }
 }
 
 struct BrowserContextMenuDownloadTarget: Equatable {
@@ -203,6 +274,7 @@ enum BrowserContextMenuDownloadKind: Hashable {
 @MainActor
 struct BrowserWebViewCallbacks {
     var onStateChange: @MainActor (String?, URL?, Bool, String?) -> Void
+    var onFaviconChange: @MainActor (URL?) -> Void
     var onSecurityMessage: @MainActor (String) -> Void
     var onURLConfirmationRequired: @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
     var onDownloadConfirmationRequired: @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
@@ -215,6 +287,7 @@ struct BrowserWebViewCallbacks {
 
     init(
         onStateChange: @escaping @MainActor (String?, URL?, Bool, String?) -> Void,
+        onFaviconChange: @escaping @MainActor (URL?) -> Void = { _ in },
         onSecurityMessage: @escaping @MainActor (String) -> Void,
         onURLConfirmationRequired: @escaping @MainActor (URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void,
         onDownloadConfirmationRequired: @escaping @MainActor (DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void,
@@ -226,6 +299,7 @@ struct BrowserWebViewCallbacks {
         onSnapshot: @escaping @MainActor (NSImage) -> Void = { _ in }
     ) {
         self.onStateChange = onStateChange
+        self.onFaviconChange = onFaviconChange
         self.onSecurityMessage = onSecurityMessage
         self.onURLConfirmationRequired = onURLConfirmationRequired
         self.onDownloadConfirmationRequired = onDownloadConfirmationRequired
@@ -272,6 +346,22 @@ public struct WebContentMouseExclusionRegion: Equatable, Sendable {
             width: clampedWidth,
             height: clampedHeight
         )
+    }
+}
+
+@MainActor
+enum BrowserWebContentAppearance {
+    static func appearanceName(for colorScheme: ColorScheme) -> NSAppearance.Name {
+        colorScheme == .dark ? .darkAqua : .aqua
+    }
+
+    static func underPageBackgroundColor(for colorScheme: ColorScheme) -> NSColor {
+        colorScheme == .dark ? .black : .white
+    }
+
+    static func apply(_ colorScheme: ColorScheme, to webView: WKWebView) {
+        webView.appearance = NSAppearance(named: appearanceName(for: colorScheme))
+        webView.underPageBackgroundColor = underPageBackgroundColor(for: colorScheme)
     }
 }
 
@@ -328,7 +418,8 @@ public final class BrowserWebViewRegistry: ObservableObject {
         securityPolicy: URLSecurityPolicy,
         downloadSafetyPolicy: DownloadSafetyPolicy,
         sitePermissionPolicy: SitePermissionPolicy,
-        callbacks: BrowserWebViewCallbacks
+        callbacks: BrowserWebViewCallbacks,
+        isActive: Bool = true
     ) -> BrowserWebViewSession {
         let sequence = nextUsageSequence()
         if let session = sessions[tab.id] {
@@ -344,7 +435,8 @@ public final class BrowserWebViewRegistry: ObservableObject {
                     downloadSafetyPolicy: downloadSafetyPolicy,
                     sitePermissionPolicy: sitePermissionPolicy,
                     callbacks: callbacks,
-                    sequence: sequence
+                    sequence: sequence,
+                    isActive: isActive
                 )
             }
             session.lastUsedSequence = sequence
@@ -355,9 +447,11 @@ public final class BrowserWebViewRegistry: ObservableObject {
                 callbacks: callbacks,
                 requestedURL: tab.url,
                 pendingHTTPFallbackURL: tab.restorationMetadata.pendingHTTPFallbackURL,
-                isActive: true
+                isActive: isActive
             )
-            markActive(tab.id)
+            if isActive {
+                markActive(tab.id)
+            }
             enforceCapacity(activeTabID: tab.id)
             return session
         }
@@ -371,7 +465,8 @@ public final class BrowserWebViewRegistry: ObservableObject {
             downloadSafetyPolicy: downloadSafetyPolicy,
             sitePermissionPolicy: sitePermissionPolicy,
             callbacks: callbacks,
-            sequence: sequence
+            sequence: sequence,
+            isActive: isActive
         )
     }
 
@@ -384,7 +479,8 @@ public final class BrowserWebViewRegistry: ObservableObject {
         downloadSafetyPolicy: DownloadSafetyPolicy,
         sitePermissionPolicy: SitePermissionPolicy,
         callbacks: BrowserWebViewCallbacks,
-        sequence: UInt64
+        sequence: UInt64,
+        isActive: Bool
     ) -> BrowserWebViewSession {
         let coordinator = WebViewHost.Coordinator(
             tabID: tab.id,
@@ -394,7 +490,7 @@ public final class BrowserWebViewRegistry: ObservableObject {
             callbacks: callbacks,
             requestedURL: tab.url,
             pendingHTTPFallbackURL: tab.restorationMetadata.pendingHTTPFallbackURL,
-            isActive: true
+            isActive: isActive
         )
         let webView = Self.makeWebView(
             profile: profile,
@@ -410,7 +506,9 @@ public final class BrowserWebViewRegistry: ObservableObject {
             lastUsedSequence: sequence
         )
         sessions[tab.id] = session
-        markActive(tab.id)
+        if isActive {
+            markActive(tab.id)
+        }
         enforceCapacity(activeTabID: tab.id)
         return session
     }
@@ -418,6 +516,12 @@ public final class BrowserWebViewRegistry: ObservableObject {
     public func markActive(_ activeTabID: TabID?) {
         for (tabID, session) in sessions {
             session.coordinator.isActive = tabID == activeTabID
+        }
+    }
+
+    func applyColorScheme(_ colorScheme: ColorScheme) {
+        for session in sessions.values {
+            BrowserWebContentAppearance.apply(colorScheme, to: session.webView)
         }
     }
 
@@ -486,10 +590,12 @@ public final class BrowserWebViewRegistry: ObservableObject {
         configuration.userContentController.addUserScript(WKUserScript(
             source: BrowserContextMenuScript.source,
             injectionTime: .atDocumentStart,
-            forMainFrameOnly: false
+            forMainFrameOnly: false,
+            in: BrowserContextMenuScript.contentWorld
         ))
         configuration.userContentController.add(
             WeakScriptMessageHandler(target: coordinator),
+            contentWorld: BrowserContextMenuScript.contentWorld,
             name: BrowserContextMenuScript.messageHandlerName
         )
         ContentBlockerService.installDefaultRules(into: configuration.userContentController)
@@ -497,7 +603,6 @@ public final class BrowserWebViewRegistry: ObservableObject {
         let webView = BrowserWKWebView(frame: .zero, configuration: configuration)
         webView.contextMenuDownloadHandler = coordinator
         webView.allowsBackForwardNavigationGestures = true
-        webView.customUserAgent = BrowserUserAgentPolicy.desktopSafariUserAgent()
         webView.navigationDelegate = coordinator
         webView.uiDelegate = coordinator
         return webView
@@ -739,6 +844,20 @@ final class BrowserWebViewContainerView: NSView {
         return true
     }
 
+    func suspendActiveWebView() {
+        guard let activeWebView,
+              activeWebView.superview === self else {
+            return
+        }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        activeWebView.alphaValue = 0
+        activeWebView.layer?.opacity = 0
+        activeWebView.frame = bounds
+        CATransaction.commit()
+    }
+
     func deactivateActiveWebView() {
         guard let activeWebView else {
             return
@@ -778,6 +897,8 @@ final class BrowserWebViewContainerView: NSView {
         }
 
         guard let activeWebView,
+              activeWebView.alphaValue >= 1,
+              !activeWebView.isHidden,
               activeWebView.superview === self else {
             return nil
         }
@@ -894,9 +1015,11 @@ final class WebContentHitTestBlockerView: NSView {
 @MainActor
 public struct WebViewHost: NSViewRepresentable {
     @ObservedObject private var state: WebViewState
+    @Environment(\.colorScheme) private var colorScheme
 
     private let activeTab: BrowserTab?
     private let activeProfile: BrowserProfile?
+    private let isActive: Bool
     private let registry: BrowserWebViewRegistry
     private let dataStoreProvider: ProfileWebsiteDataStoreProvider
     private let securityPolicy: URLSecurityPolicy
@@ -904,6 +1027,7 @@ public struct WebViewHost: NSViewRepresentable {
     private let sitePermissionPolicy: SitePermissionPolicy
     private let mouseExclusionRegion: WebContentMouseExclusionRegion?
     private let onStateChange: @MainActor (TabID, String?, URL?, Bool, String?) -> Void
+    private let onFaviconChange: @MainActor (TabID, URL?) -> Void
     private let onSecurityMessage: @MainActor (TabID, String) -> Void
     private let onURLConfirmationRequired: @MainActor (TabID, URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
     private let onDownloadConfirmationRequired: @MainActor (TabID, DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
@@ -913,11 +1037,13 @@ public struct WebViewHost: NSViewRepresentable {
     private let onDownloadFailed: @MainActor (TabID, UUID, String) -> Void
     private let onSitePermissionRequest: @MainActor (TabID, ProfileID, SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
     private let onSnapshotCaptured: @MainActor (TabID, NSImage) -> Void
+    private let onWebViewActivated: @MainActor (TabID) -> Void
 
     public init(
         state: WebViewState,
         activeTab: BrowserTab?,
         activeProfile: BrowserProfile?,
+        isActive: Bool = true,
         registry: BrowserWebViewRegistry,
         dataStoreProvider: ProfileWebsiteDataStoreProvider,
         securityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
@@ -925,6 +1051,7 @@ public struct WebViewHost: NSViewRepresentable {
         sitePermissionPolicy: SitePermissionPolicy = SitePermissionPolicy(),
         mouseExclusionRegion: WebContentMouseExclusionRegion? = nil,
         onStateChange: @escaping @MainActor (TabID, String?, URL?, Bool, String?) -> Void,
+        onFaviconChange: @escaping @MainActor (TabID, URL?) -> Void = { _, _ in },
         onSecurityMessage: @escaping @MainActor (TabID, String) -> Void = { _, _ in },
         onURLConfirmationRequired: @escaping @MainActor (TabID, URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void = { _, _, _, _ in },
         onDownloadConfirmationRequired: @escaping @MainActor (TabID, DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void = { _, _, completion in completion(nil) },
@@ -935,11 +1062,13 @@ public struct WebViewHost: NSViewRepresentable {
         onSitePermissionRequest: @escaping @MainActor (TabID, ProfileID, SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation = { _, _, _, _ in
             .deny(reason: "Site permission request was blocked because no permission handler is installed.")
         },
-        onSnapshotCaptured: @escaping @MainActor (TabID, NSImage) -> Void = { _, _ in }
+        onSnapshotCaptured: @escaping @MainActor (TabID, NSImage) -> Void = { _, _ in },
+        onWebViewActivated: @escaping @MainActor (TabID) -> Void = { _ in }
     ) {
         self.state = state
         self.activeTab = activeTab
         self.activeProfile = activeProfile
+        self.isActive = isActive
         self.registry = registry
         self.dataStoreProvider = dataStoreProvider
         self.securityPolicy = securityPolicy
@@ -947,6 +1076,7 @@ public struct WebViewHost: NSViewRepresentable {
         self.sitePermissionPolicy = sitePermissionPolicy
         self.mouseExclusionRegion = mouseExclusionRegion
         self.onStateChange = onStateChange
+        self.onFaviconChange = onFaviconChange
         self.onSecurityMessage = onSecurityMessage
         self.onURLConfirmationRequired = onURLConfirmationRequired
         self.onDownloadConfirmationRequired = onDownloadConfirmationRequired
@@ -956,6 +1086,7 @@ public struct WebViewHost: NSViewRepresentable {
         self.onDownloadFailed = onDownloadFailed
         self.onSitePermissionRequest = onSitePermissionRequest
         self.onSnapshotCaptured = onSnapshotCaptured
+        self.onWebViewActivated = onWebViewActivated
     }
 
     public func makeNSView(context: Context) -> NSView {
@@ -970,6 +1101,7 @@ public struct WebViewHost: NSViewRepresentable {
             downloadSafetyPolicy: downloadSafetyPolicy,
             callbacks: BrowserWebViewCallbacks(
                 onStateChange: { _, _, _, _ in },
+                onFaviconChange: { _ in },
                 onSecurityMessage: { _ in },
                 onURLConfirmationRequired: { _, _, _ in },
                 onDownloadConfirmationRequired: { _, completion in completion(nil) },
@@ -993,12 +1125,13 @@ public struct WebViewHost: NSViewRepresentable {
             return
         }
         container.mouseExclusionRegion = mouseExclusionRegion
+        registry.applyColorScheme(colorScheme)
 
         guard let tab = activeTab,
               let profile = activeProfile,
               tab.content.isWeb,
               tab.url != nil else {
-            container.deactivateActiveWebView()
+            container.suspendActiveWebView()
             registry.markActive(nil)
             return
         }
@@ -1006,6 +1139,9 @@ public struct WebViewHost: NSViewRepresentable {
         let callbacks = BrowserWebViewCallbacks(
             onStateChange: { title, url, isLoading, securityMessage in
                 onStateChange(tab.id, title, url, isLoading, securityMessage)
+            },
+            onFaviconChange: { faviconURL in
+                onFaviconChange(tab.id, faviconURL)
             },
             onSecurityMessage: { message in
                 onSecurityMessage(tab.id, message)
@@ -1043,13 +1179,16 @@ public struct WebViewHost: NSViewRepresentable {
             securityPolicy: securityPolicy,
             downloadSafetyPolicy: downloadSafetyPolicy,
             sitePermissionPolicy: sitePermissionPolicy,
-            callbacks: callbacks
+            callbacks: callbacks,
+            isActive: isActive
         )
 
+        BrowserWebContentAppearance.apply(colorScheme, to: session.webView)
         let didActivateWebView = container.attach(session.webView)
         session.coordinator.applyPendingState(to: session.webView)
-        if didActivateWebView {
+        if didActivateWebView && isActive {
             session.coordinator.publishCurrentState(from: session.webView)
+            onWebViewActivated(tab.id)
         }
     }
 
@@ -1077,6 +1216,7 @@ public struct WebViewHost: NSViewRepresentable {
         private var downloadProgressObservations: [ObjectIdentifier: NSKeyValueObservation] = [:]
         private var contextMenuDownloadTarget = BrowserContextMenuDownloadTarget()
         private weak var contextMenuWebView: WKWebView?
+        private var pendingSnapshotCaptureTask: Task<Void, Never>?
 
         init(
             tabID: TabID,
@@ -1096,6 +1236,10 @@ public struct WebViewHost: NSViewRepresentable {
             self.requestedURL = requestedURL
             self.pendingHTTPFallbackURL = pendingHTTPFallbackURL
             self.isActive = isActive
+        }
+
+        deinit {
+            pendingSnapshotCaptureTask?.cancel()
         }
 
         fileprivate func update(
@@ -1150,10 +1294,12 @@ public struct WebViewHost: NSViewRepresentable {
         }
 
         public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            cancelPendingSnapshotCapture()
             publish(webView, isLoading: true)
         }
 
         public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            cancelPendingSnapshotCapture()
             publish(webView, isLoading: true)
         }
 
@@ -1621,23 +1767,26 @@ public struct WebViewHost: NSViewRepresentable {
                 return resolver ? resolver(\(Double(point.x)), \(Double(point.y))) : null;
             })()
             """
-            webView.evaluateJavaScript(script) { [weak self] result, _ in
-                Task { @MainActor [weak self] in
-                    guard let self else {
-                        completion(cachedURL)
-                        return
-                    }
+            webView.evaluateJavaScript(
+                script,
+                in: nil,
+                in: BrowserContextMenuScript.contentWorld
+            ) { [weak self] result in
+                guard let self,
+                      let body = try? result.get() else {
+                    completion(cachedURL)
+                    return
+                }
 
-                    let resolvedTarget = BrowserContextMenuDownloadTarget(messageBody: result as Any)
-                    webViewLogger.info(
-                        "context-menu resolve result image=\(resolvedTarget.imageURL != nil, privacy: .public) link=\(resolvedTarget.linkURL != nil, privacy: .public)"
-                    )
-                    if resolvedTarget.imageURL != nil || resolvedTarget.linkURL != nil {
-                        self.contextMenuDownloadTarget = resolvedTarget
-                        completion(self.downloadURL(for: kind, in: resolvedTarget) ?? cachedURL)
-                    } else {
-                        completion(cachedURL)
-                    }
+                let resolvedTarget = BrowserContextMenuDownloadTarget(messageBody: body)
+                webViewLogger.info(
+                    "context-menu resolve result image=\(resolvedTarget.imageURL != nil, privacy: .public) link=\(resolvedTarget.linkURL != nil, privacy: .public)"
+                )
+                if resolvedTarget.imageURL != nil || resolvedTarget.linkURL != nil {
+                    self.contextMenuDownloadTarget = resolvedTarget
+                    completion(self.downloadURL(for: kind, in: resolvedTarget) ?? cachedURL)
+                } else {
+                    completion(cachedURL)
                 }
             }
         }
@@ -1908,8 +2057,58 @@ public struct WebViewHost: NSViewRepresentable {
             }
 
             if !isLoading {
-                captureSnapshot(from: webView)
+                discoverFavicon(in: webView, pageURL: url)
+                scheduleSnapshotCapture(from: webView, url: url)
             }
+        }
+
+        private func discoverFavicon(in webView: WKWebView, pageURL: URL?) {
+            guard let pageURL,
+                  let scheme = pageURL.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https" else {
+                callbacks.onFaviconChange(nil)
+                return
+            }
+
+            webView.evaluateJavaScript(
+                BrowserFaviconScript.source,
+                in: nil,
+                in: BrowserContextMenuScript.contentWorld
+            ) { [weak self] result in
+                guard let self else {
+                    return
+                }
+
+                let faviconURL = (try? result.get()).flatMap(BrowserFaviconScript.url(from:))
+                self.callbacks.onFaviconChange(faviconURL)
+            }
+        }
+
+        private func scheduleSnapshotCapture(from webView: WKWebView, url: URL?) {
+            cancelPendingSnapshotCapture()
+            guard isActive,
+                  !webView.bounds.isEmpty else {
+                return
+            }
+
+            pendingSnapshotCaptureTask = Task { @MainActor [weak self, weak webView] in
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled,
+                      let self,
+                      let webView,
+                      self.isActive,
+                      !webView.isLoading,
+                      webView.url == url else {
+                    return
+                }
+
+                self.captureSnapshot(from: webView)
+            }
+        }
+
+        private func cancelPendingSnapshotCapture() {
+            pendingSnapshotCaptureTask?.cancel()
+            pendingSnapshotCaptureTask = nil
         }
 
         private func captureSnapshot(from webView: WKWebView) {
@@ -1917,6 +2116,8 @@ public struct WebViewHost: NSViewRepresentable {
                   !webView.bounds.isEmpty else {
                 return
             }
+
+            pendingSnapshotCaptureTask = nil
 
             let configuration = WKSnapshotConfiguration()
             configuration.rect = webView.bounds
@@ -1998,7 +2199,7 @@ struct NavigationFailureDiagnostics {
         }
 
         guard error.domain == NSURLErrorDomain else {
-            return "Navigation failed. Check Meridian logs for details."
+            return "Navigation failed. Check Bare Browser logs for details."
         }
 
         switch error.code {
@@ -2021,7 +2222,7 @@ struct NavigationFailureDiagnostics {
              NSURLErrorClientCertificateRequired:
             return "Navigation failed: secure connection could not be verified."
         default:
-            return "Navigation failed. Check Meridian logs for details."
+            return "Navigation failed. Check Bare Browser logs for details."
         }
     }
 

@@ -61,7 +61,7 @@ final class SitePermissionPolicyTests: XCTestCase {
         XCTAssertEqual(policy.evaluation(for: cameraRequest, settings: []), .ask)
         XCTAssertEqual(
             policy.evaluation(for: locationRequest, settings: []),
-            .deny(reason: "Location permissions are not supported by Meridian on this WebKit version.")
+            .deny(reason: "Location permissions are not supported by Bare Browser on this WebKit version.")
         )
         XCTAssertTrue(policy.requiresUserActionForAutoplay)
     }

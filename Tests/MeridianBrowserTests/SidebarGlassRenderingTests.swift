@@ -119,7 +119,7 @@ final class SidebarGlassRenderingTests: XCTestCase {
         )
 
         XCTAssertEqual(SidebarGlassRendering.colorNoiseOpacity(for: clean), 0, accuracy: 0.001)
-        XCTAssertEqual(SidebarGlassRendering.colorNoiseOpacity(for: grain), 0.30, accuracy: 0.001)
+        XCTAssertEqual(SidebarGlassRendering.colorNoiseOpacity(for: grain), 0.09, accuracy: 0.001)
     }
 
     func testColorNoiseCellSizeUsesFixedScale() {
@@ -141,10 +141,10 @@ final class SidebarGlassRenderingTests: XCTestCase {
         XCTAssertEqual(SidebarGlassRendering.colorNoiseTextureCellSize(), 1.25, accuracy: 0.001)
     }
 
-    func testSelectedSpaceIconUsesDarkForegroundForVeryLightTint() {
+    func testSelectedSpaceIconUsesDarkForegroundOnlyForLightLowColorLowDensityTint() {
         let settings = SidebarGlassSettings(
-            glassOpacity: 0.60,
-            tintOpacity: 1,
+            glassOpacity: 0.55,
+            tintOpacity: 0.55,
             edgeOpacity: 0.40,
             shadowOpacity: 0.20,
             highlightOpacity: 0.20
@@ -153,6 +153,20 @@ final class SidebarGlassRenderingTests: XCTestCase {
         let contrast = SidebarGlassRendering.selectedSpaceIconContrast(for: settings, tintHex: "#F2F7FF")
 
         XCTAssertEqual(contrast, .dark)
+    }
+
+    func testSelectedSpaceIconUsesLightForegroundForBrightMaxColorAndDensityTint() {
+        let settings = SidebarGlassSettings(
+            glassOpacity: 1,
+            tintOpacity: 1,
+            edgeOpacity: 0.40,
+            shadowOpacity: 0.20,
+            highlightOpacity: 0.20
+        )
+
+        let contrast = SidebarGlassRendering.selectedSpaceIconContrast(for: settings, tintHex: "#F2F7FF")
+
+        XCTAssertEqual(contrast, .light)
     }
 
     func testSelectedSpaceIconUsesLightForegroundForSaturatedTint() {
@@ -181,6 +195,98 @@ final class SidebarGlassRenderingTests: XCTestCase {
         let contrast = SidebarGlassRendering.selectedSpaceIconContrast(for: settings, tintHex: "#F2F7FF")
 
         XCTAssertEqual(contrast, .adaptive)
+    }
+
+    func testSelectedSpaceIconUsesAdaptiveForegroundForLowColorLowDensitySidebar() {
+        let settings = SidebarGlassSettings(
+            glassOpacity: 0.09,
+            tintOpacity: 0.41,
+            edgeOpacity: 0.40,
+            shadowOpacity: 0.20,
+            highlightOpacity: 0.20
+        )
+
+        let contrast = SidebarGlassRendering.selectedSpaceIconContrast(for: settings, tintHex: "#4F7CAC")
+
+        XCTAssertEqual(contrast, .adaptive)
+    }
+
+    func testForegroundWhiteAmountPreservesBaseWhenTintInfluenceIsLow() {
+        let settings = SidebarGlassSettings(
+            glassOpacity: 0.09,
+            tintOpacity: 0.41,
+            edgeOpacity: 0.40,
+            shadowOpacity: 0.20,
+            highlightOpacity: 0.20
+        )
+
+        XCTAssertEqual(
+            SidebarGlassRendering.foregroundWhiteAmount(
+                for: settings,
+                tintHex: "#4F7CAC",
+                baseWhiteAmount: 0
+            ),
+            0,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            SidebarGlassRendering.foregroundWhiteAmount(
+                for: settings,
+                tintHex: "#4F7CAC",
+                baseWhiteAmount: 1
+            ),
+            1,
+            accuracy: 0.001
+        )
+    }
+
+    func testForegroundWhiteAmountUsesWhiteForBrightMaxColorAndDensityTint() {
+        let settings = SidebarGlassSettings(
+            glassOpacity: 1,
+            tintOpacity: 1,
+            edgeOpacity: 0.40,
+            shadowOpacity: 0.20,
+            highlightOpacity: 0.20
+        )
+
+        let whiteAmount = SidebarGlassRendering.foregroundWhiteAmount(
+            for: settings,
+            tintHex: "#F2F7FF",
+            baseWhiteAmount: 0
+        )
+
+        XCTAssertEqual(whiteAmount, 1, accuracy: 0.001)
+    }
+
+    func testForegroundWhiteAmountBlendsContinuouslyForScrollInterpolatedSettings() {
+        let lowInfluence = SidebarGlassSettings(
+            glassOpacity: 0.09,
+            tintOpacity: 0.41,
+            edgeOpacity: 0.40,
+            shadowOpacity: 0.20,
+            highlightOpacity: 0.20
+        )
+        let highInfluence = SidebarGlassSettings(
+            glassOpacity: 1,
+            tintOpacity: 1,
+            edgeOpacity: 0.40,
+            shadowOpacity: 0.20,
+            highlightOpacity: 0.20
+        )
+        let scrollInterpolated = SidebarGlassSettings.interpolated(
+            from: lowInfluence,
+            to: highInfluence,
+            progress: 0.35
+        )
+
+        let whiteAmount = SidebarGlassRendering.foregroundWhiteAmount(
+            for: scrollInterpolated,
+            tintHex: "#4F7CAC",
+            baseWhiteAmount: 0
+        )
+
+        XCTAssertGreaterThan(whiteAmount, 0)
+        XCTAssertLessThan(whiteAmount, 1)
     }
 
 }

@@ -7,10 +7,15 @@ private let browserContentLogger = Logger(
     category: "BrowserContent"
 )
 
+private let activeTabSnapshotHandoffDelayNanoseconds: UInt64 = 90_000_000
+
 public struct BrowserContentView: View {
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var webViewState: WebViewState
     @ObservedObject private var presentationState: BrowserContentPresentationState
+    @Binding private var activityPageIsSelected: Bool
+    @State private var cachedSpaceOverviewPages: [SidebarSpacePageSnapshot]?
+    @State private var spaceOverviewRefreshTask: Task<Void, Never>?
     private let webViewRegistry: BrowserWebViewRegistry
     private let dataStoreProvider: ProfileWebsiteDataStoreProvider
     private let webContentMouseExclusionRegion: WebContentMouseExclusionRegion?
@@ -21,64 +26,109 @@ public struct BrowserContentView: View {
         presentationState: BrowserContentPresentationState,
         webViewRegistry: BrowserWebViewRegistry,
         dataStoreProvider: ProfileWebsiteDataStoreProvider,
+        activityPageIsSelected: Binding<Bool> = .constant(false),
         webContentMouseExclusionRegion: WebContentMouseExclusionRegion? = nil
     ) {
         self.store = store
         self.webViewState = webViewState
         self.presentationState = presentationState
+        self._activityPageIsSelected = activityPageIsSelected
         self.webViewRegistry = webViewRegistry
         self.dataStoreProvider = dataStoreProvider
         self.webContentMouseExclusionRegion = webContentMouseExclusionRegion
     }
 
     public var body: some View {
+        contentLifecycle
+    }
+
+    private var contentBase: some View {
         webSurface
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.background)
-        .overlay(alignment: .bottomTrailing) {
-            floatingStatusStack
-                .padding(.trailing, 16)
-                .padding(.bottom, 16)
-        }
-        .animation(.snappy(duration: 0.18), value: store.lastUserMessage)
-        .animation(.snappy(duration: 0.18), value: store.primaryActiveDownload?.id)
-        .animation(.snappy(duration: 0.18), value: store.activeDownloads.count)
-        .alert(
+            .background(.background)
+            .overlay(alignment: .bottomTrailing) {
+                floatingStatusStack
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 16)
+            }
+            .animation(.snappy(duration: 0.18), value: store.lastUserMessage)
+            .animation(.snappy(duration: 0.18), value: store.primaryActiveDownload?.id)
+            .animation(.snappy(duration: 0.18), value: store.activeDownloads.count)
+    }
+
+    private var contentAlerts: some View {
+        contentBase
+            .alert(
             "Site Permission",
             isPresented: sitePermissionAlertIsPresented,
             presenting: store.pendingSitePermissionRequest
-        ) { request in
-            Button("Deny", role: .cancel) {
-                _ = store.resolvePendingSitePermission(.deny, requestID: request.id)
+            ) { request in
+                Button("Deny", role: .cancel) {
+                    _ = store.resolvePendingSitePermission(.deny, requestID: request.id)
+                }
+                Button("Allow") {
+                    _ = store.resolvePendingSitePermission(.allow, requestID: request.id)
+                }
+            } message: { request in
+                Text(request.promptMessage)
             }
-            Button("Allow") {
-                _ = store.resolvePendingSitePermission(.allow, requestID: request.id)
+    }
+
+    private var contentLifecycle: some View {
+        contentAlerts
+            .onAppear {
+                scheduleSpaceOverviewRefresh()
+                syncWebViewState()
+                pruneWebViewRegistry()
             }
-        } message: { request in
-            Text(request.promptMessage)
-        }
-        .onAppear {
-            syncWebViewState()
-            pruneWebViewRegistry()
-            presentationState.setActiveContentTabID(store.selectedTabID)
-        }
-        .onChange(of: store.selectedTabID) { _, _ in
-            syncWebViewState()
-            presentationState.setActiveContentTabID(store.selectedTabID)
-            webViewRegistry.markActive(store.selectedTabID)
-        }
-        .onChange(of: store.tabs.map(\.id)) { _, _ in
-            pruneWebViewRegistry()
-        }
-        .onChange(of: tabProfileIDsByID) { oldValue, newValue in
-            let changedTabIDs = Set(newValue.keys.filter { tabID in
-                oldValue[tabID] != nil && oldValue[tabID] != newValue[tabID]
-            })
-            webViewRegistry.invalidate(tabIDs: changedTabIDs)
-        }
-        .task(id: store.lastUserMessage) {
-            await autoDismissStatusMessageIfNeeded()
-        }
+            .onChange(of: store.selectedTabID) { _, _ in
+                if !activityPageIsSelected {
+                    beginSnapshotHandoffIfNeeded(for: store.selectedTabID)
+                }
+                if store.selectedTabID != nil {
+                    presentationState.setPreviewStartPageSpaceID(nil)
+                }
+                syncWebViewState()
+                if !activityPageIsSelected {
+                    webViewRegistry.markActive(store.selectedTabID)
+                }
+            }
+            .onChange(of: activityPageIsSelected) { _, isSelected in
+                if isSelected {
+                    presentationState.setPreviewTabID(nil)
+                    presentationState.setPreviewStartPageSpaceID(nil)
+                    presentationState.clearSnapshotHandoff()
+                } else {
+                    beginSnapshotHandoffIfNeeded(for: store.selectedTabID)
+                    webViewRegistry.markActive(store.selectedTabID)
+                }
+                syncWebViewState()
+            }
+            .onChange(of: store.spaces) { _, _ in
+                scheduleSpaceOverviewRefresh()
+            }
+            .onChange(of: store.folders) { _, _ in
+                scheduleSpaceOverviewRefresh()
+            }
+            .onChange(of: store.tabs) { _, _ in
+                scheduleSpaceOverviewRefresh()
+            }
+            .onChange(of: store.tabs.map(\.id)) { _, _ in
+                pruneWebViewRegistry()
+            }
+            .onChange(of: tabProfileIDsByID) { oldValue, newValue in
+                let changedTabIDs = Set(newValue.keys.filter { tabID in
+                    oldValue[tabID] != nil && oldValue[tabID] != newValue[tabID]
+                })
+                webViewRegistry.invalidate(tabIDs: changedTabIDs)
+            }
+            .task(id: store.lastUserMessage) {
+                await autoDismissStatusMessageIfNeeded()
+            }
+            .onDisappear {
+                spaceOverviewRefreshTask?.cancel()
+                spaceOverviewRefreshTask = nil
+            }
     }
 
     @ViewBuilder
@@ -88,6 +138,7 @@ public struct BrowserContentView: View {
                 state: webViewState,
                 activeTab: activeWebTab,
                 activeProfile: activeWebProfile,
+                isActive: !activityPageIsSelected,
                 registry: webViewRegistry,
                 dataStoreProvider: dataStoreProvider,
                 securityPolicy: store.urlSecurityPolicy,
@@ -106,6 +157,8 @@ public struct BrowserContentView: View {
                     isLoading: isLoading,
                     securityMessage: securityMessage
                 )
+            } onFaviconChange: { tabID, faviconURL in
+                store.updateTabFavicon(faviconURL, for: tabID)
             } onSecurityMessage: { tabID, message in
                 guard isSelected(tabID: tabID) else {
                     return
@@ -125,7 +178,8 @@ public struct BrowserContentView: View {
                 browserContentLogger.info(
                     "download confirmation forwarding filenameEmpty=\(request.sanitizedFilename.isEmpty, privacy: .public)"
                 )
-                store.requestDownloadConfirmation(request, completion: completion)
+                let profileID = store.tabs.first { $0.id == tabID }?.profileID
+                store.requestDownloadConfirmation(request, profileID: profileID, completion: completion)
             } onDownloadStarted: { tabID, request, destinationURL, cancel in
                 guard isSelected(tabID: tabID) else {
                     browserContentLogger.info("download started dropped inactive tab")
@@ -151,19 +205,79 @@ public struct BrowserContentView: View {
                 return store.requestSitePermission(kind: kind, origin: origin, profileID: profileID)
             } onSnapshotCaptured: { tabID, image in
                 presentationState.storeSnapshot(image, for: tabID)
+            } onWebViewActivated: { tabID in
+                guard isSelected(tabID: tabID) else {
+                    return
+                }
+
+                completeSnapshotHandoffSoon(for: tabID)
             }
             .opacity(activeWebTab == nil ? 0 : 1)
-            .allowsHitTesting(activeWebTab != nil)
+            .allowsHitTesting(activeWebTab != nil && !activityPageIsSelected)
+
+            activityOverviewSurface
+
+            startPageSurface
 
             foregroundSurface
 
-            previewSnapshotOverlay
+            customizationPreviewSurface
+
+            snapshotOverlay
+        }
+    }
+
+    private var activityOverviewSurface: some View {
+        BrowserAllSpacesContentOverviewView(
+            pages: spaceOverviewPagesForDisplay,
+            isLoading: spaceOverviewIsLoading,
+            usesPinnedSidebarAppearance: store.sidebarIsLockedOpen,
+            selectSpace: { selectOverviewSpace($0) },
+            selectTab: { selectOverviewTab($0) },
+            customizeSpace: { customizeOverviewSpace($0) }
+        )
+        .opacity(activityPageIsSelected ? 1 : 0)
+        .allowsHitTesting(activityPageIsSelected)
+        .accessibilityHidden(!activityPageIsSelected)
+        .zIndex(activityPageIsSelected ? 2 : 0)
+    }
+
+    @ViewBuilder
+    private var startPageSurface: some View {
+        if let snapshot = mountedStartPageSurfaceSnapshot {
+            StartPageSurface(snapshot: snapshot) {
+                store.showCommandBar()
+            } customizeSpace: {
+                _ = store.openSpaceCustomizer(for: snapshot.spaceID)
+            } createFolder: {
+                _ = store.createFolder(name: "New Folder", in: snapshot.spaceID)
+            }
+            .opacity(visibleStartPageSurfaceSnapshot == nil ? 0 : 1)
+            .allowsHitTesting(startPageSurfaceAllowsHitTesting)
+            .accessibilityHidden(visibleStartPageSurfaceSnapshot == nil)
+            .zIndex(startPageSurfaceIsPreviewing ? 3 : 2)
+        }
+    }
+
+    @ViewBuilder
+    private var customizationPreviewSurface: some View {
+        if let context = previewCustomizationContext {
+            SpaceCustomizationPreviewShell(
+                space: context.space,
+                profileName: store.profiles.first { $0.id == context.space.profileID }?.name
+            )
+            .id(context.tab.id)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .zIndex(3)
         }
     }
 
     @ViewBuilder
     private var foregroundSurface: some View {
-        if let tab = store.activeTab {
+        if activityPageIsSelected {
+            EmptyView()
+        } else if let tab = store.activeTab {
             switch tab.content {
             case .spaceCustomization(let spaceID):
                 if let space = store.spaces.first(where: { $0.id == spaceID }) {
@@ -174,15 +288,13 @@ public struct BrowserContentView: View {
                     )
                     .id(space.id)
                 } else {
-                    StartPageView(store: store)
+                    EmptyView()
                 }
             case .web:
-                if activeWebTab == nil {
-                    StartPageView(store: store)
-                }
+                EmptyView()
             }
         } else {
-            StartPageView(store: store)
+            EmptyView()
         }
     }
 
@@ -207,8 +319,8 @@ public struct BrowserContentView: View {
     }
 
     @ViewBuilder
-    private var previewSnapshotOverlay: some View {
-        if let image = previewSnapshotImage {
+    private var snapshotOverlay: some View {
+        if let image = snapshotOverlayImage {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
@@ -216,6 +328,15 @@ public struct BrowserContentView: View {
                 .clipped()
                 .allowsHitTesting(false)
         }
+    }
+
+    private var snapshotOverlayImage: NSImage? {
+        guard !activityPageIsSelected,
+              previewCustomizationContext == nil else {
+            return nil
+        }
+
+        return previewSnapshotImage ?? activeTabSnapshotHandoffImage
     }
 
     private var previewSnapshotImage: NSImage? {
@@ -227,6 +348,157 @@ public struct BrowserContentView: View {
         }
 
         return presentationState.snapshot(for: previewTabID)
+    }
+
+    private var activeTabSnapshotHandoffImage: NSImage? {
+        guard let snapshotHandoffTabID = presentationState.snapshotHandoffTabID,
+              snapshotHandoffTabID == store.selectedTabID,
+              let snapshotHandoffTab = store.tabs.first(where: { $0.id == snapshotHandoffTabID }),
+              snapshotHandoffTab.content.isWeb else {
+            return nil
+        }
+
+        return presentationState.snapshot(for: snapshotHandoffTabID)
+    }
+
+    private var mountedStartPageSurfaceSnapshot: StartPageSurfaceSnapshot? {
+        visibleStartPageSurfaceSnapshot ?? startPageSnapshot(for: store.selectedSpaceID)
+    }
+
+    private var visibleStartPageSurfaceSnapshot: StartPageSurfaceSnapshot? {
+        if let previewSpaceID = presentationState.previewStartPageSpaceID,
+           previewSpaceID != store.selectedSpaceID,
+           let snapshot = startPageSnapshot(for: previewSpaceID) {
+            return snapshot
+        }
+
+        guard activeContentShowsStartPage else {
+            return nil
+        }
+
+        return startPageSnapshot(for: store.selectedSpaceID)
+    }
+
+    private var startPageSurfaceAllowsHitTesting: Bool {
+        guard let snapshot = visibleStartPageSurfaceSnapshot else {
+            return false
+        }
+
+        return activeContentShowsStartPage && snapshot.spaceID == store.selectedSpaceID
+    }
+
+    private var startPageSurfaceIsPreviewing: Bool {
+        guard let snapshot = visibleStartPageSurfaceSnapshot else {
+            return false
+        }
+
+        return snapshot.spaceID != store.selectedSpaceID
+    }
+
+    private var activeContentShowsStartPage: Bool {
+        guard !activityPageIsSelected else {
+            return false
+        }
+
+        if let activeTab = store.activeTab,
+           !activeTab.content.isWeb {
+            return false
+        }
+
+        return activeWebTab == nil
+    }
+
+    private func startPageSnapshot(for spaceID: SpaceID?) -> StartPageSurfaceSnapshot? {
+        guard let spaceID,
+              let space = store.spaces.first(where: { $0.id == spaceID }) else {
+            return nil
+        }
+
+        return StartPageSurfaceSnapshot(space: space, profiles: store.profiles)
+    }
+
+    private var previewCustomizationContext: SpaceCustomizationPreviewContext? {
+        guard !activityPageIsSelected,
+              let previewTabID = presentationState.previewTabID,
+              previewTabID != store.selectedTabID,
+              let previewTab = store.tabs.first(where: { $0.id == previewTabID }),
+              case .spaceCustomization(let spaceID) = previewTab.content,
+              let space = store.spaces.first(where: { $0.id == spaceID }) else {
+            return nil
+        }
+
+        return SpaceCustomizationPreviewContext(tab: previewTab, space: space)
+    }
+
+    private var spaceOverviewPagesForDisplay: [SidebarSpacePageSnapshot] {
+        cachedSpaceOverviewPages ?? []
+    }
+
+    private var spaceOverviewIsLoading: Bool {
+        cachedSpaceOverviewPages == nil && !store.sidebarSpaces.isEmpty
+    }
+
+    private func scheduleSpaceOverviewRefresh() {
+        spaceOverviewRefreshTask?.cancel()
+
+        let activeSpaces = store.sidebarSpaces
+        guard !activeSpaces.isEmpty else {
+            cachedSpaceOverviewPages = []
+            return
+        }
+
+        let folders = store.folders
+        let tabs = store.tabs
+        spaceOverviewRefreshTask = Task.detached(priority: .utility) {
+            let pages = SidebarSpacePageSnapshotBuilder.spacePages(
+                activeSpaces: activeSpaces,
+                folders: folders,
+                tabs: tabs
+            )
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await MainActor.run {
+                cachedSpaceOverviewPages = pages
+            }
+        }
+    }
+
+    private func selectOverviewSpace(_ id: SpaceID) {
+        presentationState.beginSnapshotHandoff(to: overviewPreviewTabID(for: id))
+        withTransaction(Transaction(animation: nil)) {
+            store.selectSpace(id)
+        }
+        activityPageIsSelected = false
+    }
+
+    private func selectOverviewTab(_ id: TabID) {
+        presentationState.beginSnapshotHandoff(to: id)
+        withTransaction(Transaction(animation: nil)) {
+            store.selectTab(id)
+        }
+        activityPageIsSelected = false
+    }
+
+    private func customizeOverviewSpace(_ id: SpaceID) {
+        presentationState.clearSnapshotHandoff()
+        withTransaction(Transaction(animation: nil)) {
+            _ = store.openSpaceCustomizer(for: id)
+        }
+        activityPageIsSelected = false
+    }
+
+    private func overviewPreviewTabID(for spaceID: SpaceID?) -> TabID? {
+        guard let spaceID,
+              let space = store.sidebarSpaces.first(where: { $0.id == spaceID }) else {
+            return nil
+        }
+
+        let folders = store.folders.filter { $0.parentSpaceID == space.id }
+        let tabsByID = Dictionary(uniqueKeysWithValues: store.tabs.map { ($0.id, $0) })
+        return BrowserSpaceFocusedTabResolver.focusedTabID(for: space, folders: folders, tabsByID: tabsByID)
     }
 
     @ViewBuilder
@@ -431,6 +703,35 @@ public struct BrowserContentView: View {
         }
     }
 
+    private func beginSnapshotHandoffIfNeeded(for tabID: TabID?) {
+        guard let tabID,
+              store.tabs.first(where: { $0.id == tabID })?.content.isWeb == true else {
+            presentationState.clearSnapshotHandoff()
+            return
+        }
+
+        guard presentationState.snapshotHandoffTabID != tabID else {
+            return
+        }
+
+        presentationState.beginSnapshotHandoff(to: tabID)
+    }
+
+    private func completeSnapshotHandoffSoon(for tabID: TabID) {
+        guard let handoffID = presentationState.snapshotHandoffToken(for: tabID) else {
+            return
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: activeTabSnapshotHandoffDelayNanoseconds)
+            guard store.selectedTabID == tabID else {
+                return
+            }
+
+            presentationState.completeSnapshotHandoff(handoffID, for: tabID)
+        }
+    }
+
     private var sitePermissionAlertIsPresented: Binding<Bool> {
         Binding {
             store.pendingSitePermissionRequest != nil
@@ -442,6 +743,15 @@ public struct BrowserContentView: View {
     }
 
     private func syncWebViewState() {
+        guard !activityPageIsSelected else {
+            presentationState.setActiveContentTabID(nil)
+            webViewState.title = "Activity"
+            webViewState.isLoading = false
+            webViewState.canGoBack = false
+            webViewState.canGoForward = false
+            return
+        }
+
         presentationState.setActiveContentTabID(store.selectedTabID)
         webViewState.title = store.activeTab?.title ?? "New Tab"
         guard store.activeTab?.content.isWeb == true else {
@@ -466,10 +776,400 @@ public struct BrowserContentView: View {
     }
 
     private func isSelected(tabID: TabID) -> Bool {
-        tabID == store.selectedTabID
+        !activityPageIsSelected && tabID == store.selectedTabID
     }
 
     private var tabProfileIDsByID: [TabID: ProfileID] {
         Dictionary(uniqueKeysWithValues: store.tabs.map { ($0.id, $0.profileID) })
+    }
+}
+
+private struct SpaceCustomizationPreviewContext {
+    let tab: BrowserTab
+    let space: BrowserSpace
+}
+
+private struct BrowserAllSpacesContentOverviewView: View {
+    let pages: [SidebarSpacePageSnapshot]
+    let isLoading: Bool
+    let usesPinnedSidebarAppearance: Bool
+    let selectSpace: (SpaceID) -> Void
+    let selectTab: (TabID) -> Void
+    let customizeSpace: (SpaceID) -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            let columnHeight = max(proxy.size.height - 40, 1)
+
+            Group {
+                if isLoading {
+                    loadingState
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if pages.isEmpty {
+                    emptyState
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: 14) {
+                            ForEach(pages) { page in
+                                BrowserSpaceContentPreviewColumn(
+                                    page: page,
+                                    usesPinnedSidebarAppearance: usesPinnedSidebarAppearance,
+                                    selectSpace: selectSpace,
+                                    selectTab: selectTab,
+                                    customizeSpace: customizeSpace
+                                )
+                                .frame(width: columnWidth(for: proxy.size.width), height: columnHeight)
+                            }
+                        }
+                        .padding(20)
+                    }
+                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+                    .scrollIndicators(.hidden)
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+            .background(.background)
+        }
+    }
+
+    private var loadingState: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Loading spaces")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "sidebar.leading")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            Text("No spaces")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func columnWidth(for availableWidth: CGFloat) -> CGFloat {
+        min(max((availableWidth - 68) / 3, 264), 340)
+    }
+}
+
+private struct BrowserSpaceContentPreviewColumn: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let page: SidebarSpacePageSnapshot
+    let usesPinnedSidebarAppearance: Bool
+    let selectSpace: (SpaceID) -> Void
+    let selectTab: (TabID) -> Void
+    let customizeSpace: (SpaceID) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Button {
+                    selectSpace(page.space.id)
+                } label: {
+                    HStack(spacing: 10) {
+                        SpaceIconGlyph(
+                            symbolName: page.space.symbolName,
+                            colorHex: page.space.colorHex,
+                            size: 28,
+                            foregroundColor: headerIconForegroundColor
+                        )
+                        .frame(width: 28, height: 28)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(page.space.name)
+                                .font(.headline.weight(.semibold))
+                                .lineLimit(1)
+
+                            Text("\(tabCount) tabs")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Switch to \(page.space.name)")
+
+                Button {
+                    customizeSpace(page.space.id)
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .background {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.primary.opacity(0.07))
+                        }
+                        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help("Customize \(page.space.name)")
+                .accessibilityLabel("Customize \(page.space.name)")
+            }
+            .padding(12)
+
+            Divider()
+
+            if tabCount == 0 {
+                emptyColumn
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        tabSection("Essentials", symbolName: "sparkle", tabs: page.favoriteTabs)
+                        tabSection("Pinned", symbolName: "pin.fill", tabs: page.pinnedTabs)
+                        folderSection
+                        tabSection("Tabs", symbolName: "rectangle.stack", tabs: page.regularTabs)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .scrollIndicators(.hidden)
+            }
+        }
+        .background {
+            columnChrome
+        }
+        .overlay {
+            columnShape
+                .stroke(.separator.opacity(sidebarSettings.edgeOpacity), lineWidth: 0.5)
+        }
+        .shadow(
+            color: columnTint.opacity(SidebarGlassRendering.shadowOpacity(for: sidebarSettings)),
+            radius: 18,
+            x: 0,
+            y: 8
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var columnChrome: some View {
+        SidebarGlassMaterial(shape: columnShape, tintColor: columnTint, settings: sidebarSettings)
+    }
+
+    private var sidebarTheme: SidebarChromeTheme {
+        SidebarChromeTheme.theme(for: page.space)
+    }
+
+    private var sidebarSettings: SidebarGlassSettings {
+        usesPinnedSidebarAppearance
+            ? sidebarTheme.appearance.pinnedSettings
+            : sidebarTheme.appearance.base
+    }
+
+    private var columnTint: Color {
+        Color(hex: sidebarTheme.tintHex)
+    }
+
+    private var columnShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+    }
+
+    private var headerIconForegroundColor: Color {
+        switch SidebarGlassRendering.selectedSpaceIconContrast(for: sidebarSettings, tintHex: sidebarTheme.tintHex) {
+        case .adaptive:
+            return colorScheme == .dark ? .white : .black
+        case .dark:
+            return .black
+        case .light:
+            return .white
+        }
+    }
+
+    @ViewBuilder
+    private func tabSection(_ title: String, symbolName: String, tabs: [SidebarTabItemSnapshot]) -> some View {
+        if !tabs.isEmpty {
+            BrowserSpaceContentPreviewSectionHeader(title: title, symbolName: symbolName)
+            ForEach(tabs) { item in
+                BrowserSpaceContentPreviewTabRow(item: item, depth: 0, selectTab: selectTab)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var folderSection: some View {
+        if !page.folders.isEmpty {
+            BrowserSpaceContentPreviewSectionHeader(title: "Folders", symbolName: "folder")
+            ForEach(page.folders) { folder in
+                BrowserSpaceContentPreviewFolderRows(
+                    folder: folder,
+                    depth: 0,
+                    selectTab: selectTab
+                )
+            }
+        }
+    }
+
+    private var emptyColumn: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "rectangle.stack.badge.plus")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            Text("No tabs")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var tabCount: Int {
+        page.favoriteTabs.count
+            + page.pinnedTabs.count
+            + page.regularTabs.count
+            + folderTabCount(page.folders)
+    }
+
+    private func folderTabCount(_ folders: [SidebarFolderItemSnapshot]) -> Int {
+        folders.reduce(0) { count, folder in
+            count + folder.tabs.count + folderTabCount(folder.childFolders)
+        }
+    }
+}
+
+private struct BrowserSpaceContentPreviewSectionHeader: View {
+    let title: String
+    let symbolName: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: symbolName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 15)
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 5)
+    }
+}
+
+private struct BrowserSpaceContentPreviewFolderRows: View {
+    let folder: SidebarFolderItemSnapshot
+    let depth: Int
+    let selectTab: (TabID) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 7) {
+                Image(systemName: "folder")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+
+                Text(folder.folder.name)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, CGFloat(depth) * 14)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 5)
+
+            ForEach(folder.tabs) { item in
+                BrowserSpaceContentPreviewTabRow(
+                    item: item,
+                    depth: depth + 1,
+                    selectTab: selectTab
+                )
+            }
+
+            ForEach(folder.childFolders) { childFolder in
+                BrowserSpaceContentPreviewFolderRows(
+                    folder: childFolder,
+                    depth: depth + 1,
+                    selectTab: selectTab
+                )
+            }
+        }
+    }
+}
+
+private struct BrowserSpaceContentPreviewTabRow: View {
+    let item: SidebarTabItemSnapshot
+    let depth: Int
+    let selectTab: (TabID) -> Void
+
+    var body: some View {
+        Button {
+            selectTab(item.tab.id)
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: tabIconName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(iconStyle)
+                    .frame(width: 16, height: 18)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.tab.title)
+                        .font(.callout)
+                        .lineLimit(1)
+
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, CGFloat(depth) * 14)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(item.isSelected ? Color.accentColor.opacity(0.14) : Color.clear)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(item.tab.title)
+    }
+
+    private var subtitle: String? {
+        switch item.tab.content {
+        case .spaceCustomization:
+            return "Customize Space"
+        case .web:
+            return item.tab.url?.host(percentEncoded: false)
+        }
+    }
+
+    private var tabIconName: String {
+        if case .spaceCustomization = item.tab.content {
+            return "slider.horizontal.3"
+        }
+        if item.tab.isFavorite {
+            return "sparkle"
+        }
+        if item.tab.isPinned {
+            return "pin"
+        }
+        return "globe"
+    }
+
+    private var iconStyle: AnyShapeStyle {
+        if item.isSelected {
+            return AnyShapeStyle(Color.accentColor)
+        }
+        return AnyShapeStyle(.secondary)
     }
 }

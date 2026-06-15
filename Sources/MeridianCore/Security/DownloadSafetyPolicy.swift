@@ -143,7 +143,7 @@ public struct DownloadSafetyPolicy: Sendable {
         let timestamp = String(Int(date.timeIntervalSince1970), radix: 16)
         let origin = sourceMetadata.quarantineOrigin
             .flatMap { quarantineMetadataOrigin(from: URL(string: $0)) } ?? ""
-        return "0083;\(timestamp);Meridian Browser;\(origin)"
+        return "0083;\(timestamp);Bare Browser;\(origin)"
     }
 
     private func sourceDisplayDescription(from sourceURL: URL) -> String {
