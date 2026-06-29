@@ -120,6 +120,13 @@ struct MeridianBrowserApp: App {
                 }
             }
 
+            CommandMenu("Passwords") {
+                Button("Password Manager") {
+                    _ = store.openPasswordManager()
+                }
+                .keyboardShortcut(",", modifiers: [.command, .shift])
+            }
+
             BrowserNavigationCommandMenu()
 
             CommandMenu("Profiles") {

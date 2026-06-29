@@ -29,6 +29,12 @@ public enum SpaceNavigationDirection: Equatable, Sendable {
     case next
 }
 
+public enum PasswordCredentialAccessCheckResult: Equatable, Sendable {
+    case noSavedAccounts
+    case available
+    case unavailable
+}
+
 @MainActor
 public final class BrowserStore: ObservableObject {
     @Published public var profiles: [BrowserProfile]
@@ -46,6 +52,8 @@ public final class BrowserStore: ObservableObject {
     @Published public var sidebarRevealEdge: SidebarRevealEdge
     @Published public var pendingURLConfirmation: URLConfirmationRequest?
     @Published public var pendingDownloadConfirmation: DownloadConfirmationRequest?
+    @Published public var pendingPasswordSaveRequest: PasswordSaveRequest?
+    @Published public private(set) var passwordCredentialAutofillRevision: Int
     @Published public private(set) var isChoosingDownloadDestination: Bool
     @Published public var lastUserMessage: String?
     @Published public private(set) var pendingSitePermissionRequest: SitePermissionRequest?
@@ -57,6 +65,7 @@ public final class BrowserStore: ObservableObject {
     public let urlSecurityPolicy: URLSecurityPolicy
     public let downloadSafetyPolicy: DownloadSafetyPolicy
     public let sitePermissionPolicy: SitePermissionPolicy
+    private let passwordCredentialStore: PasswordCredentialPersisting
     private let sessionPersistence: SessionSnapshotPersisting?
     private let localHistoryPersistence: LocalHistoryPersisting?
     private var localHistoryStore: LocalHistoryStore
@@ -70,6 +79,7 @@ public final class BrowserStore: ObservableObject {
         urlSecurityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
         downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy(),
         sitePermissionPolicy: SitePermissionPolicy = SitePermissionPolicy(),
+        passwordCredentialStore: PasswordCredentialPersisting = KeychainPasswordCredentialStore(),
         sitePermissionSettings: [SitePermissionSetting]? = nil,
         localHistoryStore: LocalHistoryStore = LocalHistoryStore(),
         sidebarRevealEdge: SidebarRevealEdge = .left,
@@ -92,6 +102,8 @@ public final class BrowserStore: ObservableObject {
         self.sidebarRevealEdge = sidebarRevealEdge
         self.pendingURLConfirmation = nil
         self.pendingDownloadConfirmation = nil
+        self.pendingPasswordSaveRequest = nil
+        self.passwordCredentialAutofillRevision = 0
         self.isChoosingDownloadDestination = false
         self.lastUserMessage = lastUserMessage
         self.pendingSitePermissionRequest = nil
@@ -102,6 +114,7 @@ public final class BrowserStore: ObservableObject {
         self.urlSecurityPolicy = urlSecurityPolicy
         self.downloadSafetyPolicy = downloadSafetyPolicy
         self.sitePermissionPolicy = sitePermissionPolicy
+        self.passwordCredentialStore = passwordCredentialStore
         self.sessionPersistence = sessionPersistence
         self.localHistoryPersistence = localHistoryPersistence
         self.localHistoryStore = localHistoryStore
@@ -433,6 +446,27 @@ public final class BrowserStore: ObservableObject {
             title: "Customize Space",
             in: targetSpaceID,
             content: .spaceCustomization(targetSpaceID)
+        )
+    }
+
+    @discardableResult
+    public func openPasswordManager(in spaceID: SpaceID? = nil) -> BrowserTab? {
+        guard let targetSpaceID = spaceID ?? selectedSpaceID,
+              spaces.contains(where: { $0.id == targetSpaceID }) else {
+            return nil
+        }
+
+        if let existingTab = tabs.first(where: { tab in
+            tab.parentSpaceID == targetSpaceID && tab.content == .passwordManager
+        }) {
+            selectTab(existingTab.id)
+            return existingTab
+        }
+
+        return createTab(
+            title: "Passwords",
+            in: targetSpaceID,
+            content: .passwordManager
         )
     }
 
@@ -1108,6 +1142,190 @@ public final class BrowserStore: ObservableObject {
         return sitePermissionPolicy.defaultDecision(for: kind)
     }
 
+    public func requestPasswordSave(
+        _ candidate: PasswordCredentialCandidate,
+        profileID: ProfileID? = nil,
+        date: Date = Date()
+    ) {
+        let resolvedProfileID = profileID ?? activeProfile?.id
+        guard let profile = profiles.first(where: { $0.id == resolvedProfileID }) else {
+            pendingPasswordSaveRequest = nil
+            lastUserMessage = "Password was not saved because its profile is unavailable."
+            return
+        }
+
+        guard !profile.isEphemeral else {
+            pendingPasswordSaveRequest = nil
+            lastUserMessage = "Password was not saved for this private profile."
+            return
+        }
+
+        do {
+            let existingCredentials = try loadSavedPasswordCredentials(
+                for: candidate.origin,
+                profile: profile
+            )
+            if existingCredentials.contains(where: {
+                $0.username == candidate.username && $0.password == candidate.password
+            }) {
+                pendingPasswordSaveRequest = nil
+                lastUserMessage = "Password is already saved for \(candidate.displayHost)."
+                return
+            }
+        } catch {
+            pendingPasswordSaveRequest = nil
+            lastUserMessage = "Keychain access is needed to check saved passwords."
+            return
+        }
+
+        let request = PasswordSaveRequest(
+            candidate: candidate,
+            profileID: profile.id,
+            createdAt: date
+        )
+        pendingPasswordSaveRequest = request
+        lastUserMessage = request.pendingMessage
+    }
+
+    @discardableResult
+    public func approvePendingPasswordSaveRequest() -> Bool {
+        guard let request = pendingPasswordSaveRequest else {
+            return false
+        }
+
+        do {
+            try passwordCredentialStore.save(request)
+            pendingPasswordSaveRequest = nil
+            passwordCredentialAutofillRevision += 1
+            lastUserMessage = request.savedMessage
+            return true
+        } catch {
+            pendingPasswordSaveRequest = nil
+            lastUserMessage = "Password could not be saved to Keychain."
+            return false
+        }
+    }
+
+    public func cancelPendingPasswordSaveRequest() {
+        guard let request = pendingPasswordSaveRequest else {
+            return
+        }
+
+        pendingPasswordSaveRequest = nil
+        lastUserMessage = request.cancelledMessage
+    }
+
+    public func savedPasswordCredentials(
+        for origin: URL,
+        profileID: ProfileID? = nil,
+        allowsKeychainPrompt: Bool = true
+    ) -> [SavedPasswordCredential] {
+        let resolvedProfileID = profileID ?? activeProfile?.id
+        guard let profile = profiles.first(where: { $0.id == resolvedProfileID }) else {
+            return []
+        }
+
+        do {
+            return try loadSavedPasswordCredentials(
+                for: origin,
+                profile: profile,
+                allowsKeychainPrompt: allowsKeychainPrompt
+            )
+        } catch {
+            return []
+        }
+    }
+
+    @discardableResult
+    public func checkSavedPasswordKeychainAccess(
+        for accounts: [SavedPasswordAccount]? = nil,
+        allowsKeychainPrompt: Bool = true
+    ) -> PasswordCredentialAccessCheckResult {
+        let accountsToCheck = accounts ?? savedPasswordAccounts()
+        guard !accountsToCheck.isEmpty else {
+            return .noSavedAccounts
+        }
+
+        var checkedAccountCount = 0
+        for account in accountsToCheck {
+            guard let profile = profiles.first(where: { $0.id == account.profileID }),
+                  !profile.isEphemeral else {
+                continue
+            }
+
+            do {
+                let credentials = try loadSavedPasswordCredentials(
+                    for: account.origin,
+                    profile: profile,
+                    allowsKeychainPrompt: allowsKeychainPrompt
+                )
+                checkedAccountCount += 1
+                guard credentials.contains(where: { $0.username == account.username }) else {
+                    lastUserMessage = "Saved password details could not be read from Keychain."
+                    return .unavailable
+                }
+            } catch {
+                lastUserMessage = "Keychain access is needed to autofill saved passwords."
+                return .unavailable
+            }
+        }
+
+        return checkedAccountCount > 0 ? .available : .noSavedAccounts
+    }
+
+    public func savedPasswordAccounts() -> [SavedPasswordAccount] {
+        var accounts: [SavedPasswordAccount] = []
+        var failedProfileCount = 0
+        let profileNamesByID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0.name) })
+
+        for profile in persistentProfiles {
+            do {
+                accounts.append(contentsOf: try passwordCredentialStore.savedAccounts(for: profile.id))
+            } catch {
+                failedProfileCount += 1
+            }
+        }
+
+        if failedProfileCount > 0 {
+            lastUserMessage = failedProfileCount == persistentProfiles.count
+                ? "Saved passwords could not be loaded from Keychain."
+                : "Some saved passwords could not be loaded from Keychain."
+        }
+
+        return accounts.sorted { lhs, rhs in
+            let lhsProfileName = profileNamesByID[lhs.profileID] ?? "Unknown Profile"
+            let rhsProfileName = profileNamesByID[rhs.profileID] ?? "Unknown Profile"
+            let profileOrder = lhsProfileName.localizedCaseInsensitiveCompare(rhsProfileName)
+            if profileOrder != .orderedSame {
+                return profileOrder == .orderedAscending
+            }
+
+            let hostOrder = lhs.displayHost.localizedCaseInsensitiveCompare(rhs.displayHost)
+            if hostOrder != .orderedSame {
+                return hostOrder == .orderedAscending
+            }
+
+            return lhs.username.localizedCaseInsensitiveCompare(rhs.username) == .orderedAscending
+        }
+    }
+
+    private func loadSavedPasswordCredentials(
+        for origin: URL,
+        profile: BrowserProfile,
+        allowsKeychainPrompt: Bool = true
+    ) throws -> [SavedPasswordCredential] {
+        guard !profile.isEphemeral,
+              let normalizedOrigin = PasswordCredentialCandidate.normalizedSecureOrigin(from: origin) else {
+            return []
+        }
+
+        return try passwordCredentialStore.savedCredentials(
+            for: normalizedOrigin,
+            profileID: profile.id,
+            options: PasswordCredentialReadOptions(allowsKeychainPrompt: allowsKeychainPrompt)
+        )
+    }
+
     @discardableResult
     public func setSitePermissionDecision(
         _ decision: SitePermissionDecision,
@@ -1625,6 +1843,8 @@ public final class BrowserStore: ObservableObject {
             return moveSelectedTab(.up)
         case .moveTabDown:
             return moveSelectedTab(.down)
+        case .openPasswordManager:
+            return openPasswordManager() != nil
         case .splitActiveTab:
             return false
         case .reload, .stopLoading, .goBack, .goForward:
@@ -1656,6 +1876,8 @@ public final class BrowserStore: ObservableObject {
             return "Tab cannot move down in its current section."
         case .splitActiveTab:
             return "Split view is not available yet."
+        case .openPasswordManager:
+            return "Password Manager is unavailable because no space is selected."
         }
     }
 

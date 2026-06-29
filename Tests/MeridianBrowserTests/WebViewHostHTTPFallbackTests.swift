@@ -46,4 +46,33 @@ final class WebViewHostHTTPFallbackTests: XCTestCase {
         XCTAssertNil(state.pendingHTTPFallbackURL)
         XCTAssertTrue(fallbackLoadEvents.isEmpty)
     }
+
+    func testWebContentProcessTerminationPublishesRecoveryMessage() async {
+        var messages: [String] = []
+        let coordinator = WebViewHost.Coordinator(
+            tabID: UUID(),
+            state: WebViewState(),
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            callbacks: BrowserWebViewCallbacks(
+                onStateChange: { _, _, _, message in
+                    if let message {
+                        messages.append(message)
+                    }
+                },
+                onSecurityMessage: { _ in },
+                onURLConfirmationRequired: { _, _, _ in },
+                onDownloadConfirmationRequired: { _, completion in completion(nil) },
+                onSitePermissionRequest: { _, _ in .deny(reason: "Test denies site permission requests.") }
+            ),
+            requestedURL: nil,
+            pendingHTTPFallbackURL: nil,
+            isActive: true
+        )
+
+        coordinator.webViewWebContentProcessDidTerminate(WKWebView())
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertEqual(messages, ["Page stopped responding and was reloaded."])
+    }
 }

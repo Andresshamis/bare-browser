@@ -5,10 +5,19 @@ private struct SidebarForegroundColorEnvironmentKey: EnvironmentKey {
     static let defaultValue = Color.primary
 }
 
+private struct SidebarUsesDarkForegroundEnvironmentKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     var sidebarForegroundColor: Color {
         get { self[SidebarForegroundColorEnvironmentKey.self] }
         set { self[SidebarForegroundColorEnvironmentKey.self] = newValue }
+    }
+
+    var sidebarUsesDarkForeground: Bool {
+        get { self[SidebarUsesDarkForegroundEnvironmentKey.self] }
+        set { self[SidebarUsesDarkForegroundEnvironmentKey.self] = newValue }
     }
 }
 
@@ -45,6 +54,7 @@ public struct SidebarView: View {
     @State private var previewedSpaceID: SpaceID?
     @State private var pagerNavigationRequest: SidebarSpacePagerNavigationRequest?
     private let updateSidebarChromeTheme: (SidebarChromeTheme?) -> Void
+    @Environment(\.sidebarUsesDarkForeground) private var sidebarUsesDarkForeground
 
     public init(
         store: BrowserStore,
@@ -64,10 +74,10 @@ public struct SidebarView: View {
         VStack(spacing: 0) {
             browserControlsHeader
             compactAddressButton
-            Divider()
+            sidebarSeparator
             spacePager
                 .frame(maxHeight: .infinity)
-            Divider()
+            sidebarSeparator
             spaceSwitcher
         }
         .accessibilityLabel("Sidebar")
@@ -140,6 +150,12 @@ public struct SidebarView: View {
             presentationState: presentationState,
             isActivitySelected: activityPageIsSelected
         )
+    }
+
+    private var sidebarSeparator: some View {
+        Divider()
+            .opacity(sidebarUsesDarkForeground ? 0 : 1)
+            .accessibilityHidden(true)
     }
 
     private var commandTargetTabID: TabID? {
@@ -399,6 +415,7 @@ private struct SidebarAddressControls: View {
     @ObservedObject private var presentationState: BrowserContentPresentationState
     let isActivitySelected: Bool
     @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
+    @Environment(\.sidebarUsesDarkForeground) private var sidebarUsesDarkForeground
     @State private var didCopyCurrentURL = false
 
     init(
@@ -456,8 +473,10 @@ private struct SidebarAddressControls: View {
             .frame(height: 26)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(.separator.opacity(0.35), lineWidth: 0.5)
+                if !sidebarUsesDarkForeground {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(.separator.opacity(0.35), lineWidth: 0.5)
+                }
             }
 
             sitePermissionsMenu
@@ -523,8 +542,13 @@ private struct SidebarAddressControls: View {
             return "clock.arrow.circlepath"
         }
 
-        guard presentedTab?.content.isWeb != false else {
+        switch presentedTab?.content {
+        case .spaceCustomization:
             return "slider.horizontal.3"
+        case .passwordManager:
+            return "key"
+        case .web, nil:
+            break
         }
         guard let url = presentedTab?.url else {
             return "magnifyingglass"
@@ -571,8 +595,10 @@ private struct SidebarAddressControls: View {
                 .frame(width: 26, height: 26)
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(.separator.opacity(0.35), lineWidth: 0.5)
+                    if !sidebarUsesDarkForeground {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(.separator.opacity(0.35), lineWidth: 0.5)
+                    }
                 }
         }
         .menuStyle(.borderlessButton)
@@ -2661,6 +2687,7 @@ private struct SidebarActivityPageView: View, Equatable {
     let openHistoryEntry: (BrowserHistoryEntry) -> Void
     let revealDownload: (BrowserDownload) -> Void
 
+    @Environment(\.sidebarUsesDarkForeground) private var sidebarUsesDarkForeground
     @State private var selectedProfileID: ProfileID?
     @State private var selectedMode: SidebarActivityMode = .history
     @State private var profileFilterIsPresented = false
@@ -2746,8 +2773,10 @@ private struct SidebarActivityPageView: View, Equatable {
                     .fill(isSelected ? Color.primary.opacity(0.10) : Color.clear)
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.primary.opacity(isSelected ? 0.16 : 0.08), lineWidth: 1)
+                if !sidebarUsesDarkForeground {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.primary.opacity(isSelected ? 0.16 : 0.08), lineWidth: 1)
+                }
             }
             .overlay(alignment: .topTrailing) {
                 activityCountBadge(count, isSelected: isSelected)

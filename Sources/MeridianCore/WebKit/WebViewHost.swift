@@ -169,6 +169,695 @@ private enum BrowserFaviconScript {
     }
 }
 
+enum BrowserPasswordCaptureScript {
+    static let messageHandlerName = "meridianPasswordCredential"
+    @MainActor static var contentWorld: WKContentWorld {
+        WKContentWorld.defaultClient
+    }
+
+    static let source = """
+    (() => {
+        if (window.__meridianPasswordCaptureInstalled) {
+            return;
+        }
+        window.__meridianPasswordCaptureInstalled = true;
+
+        const maxUsernameLength = 512;
+        const maxPasswordLength = 4096;
+        const textLikeTypes = new Set(["", "text", "email", "tel", "url", "search"]);
+        const usernameMemoryMilliseconds = 20 * 60 * 1000;
+        let lastCaptureKey = "";
+        let lastCaptureTime = 0;
+        var rememberedUsername = "";
+        var rememberedUsernameTime = 0;
+
+        const normalized = value => typeof value === "string" ? value.trim() : "";
+
+        const visibleInput = input => {
+            if (!input || input.disabled || input.readOnly || input.type === "hidden") {
+                return false;
+            }
+            const style = window.getComputedStyle(input);
+            return style.visibility !== "hidden" &&
+                style.display !== "none";
+        };
+
+        const descriptorFor = input => [
+            input.name,
+            input.id,
+            input.getAttribute("autocomplete"),
+            input.getAttribute("aria-label"),
+            input.placeholder
+        ].map(normalized).join(" ").toLowerCase();
+
+        const autocompleteTokens = input => normalized(input.getAttribute("autocomplete"))
+            .toLowerCase()
+            .split(/\\s+/)
+            .filter(Boolean);
+
+        const scopeFor = node => {
+            const element = node instanceof Element ? node : node && node.parentElement;
+            if (!element) {
+                return document;
+            }
+
+            const form = element.form || element.closest("form");
+            if (form instanceof HTMLFormElement) {
+                return form;
+            }
+
+            let candidate = element;
+            for (let depth = 0; candidate && candidate !== document && depth < 8; depth += 1) {
+                if (candidate.querySelector && candidate.querySelector("input[type='password']")) {
+                    return candidate;
+                }
+                candidate = candidate.parentElement;
+            }
+
+            return document;
+        };
+
+        const inputsIn = (scope, selector) => Array.from(scope.querySelectorAll(selector));
+
+        const passwordInputFor = scope => {
+            const fields = inputsIn(scope, "input[type='password']")
+                .filter(visibleInput)
+                .filter(input => {
+                    const value = input.value || "";
+                    return value.length > 0 && value.length <= maxPasswordLength;
+                });
+            if (!fields.length) {
+                return null;
+            }
+            if (fields.some(input => autocompleteTokens(input).includes("new-password"))) {
+                return null;
+            }
+
+            const currentPasswordFields = fields.filter(input =>
+                autocompleteTokens(input).includes("current-password")
+            );
+            const usableFields = currentPasswordFields.length
+                ? currentPasswordFields
+                : fields.filter(input => !autocompleteTokens(input).includes("new-password"));
+
+            return usableFields.length === 1 ? usableFields[0] : null;
+        };
+
+        const autofillPasswordInputFor = scope => {
+            const fields = inputsIn(scope, "input[type='password']")
+                .filter(visibleInput)
+                .filter(input => !autocompleteTokens(input).includes("new-password"));
+            if (!fields.length) {
+                return null;
+            }
+
+            const currentPasswordFields = fields.filter(input =>
+                autocompleteTokens(input).includes("current-password")
+            );
+            const usableFields = currentPasswordFields.length ? currentPasswordFields : fields;
+            return usableFields.length === 1 ? usableFields[0] : null;
+        };
+
+        const textInputsFor = scope => inputsIn(scope, "input")
+            .filter(visibleInput)
+            .filter(input => textLikeTypes.has((input.type || "").toLowerCase()))
+            .filter(input => {
+                const value = normalized(input.value);
+                return value.length > 0 && value.length <= maxUsernameLength;
+            });
+
+        const autofillTextInputsFor = scope => inputsIn(scope, "input")
+            .filter(visibleInput)
+            .filter(input => textLikeTypes.has((input.type || "").toLowerCase()))
+            .filter(input => {
+                const value = normalized(input.value);
+                return value.length <= maxUsernameLength;
+            });
+
+        const usernameScoreFor = (input, passwordInput) => {
+            const type = (input.type || "").toLowerCase();
+            const descriptor = descriptorFor(input);
+            const tokens = autocompleteTokens(input);
+            const value = normalized(input.value);
+            let score = 0;
+
+            if (tokens.includes("username") || tokens.includes("email")) {
+                score += 80;
+            }
+            if (type === "email") {
+                score += 45;
+            }
+            if (value.includes("@")) {
+                score += 20;
+            }
+            if (/\\b(user(name)?|email|e-mail|login|account|identifier)\\b/.test(descriptor)) {
+                score += 35;
+            }
+            if (passwordInput && input.compareDocumentPosition(passwordInput) & Node.DOCUMENT_POSITION_FOLLOWING) {
+                score += 10;
+            }
+
+            return score;
+        };
+
+        const usernameInputFor = (scope, passwordInput) => {
+            const candidates = textInputsFor(scope)
+                .map(input => ({ input, score: usernameScoreFor(input, passwordInput) }))
+                .filter(candidate => candidate.score > 0)
+                .sort((lhs, rhs) => rhs.score - lhs.score);
+
+            if (candidates.length) {
+                return candidates[0].input;
+            }
+
+            const textInputs = textInputsFor(scope);
+            const beforePassword = textInputs.filter(input =>
+                passwordInput && input.compareDocumentPosition(passwordInput) & Node.DOCUMENT_POSITION_FOLLOWING
+            );
+            return beforePassword.length ? beforePassword[beforePassword.length - 1] : textInputs[0] || null;
+        };
+
+        const postUsernameMemory = username => {
+            if (!username || username.length > maxUsernameLength) {
+                return;
+            }
+
+            window.webkit.messageHandlers.\(messageHandlerName).postMessage({
+                kind: "username",
+                origin: window.location.origin,
+                username
+            });
+        };
+
+        const rememberUsername = username => {
+            if (!username || username.length > maxUsernameLength) {
+                return;
+            }
+
+            rememberedUsername = username;
+            rememberedUsernameTime = Date.now();
+            postUsernameMemory(username);
+        };
+
+        const rememberUsernameFromInput = input => {
+            if (!input || !textLikeTypes.has((input.type || "").toLowerCase())) {
+                return;
+            }
+
+            const value = normalized(input.value);
+            if (!value || value.length > maxUsernameLength) {
+                return;
+            }
+
+            if (usernameScoreFor(input, null) > 0) {
+                rememberUsername(value);
+            }
+        };
+
+        const rememberUsernameInScope = scope => {
+            const textInputs = textInputsFor(scope);
+            if (!textInputs.length) {
+                return;
+            }
+
+            const candidates = textInputs
+                .map(input => ({ input, score: usernameScoreFor(input, null) }))
+                .filter(candidate => candidate.score > 0)
+                .sort((lhs, rhs) => rhs.score - lhs.score);
+            const selected = candidates.length === 1
+                ? candidates[0].input
+                : candidates.length > 1
+                    ? candidates[0].input
+                    : textInputs.length === 1
+                        ? textInputs[0]
+                        : null;
+
+            if (selected) {
+                rememberUsername(normalized(selected.value));
+            }
+        };
+
+        const rememberedUsernameValue = () => {
+            if (!rememberedUsername || Date.now() - rememberedUsernameTime > usernameMemoryMilliseconds) {
+                return "";
+            }
+
+            return rememberedUsername;
+        };
+
+        const usernameValueFor = (scope, passwordInput) => {
+            const usernameInput = usernameInputFor(scope, passwordInput);
+            const username = usernameInput ? normalized(usernameInput.value) : "";
+            return username || rememberedUsernameValue();
+        };
+
+        const shouldSuppressDuplicate = candidate => {
+            const now = Date.now();
+            const key = [
+                candidate.origin,
+                candidate.username,
+                String(candidate.password.length)
+            ].join("\\n");
+            if (key === lastCaptureKey && now - lastCaptureTime < 3000) {
+                return true;
+            }
+
+            lastCaptureKey = key;
+            lastCaptureTime = now;
+            return false;
+        };
+
+        const postCredentialForScope = scope => {
+            const passwordInput = passwordInputFor(scope);
+            if (!passwordInput) {
+                return;
+            }
+
+            rememberUsernameInScope(scope);
+            const candidate = {
+                kind: "credential",
+                origin: window.location.origin,
+                username: usernameValueFor(scope, passwordInput),
+                password: passwordInput.value || "",
+                pageTitle: normalized(document.title)
+            };
+
+            if (!candidate.password || shouldSuppressDuplicate(candidate)) {
+                return;
+            }
+
+            window.webkit.messageHandlers.\(messageHandlerName).postMessage(candidate);
+        };
+
+        const scheduleCredentialCapture = scope => {
+            postCredentialForScope(scope);
+            window.setTimeout(() => postCredentialForScope(scope), 0);
+            window.setTimeout(() => postCredentialForScope(scope), 250);
+        };
+
+        const autofillUsernameInputFor = (scope, passwordInput) => {
+            const candidates = autofillTextInputsFor(scope)
+                .map(input => ({ input, score: usernameScoreFor(input, passwordInput) }))
+                .filter(candidate => candidate.score > 0)
+                .sort((lhs, rhs) => rhs.score - lhs.score);
+            if (candidates.length) {
+                return candidates[0].input;
+            }
+
+            const textInputs = autofillTextInputsFor(scope);
+            const beforePassword = textInputs.filter(input =>
+                passwordInput && input.compareDocumentPosition(passwordInput) & Node.DOCUMENT_POSITION_FOLLOWING
+            );
+            return beforePassword.length ? beforePassword[beforePassword.length - 1] : textInputs[0] || null;
+        };
+
+        const dispatchFieldEvents = input => {
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+        };
+
+        var accountPickerBindings = new WeakMap();
+        var accountPickerInstalledInputs = new WeakSet();
+        var accountPickerUsernameInputs = new WeakSet();
+        var accountPickerDismissalInstalled = false;
+        var activeAccountPickerBinding = null;
+        var accountPickerContainer = null;
+
+        const accountOptionBaseStyle = [
+            "all: initial",
+            "display: flex",
+            "align-items: center",
+            "box-sizing: border-box",
+            "width: 100%",
+            "min-height: 34px",
+            "padding: 8px 11px",
+            "border: 1px solid transparent",
+            "border-radius: 12px",
+            "cursor: default",
+            "font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+            "font-weight: 500",
+            "letter-spacing: 0",
+            "color: rgba(7,10,18,0.92)",
+            "white-space: nowrap",
+            "overflow: hidden",
+            "text-overflow: ellipsis",
+            "background: transparent",
+            "box-shadow: none",
+            "transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, color 120ms ease, transform 120ms ease"
+        ].join(";");
+
+        const accountOptionHighlightedStyle = [
+            accountOptionBaseStyle,
+            "background: linear-gradient(180deg, rgba(9,14,24,0.14), rgba(9,14,24,0.08))",
+            "border-color: rgba(9,14,24,0.13)",
+            "box-shadow: inset 0 1px 0 rgba(255,255,255,0.38), 0 7px 18px rgba(9,14,24,0.12)",
+            "color: rgba(3,6,14,0.98)",
+            "transform: translateY(-1px)"
+        ].join(";");
+
+        const ensureAccountPickerContainer = () => {
+            if (accountPickerContainer && accountPickerContainer.isConnected) {
+                return accountPickerContainer;
+            }
+
+            const parent = document.body || document.documentElement;
+            if (!parent) {
+                return null;
+            }
+
+            accountPickerContainer = document.createElement("div");
+            accountPickerContainer.id = "bare-browser-password-account-picker";
+            accountPickerContainer.setAttribute("role", "listbox");
+            accountPickerContainer.style.cssText = [
+                "all: initial",
+                "position: fixed",
+                "display: none",
+                "z-index: 2147483647",
+                "box-sizing: border-box",
+                "max-height: 240px",
+                "overflow-y: auto",
+                "padding: 7px",
+                "border: 1px solid rgba(255,255,255,0.62)",
+                "border-radius: 18px",
+                "background: linear-gradient(145deg, rgba(255,255,255,0.56), rgba(232,240,255,0.30)), rgba(246,248,255,0.34)",
+                "background-clip: padding-box",
+                "backdrop-filter: blur(42px) saturate(1.95) contrast(1.08)",
+                "-webkit-backdrop-filter: blur(42px) saturate(1.95) contrast(1.08)",
+                "box-shadow: 0 28px 82px rgba(5,8,16,0.34), 0 10px 28px rgba(13,24,42,0.18), inset 0 1px 0 rgba(255,255,255,0.76), inset 0 -1px 0 rgba(255,255,255,0.22)",
+                "font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+                "color: rgba(7,10,18,0.92)",
+                "line-height: 1.35",
+                "isolation: isolate",
+                "transform: translateZ(0)"
+            ].join(";");
+            parent.appendChild(accountPickerContainer);
+            return accountPickerContainer;
+        };
+
+        const hideAccountPicker = () => {
+            if (accountPickerContainer) {
+                accountPickerContainer.style.display = "none";
+            }
+            activeAccountPickerBinding = null;
+        };
+
+        const accountPickerContains = target => {
+            return accountPickerContainer && target instanceof Node && accountPickerContainer.contains(target);
+        };
+
+        const accountPickerTargetIsActiveInput = target => {
+            if (!activeAccountPickerBinding || !(target instanceof Node)) {
+                return false;
+            }
+
+            return activeAccountPickerBinding.usernameInput === target
+                || activeAccountPickerBinding.passwordInput === target;
+        };
+
+        const installAccountPickerDismissal = () => {
+            if (accountPickerDismissalInstalled) {
+                return;
+            }
+
+            accountPickerDismissalInstalled = true;
+            document.addEventListener("mousedown", event => {
+                if (accountPickerContains(event.target) || accountPickerTargetIsActiveInput(event.target)) {
+                    return;
+                }
+                hideAccountPicker();
+            }, true);
+            document.addEventListener("keydown", event => {
+                if (event.key === "Escape") {
+                    hideAccountPicker();
+                }
+            }, true);
+            window.addEventListener("resize", hideAccountPicker, true);
+            window.addEventListener("scroll", hideAccountPicker, true);
+        };
+
+        const credentialMatching = (credentials, username) => {
+            const cleanedUsername = normalized(username);
+            if (cleanedUsername) {
+                const exactMatch = credentials.find(credential => credential.username === cleanedUsername);
+                if (exactMatch) {
+                    return exactMatch;
+                }
+            }
+
+            return credentials[0] || null;
+        };
+
+        const credentialExactlyMatching = (credentials, username) => {
+            const cleanedUsername = normalized(username);
+            if (!cleanedUsername) {
+                return null;
+            }
+
+            return credentials.find(credential => credential.username === cleanedUsername) || null;
+        };
+
+        const fillCredential = (usernameInput, passwordInput, credential) => {
+            if (!credential || !passwordInput) {
+                return;
+            }
+
+            if (usernameInput && usernameInput.value !== credential.username) {
+                usernameInput.value = credential.username;
+                dispatchFieldEvents(usernameInput);
+            }
+            passwordInput.value = credential.password;
+            dispatchFieldEvents(passwordInput);
+            hideAccountPicker();
+        };
+
+        const positionAccountPicker = (container, anchorInput) => {
+            const rect = anchorInput.getBoundingClientRect();
+            const minWidth = Math.max(rect.width, 220);
+            const maxWidth = Math.max(220, Math.min(360, window.innerWidth - 16));
+            const width = Math.min(Math.max(minWidth, 220), maxWidth);
+            container.style.minWidth = `${width}px`;
+            container.style.maxWidth = `${maxWidth}px`;
+            container.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
+            container.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 48)}px`;
+        };
+
+        const showAccountPicker = (binding, anchorInput) => {
+            if (!binding || !binding.credentials.length || !anchorInput) {
+                return;
+            }
+
+            const container = ensureAccountPickerContainer();
+            if (!container) {
+                return;
+            }
+
+            activeAccountPickerBinding = binding;
+            container.textContent = "";
+            for (const credential of binding.credentials) {
+                const option = document.createElement("button");
+                option.type = "button";
+                option.setAttribute("role", "option");
+                option.setAttribute("aria-label", credential.username || "Use saved password");
+                option.textContent = credential.username || "Use saved password";
+                option.style.cssText = accountOptionBaseStyle;
+                option.addEventListener("mouseenter", () => {
+                    option.style.cssText = accountOptionHighlightedStyle;
+                });
+                option.addEventListener("mouseleave", () => {
+                    option.style.cssText = accountOptionBaseStyle;
+                });
+                option.addEventListener("focus", () => {
+                    option.style.cssText = accountOptionHighlightedStyle;
+                });
+                option.addEventListener("blur", () => {
+                    option.style.cssText = accountOptionBaseStyle;
+                });
+                option.addEventListener("mousedown", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    fillCredential(binding.usernameInput, binding.passwordInput, credential);
+                }, true);
+                container.appendChild(option);
+            }
+
+            container.style.display = "block";
+            positionAccountPicker(container, anchorInput);
+        };
+
+        const showAccountPickerForInput = event => {
+            const binding = accountPickerBindings.get(event.currentTarget);
+            showAccountPicker(binding, event.currentTarget);
+        };
+
+        const fillPasswordForSelectedUsername = event => {
+            const binding = accountPickerBindings.get(event.currentTarget);
+            if (!binding) {
+                return;
+            }
+
+            const credential = credentialExactlyMatching(binding.credentials, binding.usernameInput.value);
+            if (credential) {
+                binding.passwordInput.value = credential.password;
+                dispatchFieldEvents(binding.passwordInput);
+            }
+        };
+
+        const bindAccountPickerInput = input => {
+            if (!input || accountPickerInstalledInputs.has(input)) {
+                return;
+            }
+
+            accountPickerInstalledInputs.add(input);
+            input.addEventListener("focus", showAccountPickerForInput, true);
+            input.addEventListener("click", showAccountPickerForInput, true);
+            input.addEventListener("keydown", event => {
+                if (event.key === "ArrowDown") {
+                    showAccountPickerForInput(event);
+                }
+            }, true);
+        };
+
+        const installAccountPicker = (usernameInput, passwordInput, credentials) => {
+            if (!passwordInput || !Array.isArray(credentials) || !credentials.length) {
+                return;
+            }
+
+            const binding = {
+                usernameInput,
+                passwordInput,
+                credentials: credentials.slice()
+            };
+            accountPickerBindings.set(passwordInput, binding);
+            bindAccountPickerInput(passwordInput);
+            if (usernameInput) {
+                accountPickerBindings.set(usernameInput, binding);
+                bindAccountPickerInput(usernameInput);
+                if (!accountPickerUsernameInputs.has(usernameInput)) {
+                    accountPickerUsernameInputs.add(usernameInput);
+                    usernameInput.addEventListener("input", fillPasswordForSelectedUsername, true);
+                    usernameInput.addEventListener("change", fillPasswordForSelectedUsername, true);
+                }
+            }
+
+            installAccountPickerDismissal();
+        };
+
+        const autofillScope = (scope, credentials) => {
+            if (!Array.isArray(credentials) || !credentials.length) {
+                return false;
+            }
+
+            const passwordInput = autofillPasswordInputFor(scope);
+            if (!passwordInput) {
+                return false;
+            }
+
+            const usernameInput = autofillUsernameInputFor(scope, passwordInput);
+            installAccountPicker(usernameInput, passwordInput, credentials);
+            if (normalized(passwordInput.value)) {
+                return false;
+            }
+
+            const credential = credentialMatching(credentials, usernameInput ? usernameInput.value : "");
+            if (!credential) {
+                return false;
+            }
+
+            if (usernameInput && !normalized(usernameInput.value)) {
+                usernameInput.value = credential.username;
+                dispatchFieldEvents(usernameInput);
+            }
+            passwordInput.value = credential.password;
+            dispatchFieldEvents(passwordInput);
+            installAccountPicker(usernameInput, passwordInput, credentials);
+            return true;
+        };
+
+        const autofillAll = credentials => {
+            const scopes = Array.from(document.querySelectorAll("form"))
+                .filter(form => form.querySelector("input[type='password']"));
+            scopes.push(document);
+
+            let didFill = false;
+            for (const scope of scopes) {
+                didFill = autofillScope(scope, credentials) || didFill;
+            }
+
+            return didFill;
+        };
+
+        var savedAutofillCredentials = [];
+        var autofillObserver = null;
+        window.__meridianPasswordAutofill = credentials => {
+            savedAutofillCredentials = Array.isArray(credentials) ? credentials : [];
+            if (!savedAutofillCredentials.length) {
+                return false;
+            }
+
+            const didFill = autofillAll(savedAutofillCredentials);
+            window.setTimeout(() => autofillAll(savedAutofillCredentials), 250);
+            window.setTimeout(() => autofillAll(savedAutofillCredentials), 1000);
+
+            if (!autofillObserver) {
+                autofillObserver = new MutationObserver(() => {
+                    autofillAll(savedAutofillCredentials);
+                });
+                autofillObserver.observe(document.documentElement, {
+                    childList: true,
+                    subtree: true
+                });
+            }
+
+            return didFill;
+        };
+
+        document.addEventListener("input", event => {
+            if (event.target instanceof HTMLInputElement) {
+                rememberUsernameFromInput(event.target);
+            }
+        }, true);
+
+        document.addEventListener("change", event => {
+            if (event.target instanceof HTMLInputElement) {
+                rememberUsernameFromInput(event.target);
+            }
+        }, true);
+
+        document.addEventListener("focusout", event => {
+            if (event.target instanceof HTMLInputElement) {
+                rememberUsernameFromInput(event.target);
+            }
+        }, true);
+
+        document.addEventListener("submit", event => {
+            if (event.target instanceof HTMLFormElement) {
+                scheduleCredentialCapture(event.target);
+            }
+        }, true);
+
+        document.addEventListener("keydown", event => {
+            if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
+                const scope = scopeFor(event.target);
+                rememberUsernameInScope(scope);
+                scheduleCredentialCapture(scope);
+            }
+        }, true);
+
+        document.addEventListener("click", event => {
+            const target = event.target instanceof Element ? event.target : null;
+            const control = target
+                ? target.closest("button,input[type='submit'],input[type='button'],input[type='image'],[role='button'],a[href]")
+                : null;
+            const scope = scopeFor(control || target);
+            rememberUsernameInScope(scope);
+            if (control || scope.querySelector("input[type='password']")) {
+                scheduleCredentialCapture(scope);
+            }
+        }, true);
+    })();
+    """
+}
+
 struct BrowserContextMenuDownloadTarget: Equatable {
     var imageURL: URL?
     var linkURL: URL?
@@ -283,6 +972,8 @@ struct BrowserWebViewCallbacks {
     var onDownloadFinished: @MainActor (UUID, URL?, Bool) -> Void
     var onDownloadFailed: @MainActor (UUID, String) -> Void
     var onSitePermissionRequest: @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
+    var onPasswordCredentialCaptured: @MainActor (PasswordCredentialCandidate) -> Void
+    var onPasswordCredentialsRequested: @MainActor (URL) -> [SavedPasswordCredential]
     var onSnapshot: @MainActor (NSImage) -> Void
 
     init(
@@ -296,6 +987,8 @@ struct BrowserWebViewCallbacks {
         onDownloadFinished: @escaping @MainActor (UUID, URL?, Bool) -> Void = { _, _, _ in },
         onDownloadFailed: @escaping @MainActor (UUID, String) -> Void = { _, _ in },
         onSitePermissionRequest: @escaping @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation,
+        onPasswordCredentialCaptured: @escaping @MainActor (PasswordCredentialCandidate) -> Void = { _ in },
+        onPasswordCredentialsRequested: @escaping @MainActor (URL) -> [SavedPasswordCredential] = { _ in [] },
         onSnapshot: @escaping @MainActor (NSImage) -> Void = { _ in }
     ) {
         self.onStateChange = onStateChange
@@ -308,6 +1001,8 @@ struct BrowserWebViewCallbacks {
         self.onDownloadFinished = onDownloadFinished
         self.onDownloadFailed = onDownloadFailed
         self.onSitePermissionRequest = onSitePermissionRequest
+        self.onPasswordCredentialCaptured = onPasswordCredentialCaptured
+        self.onPasswordCredentialsRequested = onPasswordCredentialsRequested
         self.onSnapshot = onSnapshot
     }
 }
@@ -419,7 +1114,8 @@ public final class BrowserWebViewRegistry: ObservableObject {
         downloadSafetyPolicy: DownloadSafetyPolicy,
         sitePermissionPolicy: SitePermissionPolicy,
         callbacks: BrowserWebViewCallbacks,
-        isActive: Bool = true
+        isActive: Bool = true,
+        passwordAutofillRevision: Int = 0
     ) -> BrowserWebViewSession {
         let sequence = nextUsageSequence()
         if let session = sessions[tab.id] {
@@ -436,7 +1132,8 @@ public final class BrowserWebViewRegistry: ObservableObject {
                     sitePermissionPolicy: sitePermissionPolicy,
                     callbacks: callbacks,
                     sequence: sequence,
-                    isActive: isActive
+                    isActive: isActive,
+                    passwordAutofillRevision: passwordAutofillRevision
                 )
             }
             session.lastUsedSequence = sequence
@@ -447,7 +1144,8 @@ public final class BrowserWebViewRegistry: ObservableObject {
                 callbacks: callbacks,
                 requestedURL: tab.url,
                 pendingHTTPFallbackURL: tab.restorationMetadata.pendingHTTPFallbackURL,
-                isActive: isActive
+                isActive: isActive,
+                passwordAutofillRevision: passwordAutofillRevision
             )
             if isActive {
                 markActive(tab.id)
@@ -466,7 +1164,8 @@ public final class BrowserWebViewRegistry: ObservableObject {
             sitePermissionPolicy: sitePermissionPolicy,
             callbacks: callbacks,
             sequence: sequence,
-            isActive: isActive
+            isActive: isActive,
+            passwordAutofillRevision: passwordAutofillRevision
         )
     }
 
@@ -480,7 +1179,8 @@ public final class BrowserWebViewRegistry: ObservableObject {
         sitePermissionPolicy: SitePermissionPolicy,
         callbacks: BrowserWebViewCallbacks,
         sequence: UInt64,
-        isActive: Bool
+        isActive: Bool,
+        passwordAutofillRevision: Int
     ) -> BrowserWebViewSession {
         let coordinator = WebViewHost.Coordinator(
             tabID: tab.id,
@@ -490,7 +1190,8 @@ public final class BrowserWebViewRegistry: ObservableObject {
             callbacks: callbacks,
             requestedURL: tab.url,
             pendingHTTPFallbackURL: tab.restorationMetadata.pendingHTTPFallbackURL,
-            isActive: isActive
+            isActive: isActive,
+            passwordAutofillRevision: passwordAutofillRevision
         )
         let webView = Self.makeWebView(
             profile: profile,
@@ -598,9 +1299,21 @@ public final class BrowserWebViewRegistry: ObservableObject {
             contentWorld: BrowserContextMenuScript.contentWorld,
             name: BrowserContextMenuScript.messageHandlerName
         )
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: BrowserPasswordCaptureScript.source,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false,
+            in: BrowserPasswordCaptureScript.contentWorld
+        ))
+        configuration.userContentController.add(
+            WeakScriptMessageHandler(target: coordinator),
+            contentWorld: BrowserPasswordCaptureScript.contentWorld,
+            name: BrowserPasswordCaptureScript.messageHandlerName
+        )
         ContentBlockerService.installDefaultRules(into: configuration.userContentController)
 
         let webView = BrowserWKWebView(frame: .zero, configuration: configuration)
+        BrowserUserAgent.applyDesktopSafariCompatibility(to: webView)
         webView.contextMenuDownloadHandler = coordinator
         webView.allowsBackForwardNavigationGestures = true
         webView.navigationDelegate = coordinator
@@ -1020,6 +1733,7 @@ public struct WebViewHost: NSViewRepresentable {
     private let activeTab: BrowserTab?
     private let activeProfile: BrowserProfile?
     private let isActive: Bool
+    private let passwordAutofillRevision: Int
     private let registry: BrowserWebViewRegistry
     private let dataStoreProvider: ProfileWebsiteDataStoreProvider
     private let securityPolicy: URLSecurityPolicy
@@ -1036,6 +1750,8 @@ public struct WebViewHost: NSViewRepresentable {
     private let onDownloadFinished: @MainActor (TabID, UUID, URL?, Bool) -> Void
     private let onDownloadFailed: @MainActor (TabID, UUID, String) -> Void
     private let onSitePermissionRequest: @MainActor (TabID, ProfileID, SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
+    private let onPasswordCredentialCaptured: @MainActor (TabID, ProfileID, PasswordCredentialCandidate) -> Void
+    private let onPasswordCredentialsRequested: @MainActor (TabID, ProfileID, URL) -> [SavedPasswordCredential]
     private let onSnapshotCaptured: @MainActor (TabID, NSImage) -> Void
     private let onWebViewActivated: @MainActor (TabID) -> Void
 
@@ -1044,6 +1760,7 @@ public struct WebViewHost: NSViewRepresentable {
         activeTab: BrowserTab?,
         activeProfile: BrowserProfile?,
         isActive: Bool = true,
+        passwordAutofillRevision: Int = 0,
         registry: BrowserWebViewRegistry,
         dataStoreProvider: ProfileWebsiteDataStoreProvider,
         securityPolicy: URLSecurityPolicy = URLSecurityPolicy(),
@@ -1062,6 +1779,8 @@ public struct WebViewHost: NSViewRepresentable {
         onSitePermissionRequest: @escaping @MainActor (TabID, ProfileID, SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation = { _, _, _, _ in
             .deny(reason: "Site permission request was blocked because no permission handler is installed.")
         },
+        onPasswordCredentialCaptured: @escaping @MainActor (TabID, ProfileID, PasswordCredentialCandidate) -> Void = { _, _, _ in },
+        onPasswordCredentialsRequested: @escaping @MainActor (TabID, ProfileID, URL) -> [SavedPasswordCredential] = { _, _, _ in [] },
         onSnapshotCaptured: @escaping @MainActor (TabID, NSImage) -> Void = { _, _ in },
         onWebViewActivated: @escaping @MainActor (TabID) -> Void = { _ in }
     ) {
@@ -1069,6 +1788,7 @@ public struct WebViewHost: NSViewRepresentable {
         self.activeTab = activeTab
         self.activeProfile = activeProfile
         self.isActive = isActive
+        self.passwordAutofillRevision = passwordAutofillRevision
         self.registry = registry
         self.dataStoreProvider = dataStoreProvider
         self.securityPolicy = securityPolicy
@@ -1085,6 +1805,8 @@ public struct WebViewHost: NSViewRepresentable {
         self.onDownloadFinished = onDownloadFinished
         self.onDownloadFailed = onDownloadFailed
         self.onSitePermissionRequest = onSitePermissionRequest
+        self.onPasswordCredentialCaptured = onPasswordCredentialCaptured
+        self.onPasswordCredentialsRequested = onPasswordCredentialsRequested
         self.onSnapshotCaptured = onSnapshotCaptured
         self.onWebViewActivated = onWebViewActivated
     }
@@ -1112,11 +1834,14 @@ public struct WebViewHost: NSViewRepresentable {
                 onSitePermissionRequest: { _, _ in
                     .deny(reason: "Site permission request was blocked because no active tab is attached.")
                 },
+                onPasswordCredentialCaptured: { _ in },
+                onPasswordCredentialsRequested: { _ in [] },
                 onSnapshot: { _ in }
             ),
             requestedURL: activeTab?.url,
             pendingHTTPFallbackURL: activeTab?.restorationMetadata.pendingHTTPFallbackURL,
-            isActive: false
+            isActive: false,
+            passwordAutofillRevision: passwordAutofillRevision
         )
     }
 
@@ -1167,6 +1892,12 @@ public struct WebViewHost: NSViewRepresentable {
             onSitePermissionRequest: { kind, origin in
                 onSitePermissionRequest(tab.id, profile.id, kind, origin)
             },
+            onPasswordCredentialCaptured: { candidate in
+                onPasswordCredentialCaptured(tab.id, profile.id, candidate)
+            },
+            onPasswordCredentialsRequested: { origin in
+                onPasswordCredentialsRequested(tab.id, profile.id, origin)
+            },
             onSnapshot: { image in
                 onSnapshotCaptured(tab.id, image)
             }
@@ -1180,7 +1911,8 @@ public struct WebViewHost: NSViewRepresentable {
             downloadSafetyPolicy: downloadSafetyPolicy,
             sitePermissionPolicy: sitePermissionPolicy,
             callbacks: callbacks,
-            isActive: isActive
+            isActive: isActive,
+            passwordAutofillRevision: passwordAutofillRevision
         )
 
         BrowserWebContentAppearance.apply(colorScheme, to: session.webView)
@@ -1217,6 +1949,9 @@ public struct WebViewHost: NSViewRepresentable {
         private var contextMenuDownloadTarget = BrowserContextMenuDownloadTarget()
         private weak var contextMenuWebView: WKWebView?
         private var pendingSnapshotCaptureTask: Task<Void, Never>?
+        private var recentPasswordUsernamesByOrigin: [URL: String] = [:]
+        private var passwordAutofillRevision: Int
+        private var lastHandledPasswordAutofillRevision: Int
 
         init(
             tabID: TabID,
@@ -1226,7 +1961,8 @@ public struct WebViewHost: NSViewRepresentable {
             callbacks: BrowserWebViewCallbacks,
             requestedURL: URL?,
             pendingHTTPFallbackURL: URL?,
-            isActive: Bool
+            isActive: Bool,
+            passwordAutofillRevision: Int = 0
         ) {
             self.tabID = tabID
             self.state = state
@@ -1236,6 +1972,8 @@ public struct WebViewHost: NSViewRepresentable {
             self.requestedURL = requestedURL
             self.pendingHTTPFallbackURL = pendingHTTPFallbackURL
             self.isActive = isActive
+            self.passwordAutofillRevision = passwordAutofillRevision
+            self.lastHandledPasswordAutofillRevision = 0
         }
 
         deinit {
@@ -1249,7 +1987,8 @@ public struct WebViewHost: NSViewRepresentable {
             callbacks: BrowserWebViewCallbacks,
             requestedURL: URL?,
             pendingHTTPFallbackURL: URL?,
-            isActive: Bool
+            isActive: Bool,
+            passwordAutofillRevision: Int
         ) {
             self.state = state
             self.securityPolicy = securityPolicy
@@ -1258,6 +1997,7 @@ public struct WebViewHost: NSViewRepresentable {
             self.requestedURL = requestedURL
             self.pendingHTTPFallbackURL = pendingHTTPFallbackURL
             self.isActive = isActive
+            self.passwordAutofillRevision = passwordAutofillRevision
         }
 
         fileprivate func applyPendingState(to webView: WKWebView) {
@@ -1282,11 +2022,11 @@ public struct WebViewHost: NSViewRepresentable {
                 }
             }
 
-            guard let requestedURL else {
-                return
+            if let requestedURL {
+                loadRequestedURLIfNeeded(requestedURL, in: webView)
             }
 
-            loadRequestedURLIfNeeded(requestedURL, in: webView)
+            autofillSavedPasswordCredentialsIfNeeded(in: webView)
         }
 
         fileprivate func publishCurrentState(from webView: WKWebView) {
@@ -1305,6 +2045,13 @@ public struct WebViewHost: NSViewRepresentable {
 
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             publish(webView, isLoading: false)
+            autofillSavedPasswordCredentials(in: webView)
+        }
+
+        public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            webViewLogger.error("web content process terminated; reloading active page")
+            publish(webView, isLoading: false, message: "Page stopped responding and was reloaded.")
+            webView.reload()
         }
 
         public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -1580,16 +2327,90 @@ public struct WebViewHost: NSViewRepresentable {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
-            guard isActive,
-                  message.name == BrowserContextMenuScript.messageHandlerName else {
+            guard isActive else {
                 return
             }
 
-            let target = BrowserContextMenuDownloadTarget(messageBody: message.body)
-            contextMenuDownloadTarget = target
-            webViewLogger.info(
-                "context-menu script target image=\(target.imageURL != nil, privacy: .public) link=\(target.linkURL != nil, privacy: .public) point=\(target.clientPoint != nil, privacy: .public)"
-            )
+            switch message.name {
+            case BrowserContextMenuScript.messageHandlerName:
+                let target = BrowserContextMenuDownloadTarget(messageBody: message.body)
+                contextMenuDownloadTarget = target
+                webViewLogger.info(
+                    "context-menu script target image=\(target.imageURL != nil, privacy: .public) link=\(target.linkURL != nil, privacy: .public) point=\(target.clientPoint != nil, privacy: .public)"
+                )
+            case BrowserPasswordCaptureScript.messageHandlerName:
+                if passwordCaptureMessageKind(from: message.body) == "username" {
+                    rememberPasswordUsername(from: message.body)
+                    return
+                }
+
+                guard let candidate = PasswordCredentialCandidate(
+                    messageBody: message.body,
+                    fallbackUsername: recentPasswordUsername(for: message.body)
+                ) else {
+                    webViewLogger.info("password credential capture ignored invalid candidate")
+                    return
+                }
+
+                webViewLogger.info("password credential capture candidate received")
+                callbacks.onPasswordCredentialCaptured(candidate)
+            default:
+                return
+            }
+        }
+
+        private func passwordCaptureMessageKind(from body: Any) -> String? {
+            Self.dictionary(from: body)?["kind"] as? String
+        }
+
+        private func rememberPasswordUsername(from body: Any) {
+            guard let dictionary = Self.dictionary(from: body),
+                  let origin = Self.passwordCaptureOrigin(from: dictionary),
+                  let username = Self.passwordCaptureString(from: dictionary["username"]) else {
+                return
+            }
+
+            let cleanedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleanedUsername.isEmpty,
+                  cleanedUsername.count <= PasswordCredentialCandidate.maximumUsernameLength else {
+                return
+            }
+
+            recentPasswordUsernamesByOrigin[origin] = cleanedUsername
+        }
+
+        private func recentPasswordUsername(for body: Any) -> String? {
+            guard let dictionary = Self.dictionary(from: body),
+                  let origin = Self.passwordCaptureOrigin(from: dictionary) else {
+                return nil
+            }
+
+            return recentPasswordUsernamesByOrigin[origin]
+        }
+
+        private static func dictionary(from body: Any) -> [String: Any]? {
+            body as? [String: Any]
+                ?? (body as? NSDictionary) as? [String: Any]
+        }
+
+        private static func passwordCaptureString(from value: Any?) -> String? {
+            switch value {
+            case let value as String:
+                return value
+            case let value as NSString:
+                return value as String
+            default:
+                return nil
+            }
+        }
+
+        private static func passwordCaptureOrigin(from dictionary: [String: Any]) -> URL? {
+            guard let originString = passwordCaptureString(from: dictionary["origin"]),
+                  let originURL = URL(string: originString) else {
+                return nil
+            }
+
+            return PasswordCredentialCandidate.normalizedSecureOrigin(from: originURL)
         }
 
         func prepareContextMenu(for event: NSEvent, in webView: WKWebView) {
@@ -2082,6 +2903,66 @@ public struct WebViewHost: NSViewRepresentable {
                 let faviconURL = (try? result.get()).flatMap(BrowserFaviconScript.url(from:))
                 self.callbacks.onFaviconChange(faviconURL)
             }
+        }
+
+        private func autofillSavedPasswordCredentials(in webView: WKWebView) {
+            guard isActive,
+                  let pageURL = webView.url,
+                  let origin = PasswordCredentialCandidate.normalizedSecureOrigin(from: pageURL) else {
+                return
+            }
+
+            let credentials = callbacks.onPasswordCredentialsRequested(origin)
+            guard !credentials.isEmpty,
+                  let payload = Self.passwordAutofillPayload(from: credentials),
+                  let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+                  let json = String(data: jsonData, encoding: .utf8) else {
+                return
+            }
+
+            let script = """
+            (() => {
+                const autofill = window.__meridianPasswordAutofill;
+                return autofill ? autofill(\(json)) : false;
+            })()
+            """
+            webView.evaluateJavaScript(
+                script,
+                in: nil,
+                in: BrowserPasswordCaptureScript.contentWorld
+            ) { result in
+                let didFill = (try? result.get()) as? Bool ?? false
+                webViewLogger.info(
+                    "password autofill evaluated credentials=\(credentials.count, privacy: .public) didFill=\(didFill, privacy: .public)"
+                )
+            }
+        }
+
+        private func autofillSavedPasswordCredentialsIfNeeded(in webView: WKWebView) {
+            guard passwordAutofillRevision > lastHandledPasswordAutofillRevision else {
+                return
+            }
+
+            lastHandledPasswordAutofillRevision = passwordAutofillRevision
+            autofillSavedPasswordCredentials(in: webView)
+        }
+
+        private static func passwordAutofillPayload(
+            from credentials: [SavedPasswordCredential]
+        ) -> [[String: String]]? {
+            let payload = credentials.compactMap { credential -> [String: String]? in
+                guard !credential.username.isEmpty,
+                      !credential.password.isEmpty else {
+                    return nil
+                }
+
+                return [
+                    "username": credential.username,
+                    "password": credential.password
+                ]
+            }
+
+            return payload.isEmpty ? nil : payload
         }
 
         private func scheduleSnapshotCapture(from webView: WKWebView, url: URL?) {

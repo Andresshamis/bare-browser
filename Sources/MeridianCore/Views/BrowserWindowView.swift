@@ -36,6 +36,7 @@ public struct BrowserWindowView: View {
     @State private var sidebarChromeTheme: SidebarChromeTheme?
     @State private var autoPresentedDownloadID: UUID?
     @State private var activityPageIsSelected = false
+    @Namespace private var passwordPromptGlassNamespace
     private let dataStoreProvider = ProfileWebsiteDataStoreProvider()
     private let floatingSidebarInset: CGFloat = 8
     private let floatingSidebarCornerRadius: CGFloat = 12
@@ -97,7 +98,20 @@ public struct BrowserWindowView: View {
                         .zIndex(10)
                 }
             }
+            .overlay {
+                if let request = store.pendingPasswordSaveRequest {
+                    PasswordSavePromptLayer(
+                        request: request,
+                        profileName: profileName(for: request.profileID),
+                        namespace: passwordPromptGlassNamespace,
+                        cancel: { store.cancelPendingPasswordSaveRequest() },
+                        save: { _ = store.approvePendingPasswordSaveRequest() }
+                    )
+                    .zIndex(12)
+                }
+            }
             .animation(.snappy(duration: 0.16), value: store.isCommandBarPresented)
+            .animation(.smooth(duration: 0.18), value: store.pendingPasswordSaveRequest?.id)
             .onAppear {
                 normalizeStoredSidebarWidth()
                 presentPendingDownloadSavePanelIfNeeded()
@@ -226,6 +240,7 @@ public struct BrowserWindowView: View {
             for: chromeTheme,
             settings: contentSettings
         )
+        let contentUsesDarkForeground = contentForegroundWhiteAmount < 0.5
         let contentForegroundColor = Color(
             .sRGB,
             red: contentForegroundWhiteAmount,
@@ -255,6 +270,7 @@ public struct BrowserWindowView: View {
                 contentForegroundColor.opacity(0.46)
             )
             .environment(\.sidebarForegroundColor, contentForegroundColor)
+            .environment(\.sidebarUsesDarkForeground, contentUsesDarkForeground)
         }
         .frame(maxHeight: .infinity)
         .clipShape(shape)
@@ -545,6 +561,127 @@ public struct BrowserWindowView: View {
                 browserWindowLogger.info("download save panel approved")
                 store.approvePendingDownloadConfirmation(destination: destinationURL)
             }
+        }
+    }
+
+    private func profileName(for profileID: ProfileID) -> String {
+        store.profiles.first { $0.id == profileID }?.name ?? "Unknown Profile"
+    }
+}
+
+private struct PasswordSavePromptLayer: View {
+    let request: PasswordSaveRequest
+    let profileName: String
+    let namespace: Namespace.ID
+    let cancel: () -> Void
+    let save: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+
+        ZStack {
+            Color.black
+                .opacity(colorScheme == .dark ? 0.18 : 0.08)
+                .ignoresSafeArea()
+
+            GlassEffectContainer(spacing: 12) {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .center, spacing: 14) {
+                        Image(systemName: "key.fill")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.tint)
+                            .frame(width: 48, height: 48)
+                            .glassEffect(
+                                .regular
+                                    .tint(Color.accentColor.opacity(0.16))
+                                    .interactive(false),
+                                in: Circle()
+                            )
+                            .glassEffectID("passwordSavePromptIcon", in: namespace)
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Save this password?")
+                                .font(.title3.weight(.semibold))
+                            Text("Store this sign-in locally in your macOS Keychain for autofill in Bare Browser.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        PasswordSavePromptDetailRow(symbolName: "globe", title: request.displayHost)
+                        PasswordSavePromptDetailRow(symbolName: "person.crop.circle", title: request.username)
+                        PasswordSavePromptDetailRow(symbolName: "person.2", title: profileName)
+                    }
+                    .padding(12)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(.separator.opacity(0.45), lineWidth: 0.5)
+                    }
+
+                    HStack(spacing: 10) {
+                        Button {
+                            cancel()
+                        } label: {
+                            Label("Not Now", systemImage: "xmark")
+                                .frame(minWidth: 106)
+                        }
+                        .keyboardShortcut(.cancelAction)
+
+                        Spacer(minLength: 0)
+
+                        Button {
+                            save()
+                        } label: {
+                            Label(request.confirmButtonTitle, systemImage: "checkmark")
+                                .frame(minWidth: 132)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                    }
+                }
+                .padding(22)
+                .frame(width: 430)
+                .contentShape(shape)
+                .glassEffect(
+                    .regular
+                        .tint(Color.accentColor.opacity(0.08))
+                        .interactive(false),
+                    in: shape
+                )
+                .glassEffectID("passwordSavePromptSurface", in: namespace)
+                .compositingGroup()
+            }
+            .overlay {
+                shape.stroke(.separator.opacity(0.48), lineWidth: 0.5)
+            }
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0.34 : 0.18), radius: 32, x: 0, y: 24)
+        }
+        .transition(.opacity.combined(with: .scale(scale: 0.985)))
+        .onExitCommand {
+            cancel()
+        }
+    }
+}
+
+private struct PasswordSavePromptDetailRow: View {
+    let symbolName: String
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: symbolName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            Text(title)
+                .font(.callout)
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
     }
 }

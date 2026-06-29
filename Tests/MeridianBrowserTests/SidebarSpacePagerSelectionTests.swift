@@ -492,4 +492,18 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
 
         XCTAssertNil(state.snapshotHandoffTabID)
     }
+
+    @MainActor
+    func testPresentationStateExpiresUncompletedSnapshotHandoff() async throws {
+        let tabID = UUID()
+        let state = BrowserContentPresentationState(snapshotHandoffExpirationNanoseconds: 1_000_000)
+        state.storeSnapshot(NSImage(size: NSSize(width: 320, height: 200)), for: tabID)
+
+        XCTAssertNotNil(state.beginSnapshotHandoff(to: tabID))
+        XCTAssertEqual(state.snapshotHandoffTabID, tabID)
+
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertNil(state.snapshotHandoffTabID)
+    }
 }

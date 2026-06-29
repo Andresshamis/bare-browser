@@ -154,6 +154,7 @@ private struct SidebarFavoriteTabTile: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
+    @Environment(\.sidebarUsesDarkForeground) private var sidebarUsesDarkForeground
     @State private var isHovered = false
 
     var body: some View {
@@ -234,6 +235,9 @@ private struct SidebarFavoriteTabTile: View {
     }
 
     private var tileBorderColor: Color {
+        if sidebarUsesDarkForeground {
+            return .clear
+        }
         if item.isSelected {
             return sidebarForegroundColor.opacity(colorScheme == .dark ? 0.24 : 0.18)
         }
@@ -312,8 +316,13 @@ struct SidebarTabFaviconView: View {
         if let fallbackSymbolName {
             return fallbackSymbolName
         }
-        if case .spaceCustomization = tab.content {
+        switch tab.content {
+        case .spaceCustomization:
             return "slider.horizontal.3"
+        case .passwordManager:
+            return "key"
+        case .web:
+            break
         }
         return "globe"
     }
