@@ -31,6 +31,35 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         wait(for: [loadedPayload], timeout: 1)
     }
 
+    func testSpaceDragPasteboardTypeMatchesUTTypeIdentifier() {
+        XCTAssertEqual(
+            SidebarSpaceDragPayload.pasteboardType.rawValue,
+            SidebarSpaceDragPayload.type.identifier
+        )
+    }
+
+    func testSpaceDragPayloadReadsSpaceIDFromPasteboard() {
+        let spaceID = UUID()
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+
+        pasteboard.clearContents()
+        pasteboard.setData(SidebarSpaceDragPayload.data(for: spaceID), forType: SidebarSpaceDragPayload.pasteboardType)
+
+        XCTAssertEqual(SidebarSpaceDragPayload.spaceID(from: pasteboard), spaceID)
+    }
+
+    func testSpaceDragPayloadRejectsMissingOrInvalidPasteboardData() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+
+        pasteboard.clearContents()
+        XCTAssertNil(SidebarSpaceDragPayload.spaceID(from: pasteboard))
+
+        pasteboard.setData(Data("not-a-space-id".utf8), forType: SidebarSpaceDragPayload.pasteboardType)
+        XCTAssertNil(SidebarSpaceDragPayload.spaceID(from: pasteboard))
+    }
+
     func testSpaceDragPayloadIgnoresPlainTextProviders() {
         let spaceID = UUID()
         let provider = NSItemProvider(object: spaceID.uuidString as NSString)

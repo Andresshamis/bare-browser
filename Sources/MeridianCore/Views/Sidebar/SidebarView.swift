@@ -348,64 +348,62 @@ public struct SidebarView: View {
             let sidebarSpaces = store.sidebarSpaces
             let sidebarSpaceIDs = sidebarSpaces.map(\.id)
 
-            HStack(spacing: SidebarHeaderMetrics.spaceSwitcherSpacing) {
-                Button {
-                    showActivity()
-                } label: {
-                    ActivitySwitcherButtonLabel(isSelected: isActivitySelected)
+            SidebarSpaceSwitcherDropHost(
+                spaceIDs: sidebarSpaceIDs,
+                dragState: $spaceSwitcherDragState,
+                scheduleDragCancellation: scheduleSpaceSwitcherDragCancellation
+            ) { draggedSpaceID, targetSpaceID in
+                withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
+                    store.moveSpace(draggedSpaceID, before: targetSpaceID)
                 }
-                .buttonStyle(.plain)
-                .help("History and Downloads")
-                .accessibilityLabel("History and Downloads")
+            } content: {
+                HStack(spacing: SidebarHeaderMetrics.spaceSwitcherSpacing) {
+                    Button {
+                        showActivity()
+                    } label: {
+                        ActivitySwitcherButtonLabel(isSelected: isActivitySelected)
+                    }
+                    .buttonStyle(.plain)
+                    .help("History and Downloads")
+                    .accessibilityLabel("History and Downloads")
 
-                ForEach(sidebarSpaces) { space in
-                    spaceSwitcherButton(space)
-                }
+                    ForEach(sidebarSpaces) { space in
+                        spaceSwitcherButton(space)
+                    }
 
-                Button {
-                    _ = store.createSpace(name: "New Space")
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: SidebarHeaderMetrics.spaceSwitcherPlusSymbolSize, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(
-                            width: SidebarHeaderMetrics.spaceSwitcherButtonSize,
-                            height: SidebarHeaderMetrics.spaceSwitcherButtonSize
-                        )
-                        .contentShape(Rectangle())
+                    Button {
+                        _ = store.createSpace(name: "New Space")
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: SidebarHeaderMetrics.spaceSwitcherPlusSymbolSize, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(
+                                width: SidebarHeaderMetrics.spaceSwitcherButtonSize,
+                                height: SidebarHeaderMetrics.spaceSwitcherButtonSize
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("New space")
                 }
-                .buttonStyle(.plain)
-                .help("New space")
-            }
-            .overlay(alignment: .leading) {
-                ForEach(
-                    SidebarSpaceSwitcherLayout.insertionTargets(for: sidebarSpaceIDs),
-                    id: \.slotID
-                ) { target in
-                    if spaceSwitcherDragState.isDragging,
-                       let indicatorX = SidebarSpaceSwitcherLayout.indicatorX(
-                        for: target,
-                        spaceIDs: sidebarSpaceIDs
-                       ) {
-                        let isActive = spaceSwitcherDragState.activeTarget == target
-                        spaceSwitcherDropIndicator(isActive: isActive)
-                            .offset(x: indicatorX - (isActive ? 1.5 : 1))
+                .overlay(alignment: .leading) {
+                    ForEach(
+                        SidebarSpaceSwitcherLayout.insertionTargets(for: sidebarSpaceIDs),
+                        id: \.slotID
+                    ) { target in
+                        if spaceSwitcherDragState.isDragging,
+                           let indicatorX = SidebarSpaceSwitcherLayout.indicatorX(
+                            for: target,
+                            spaceIDs: sidebarSpaceIDs
+                           ) {
+                            let isActive = spaceSwitcherDragState.activeTarget == target
+                            spaceSwitcherDropIndicator(isActive: isActive)
+                                .offset(x: indicatorX - (isActive ? 1.5 : 1))
+                        }
                     }
                 }
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
-            .onDrop(
-                of: SidebarSpaceDragPayload.acceptedTypes,
-                delegate: SidebarSpaceSwitcherRowDropDelegate(
-                    spaceIDs: sidebarSpaceIDs,
-                    dragState: $spaceSwitcherDragState,
-                    scheduleDragCancellation: scheduleSpaceSwitcherDragCancellation
-                ) { draggedSpaceID, targetSpaceID in
-                    withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
-                        store.moveSpace(draggedSpaceID, before: targetSpaceID)
-                    }
-                }
-            )
             .padding(.horizontal, 12)
             .padding(.vertical, SidebarHeaderMetrics.spaceSwitcherVerticalInset)
         }
@@ -985,6 +983,7 @@ private struct SidebarAddressControls: View {
 enum SidebarSpaceDragPayload {
     static let type = UTType(exportedAs: "com.meridianbrowser.sidebar-space-id")
     static let acceptedTypes: [UTType] = [type]
+    static let pasteboardType = NSPasteboard.PasteboardType(type.identifier)
 
     static func itemProvider(for spaceID: SpaceID) -> NSItemProvider {
         let provider = NSItemProvider()
@@ -1006,6 +1005,10 @@ enum SidebarSpaceDragPayload {
     static func spaceID(from data: Data) -> SpaceID? {
         String(data: data, encoding: .utf8)
             .flatMap(UUID.init(uuidString:))
+    }
+
+    static func spaceID(from pasteboard: NSPasteboard) -> SpaceID? {
+        pasteboard.data(forType: pasteboardType).flatMap(spaceID(from:))
     }
 
     static func loadSpaceID(from info: DropInfo, completion: @escaping @MainActor (SpaceID?) -> Void) {
@@ -1030,87 +1033,160 @@ enum SidebarSpaceDragPayload {
     }
 }
 
-private struct SidebarSpaceSwitcherRowDropDelegate: DropDelegate {
+private struct SidebarSpaceSwitcherDropHost<Content: View>: NSViewRepresentable {
     let spaceIDs: [SpaceID]
     @Binding var dragState: SidebarSpaceSwitcherDragState
     let scheduleDragCancellation: (Int) -> Void
     let moveSpace: (SpaceID, SpaceID?) -> Bool
+    let content: Content
 
-    func validateDrop(info: DropInfo) -> Bool {
-        let isValid = !spaceIDs.isEmpty && info.hasItemsConforming(to: SidebarSpaceDragPayload.acceptedTypes)
-        SidebarSpaceSwitcherDiagnostics.validateDrop(isValid, spaceCount: spaceIDs.count)
-        return isValid
+    init(
+        spaceIDs: [SpaceID],
+        dragState: Binding<SidebarSpaceSwitcherDragState>,
+        scheduleDragCancellation: @escaping (Int) -> Void,
+        moveSpace: @escaping (SpaceID, SpaceID?) -> Bool,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.spaceIDs = spaceIDs
+        self._dragState = dragState
+        self.scheduleDragCancellation = scheduleDragCancellation
+        self.moveSpace = moveSpace
+        self.content = content()
     }
 
-    func dropEntered(info: DropInfo) {
-        updateTarget(for: info)
+    func makeNSView(context: Context) -> SidebarSpaceSwitcherDropHostingView<Content> {
+        let view = SidebarSpaceSwitcherDropHostingView(rootView: content)
+        view.configure(
+            spaceIDs: spaceIDs,
+            dragState: $dragState,
+            scheduleDragCancellation: scheduleDragCancellation,
+            moveSpace: moveSpace
+        )
+        return view
     }
 
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        updateTarget(for: info)
-        return DropProposal(operation: .move)
+    func updateNSView(_ nsView: SidebarSpaceSwitcherDropHostingView<Content>, context: Context) {
+        nsView.rootView = content
+        nsView.configure(
+            spaceIDs: spaceIDs,
+            dragState: $dragState,
+            scheduleDragCancellation: scheduleDragCancellation,
+            moveSpace: moveSpace
+        )
+    }
+}
+
+private final class SidebarSpaceSwitcherDropHostingView<Content: View>: NSHostingView<Content> {
+    private var spaceIDs: [SpaceID] = []
+    private var dragState: Binding<SidebarSpaceSwitcherDragState> = .constant(SidebarSpaceSwitcherDragState())
+    private var scheduleDragCancellation: (Int) -> Void = { _ in }
+    private var moveSpace: (SpaceID, SpaceID?) -> Bool = { _, _ in false }
+
+    required init(rootView: Content) {
+        super.init(rootView: rootView)
+        registerForDraggedTypes([SidebarSpaceDragPayload.pasteboardType])
     }
 
-    func dropExited(info: DropInfo) {
-        clearDragState(reason: "drop exited")
+    @available(*, unavailable)
+    @MainActor dynamic required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
 
-    func performDrop(info: DropInfo) -> Bool {
-        guard let target = target(for: info) else {
+    func configure(
+        spaceIDs: [SpaceID],
+        dragState: Binding<SidebarSpaceSwitcherDragState>,
+        scheduleDragCancellation: @escaping (Int) -> Void,
+        moveSpace: @escaping (SpaceID, SpaceID?) -> Bool
+    ) {
+        self.spaceIDs = spaceIDs
+        self.dragState = dragState
+        self.scheduleDragCancellation = scheduleDragCancellation
+        self.moveSpace = moveSpace
+        registerForDraggedTypes([SidebarSpaceDragPayload.pasteboardType])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        updateTarget(for: sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        updateTarget(for: sender)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        clearDragState(reason: "dragging exited")
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        clearDragState(reason: "dragging ended")
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let target = target(for: sender) else {
             clearDragState(reason: "missing target")
             SidebarSpaceSwitcherDiagnostics.dropCompleted(draggedSpaceID: nil, target: nil, didMove: false)
             return false
         }
 
-        clearDragState(reason: "perform drop")
-
-        SidebarSpaceDragPayload.loadSpaceID(from: info) { draggedSpaceID in
-            guard let draggedSpaceID else {
-                SidebarSpaceSwitcherDiagnostics.dropCompleted(draggedSpaceID: nil, target: target, didMove: false)
-                return
-            }
-
-            let didMove = moveSpace(draggedSpaceID, target.targetSpaceID)
-            SidebarSpaceSwitcherDiagnostics.dropCompleted(
-                draggedSpaceID: draggedSpaceID,
-                target: target,
-                didMove: didMove
-            )
+        guard let draggedSpaceID = SidebarSpaceDragPayload.spaceID(from: sender.draggingPasteboard) else {
+            clearDragState(reason: "missing payload")
+            SidebarSpaceSwitcherDiagnostics.dropCompleted(draggedSpaceID: nil, target: target, didMove: false)
+            return false
         }
 
+        let didMove = moveSpace(draggedSpaceID, target.targetSpaceID)
+        SidebarSpaceSwitcherDiagnostics.dropCompleted(
+            draggedSpaceID: draggedSpaceID,
+            target: target,
+            didMove: didMove
+        )
+        clearDragState(reason: "perform drop")
         return true
     }
 
-    private func target(for info: DropInfo) -> SidebarSpaceSwitcherDropTarget? {
-        SidebarSpaceSwitcherLayout.target(for: info.location.x, spaceIDs: spaceIDs)
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        clearDragState(reason: "conclude drag")
     }
 
-    private func updateTarget(for info: DropInfo) {
-        guard let target = target(for: info) else {
-            clearDragState(reason: "missing target")
-            return
+    private func updateTarget(for sender: NSDraggingInfo) -> NSDragOperation {
+        guard sender.draggingPasteboard.availableType(from: [SidebarSpaceDragPayload.pasteboardType]) != nil,
+              let target = target(for: sender) else {
+            clearDragState(reason: "invalid appkit drag")
+            SidebarSpaceSwitcherDiagnostics.validateDrop(false, spaceCount: spaceIDs.count)
+            return []
         }
 
-        guard dragState.activeTarget != target else {
-            scheduleDragCancellation(dragState.generation)
-            return
+        SidebarSpaceSwitcherDiagnostics.validateDrop(true, spaceCount: spaceIDs.count)
+
+        guard dragState.wrappedValue.activeTarget != target else {
+            scheduleDragCancellation(dragState.wrappedValue.generation)
+            return .move
         }
 
-        var generation = dragState.generation
+        var generation = dragState.wrappedValue.generation
         withAnimation(SidebarTabReorderInteractionMetrics.indicatorAnimation) {
-            generation = dragState.target(target)
+            var state = dragState.wrappedValue
+            generation = state.target(target)
+            dragState.wrappedValue = state
         }
         SidebarSpaceSwitcherDiagnostics.targetUpdated(target)
         scheduleDragCancellation(generation)
+        return .move
+    }
+
+    private func target(for sender: NSDraggingInfo) -> SidebarSpaceSwitcherDropTarget? {
+        SidebarSpaceSwitcherLayout.target(for: sender.draggingLocation.x, spaceIDs: spaceIDs)
     }
 
     private func clearDragState(reason: String) {
-        guard dragState.isDragging || dragState.activeTarget != nil else {
+        guard dragState.wrappedValue.isDragging || dragState.wrappedValue.activeTarget != nil else {
             return
         }
 
         withAnimation(SidebarTabReorderInteractionMetrics.indicatorAnimation) {
-            dragState.clear()
+            var state = dragState.wrappedValue
+            state.clear()
+            dragState.wrappedValue = state
         }
         SidebarSpaceSwitcherDiagnostics.dragCleared(reason: reason)
     }
