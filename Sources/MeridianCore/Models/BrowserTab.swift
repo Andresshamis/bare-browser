@@ -154,7 +154,7 @@ public enum BrowserTabPlacement: String, Equatable, Sendable {
         case .regular:
             return "Tabs"
         case .pinned:
-            return "Pinned"
+            return "List Essentials"
         case .favorite:
             return "Essentials"
         }

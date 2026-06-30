@@ -19,6 +19,7 @@ public struct BrowserContentView: View {
     private let webViewRegistry: BrowserWebViewRegistry
     private let dataStoreProvider: ProfileWebsiteDataStoreProvider
     private let webContentMouseExclusionRegion: WebContentMouseExclusionRegion?
+    private let openSidebarThemeColorPicker: (SpaceID) -> Void
 
     public init(
         store: BrowserStore,
@@ -27,7 +28,8 @@ public struct BrowserContentView: View {
         webViewRegistry: BrowserWebViewRegistry,
         dataStoreProvider: ProfileWebsiteDataStoreProvider,
         activityPageIsSelected: Binding<Bool> = .constant(false),
-        webContentMouseExclusionRegion: WebContentMouseExclusionRegion? = nil
+        webContentMouseExclusionRegion: WebContentMouseExclusionRegion? = nil,
+        openSidebarThemeColorPicker: @escaping (SpaceID) -> Void = { _ in }
     ) {
         self.store = store
         self.webViewState = webViewState
@@ -36,6 +38,7 @@ public struct BrowserContentView: View {
         self.webViewRegistry = webViewRegistry
         self.dataStoreProvider = dataStoreProvider
         self.webContentMouseExclusionRegion = webContentMouseExclusionRegion
+        self.openSidebarThemeColorPicker = openSidebarThemeColorPicker
     }
 
     public var body: some View {
@@ -299,7 +302,8 @@ public struct BrowserContentView: View {
                     SpaceCustomizationView(
                         store: store,
                         space: space,
-                        profiles: store.persistentProfiles
+                        profiles: store.persistentProfiles,
+                        openThemeColorPicker: openSidebarThemeColorPicker
                     )
                     .id(space.id)
                 } else {
@@ -951,9 +955,9 @@ private struct BrowserSpaceContentPreviewColumn: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         tabSection("Essentials", symbolName: "sparkle", tabs: page.favoriteTabs)
-                        tabSection("Pinned", symbolName: "pin.fill", tabs: page.pinnedTabs)
+                        tabSection("List Essentials", symbolName: "pin.fill", tabs: page.pinnedTabs)
                         folderSection
-                        tabSection("Tabs", symbolName: "rectangle.stack", tabs: page.regularTabs)
+                        tabSection(page.space.name, symbolName: "rectangle.stack", tabs: page.regularTabs)
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .topLeading)

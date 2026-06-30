@@ -1090,6 +1090,7 @@ final class BrowserWebViewSession {
 @MainActor
 public final class BrowserWebViewRegistry: ObservableObject {
     private var sessions: [TabID: BrowserWebViewSession] = [:]
+    @Published private var liveSessionIDs: Set<TabID> = []
     private let capacity: Int
     private var usageSequence: UInt64 = 0
 
@@ -1101,8 +1102,12 @@ public final class BrowserWebViewRegistry: ObservableObject {
         sessions.count
     }
 
+    public var liveSessionTabIDs: Set<TabID> {
+        liveSessionIDs
+    }
+
     public func containsSession(for tabID: TabID) -> Bool {
-        sessions[tabID] != nil
+        liveSessionIDs.contains(tabID)
     }
 
     func session(
@@ -1207,6 +1212,7 @@ public final class BrowserWebViewRegistry: ObservableObject {
             lastUsedSequence: sequence
         )
         sessions[tab.id] = session
+        liveSessionIDs.insert(tab.id)
         if isActive {
             markActive(tab.id)
         }
@@ -1231,6 +1237,7 @@ public final class BrowserWebViewRegistry: ObservableObject {
         for session in closedSessions {
             detach(session.webView)
             sessions.removeValue(forKey: session.tabID)
+            liveSessionIDs.remove(session.tabID)
         }
         markActive(activeTabID)
         enforceCapacity(activeTabID: activeTabID)
@@ -1241,6 +1248,7 @@ public final class BrowserWebViewRegistry: ObservableObject {
             guard let session = sessions.removeValue(forKey: tabID) else {
                 continue
             }
+            liveSessionIDs.remove(tabID)
             detach(session.webView)
         }
     }
@@ -1262,6 +1270,7 @@ public final class BrowserWebViewRegistry: ObservableObject {
         for session in evictionCandidates where sessions.count > capacity {
             detach(session.webView)
             sessions.removeValue(forKey: session.tabID)
+            liveSessionIDs.remove(session.tabID)
         }
     }
 

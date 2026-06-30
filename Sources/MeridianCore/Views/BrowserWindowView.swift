@@ -30,12 +30,14 @@ public struct BrowserWindowView: View {
     @StateObject private var webViewState = WebViewState()
     @StateObject private var webViewRegistry = BrowserWebViewRegistry()
     @StateObject private var contentPresentationState = BrowserContentPresentationState()
+    @StateObject private var sidebarThemeColorSamplerController = SidebarThemeColorSamplerController()
     @AppStorage(BrowserSidebarSizing.widthStorageKey) private var storedSidebarWidth = BrowserSidebarSizing.defaultWidth
     @State private var sidebarResizeStartWidth: CGFloat?
     @State private var sidebarResizeLiveWidth: CGFloat?
     @State private var sidebarChromeTheme: SidebarChromeTheme?
     @State private var autoPresentedDownloadID: UUID?
     @State private var activityPageIsSelected = false
+    @State private var sidebarThemeColorPickerSpaceID: SpaceID?
     @Namespace private var passwordPromptGlassNamespace
     private let dataStoreProvider = ProfileWebsiteDataStoreProvider()
     private let floatingSidebarInset: CGFloat = 8
@@ -86,7 +88,7 @@ public struct BrowserWindowView: View {
             }
             .overlay {
                 if store.isCommandBarPresented {
-                    CommandBarDismissalBackdrop {
+                    CommandBarDismissalBackdrop(sidebarExclusion: commandBarBackdropSidebarExclusion) {
                         store.hideCommandBar()
                     }
                     .zIndex(9)
@@ -97,6 +99,10 @@ public struct BrowserWindowView: View {
                     CommandBarFloatingLayer(store: store, webViewState: webViewState)
                         .zIndex(10)
                 }
+            }
+            .overlay(alignment: sidebarThemeColorPickerAlignment) {
+                sidebarThemeColorPickerLayer
+                    .zIndex(11)
             }
             .overlay {
                 if let request = store.pendingPasswordSaveRequest {
@@ -118,6 +124,13 @@ public struct BrowserWindowView: View {
             }
             .onChange(of: store.pendingDownloadConfirmation?.id) { _, _ in
                 presentPendingDownloadSavePanelIfNeeded()
+            }
+            .onChange(of: store.spaces.map(\.id)) { _, spaceIDs in
+                guard let sidebarThemeColorPickerSpaceID,
+                      !spaceIDs.contains(sidebarThemeColorPickerSpaceID) else {
+                    return
+                }
+                closeSidebarThemeColorPicker()
             }
             .alert(
                 store.pendingURLConfirmation?.confirmationTitle ?? "Open Link?",
@@ -197,10 +210,117 @@ public struct BrowserWindowView: View {
             webViewRegistry: webViewRegistry,
             dataStoreProvider: dataStoreProvider,
             activityPageIsSelected: $activityPageIsSelected,
-            webContentMouseExclusionRegion: webContentMouseExclusionRegion
+            webContentMouseExclusionRegion: webContentMouseExclusionRegion,
+            openSidebarThemeColorPicker: { openSidebarThemeColorPicker(for: $0) }
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    @ViewBuilder
+    private var sidebarThemeColorPickerLayer: some View {
+        if let spaceID = sidebarThemeColorPickerSpaceID,
+           let space = store.spaces.first(where: { $0.id == spaceID }) {
+            SidebarThemeColorPickerPopover(
+                colorHex: space.sidebarAppearance.tintHex(forSpaceColorHex: space.colorHex),
+                settings: sidebarThemeColorSettingsBinding(for: spaceID),
+                samplerController: sidebarThemeColorSamplerController,
+                colorChanged: { colorHex in
+                    updateSidebarThemeColor(colorHex, for: spaceID)
+                },
+                onClose: closeSidebarThemeColorPicker
+            )
+            .id(spaceID)
+            .shadow(color: .black.opacity(0.18), radius: 24, x: 0, y: 14)
+            .padding(.top, 56)
+            .padding(sidebarThemeColorPickerPaddingEdge, sidebarThemeColorPickerHorizontalPadding)
+            .transition(.scale(scale: 0.98, anchor: .top).combined(with: .opacity))
+        }
+    }
+
+    private var sidebarThemeColorPickerAlignment: Alignment {
+        switch store.sidebarRevealEdge {
+        case .left:
+            return .topLeading
+        case .right:
+            return .topTrailing
+        }
+    }
+
+    private var sidebarThemeColorPickerPaddingEdge: Edge.Set {
+        switch store.sidebarRevealEdge {
+        case .left:
+            return .leading
+        case .right:
+            return .trailing
+        }
+    }
+
+    private var sidebarThemeColorPickerHorizontalPadding: CGFloat {
+        sidebarWidth + sidebarOuterInset + 12
+    }
+
+    private func sidebarThemeColorSettingsBinding(for spaceID: SpaceID) -> Binding<SidebarGlassSettings> {
+        Binding {
+            store.spaces.first { $0.id == spaceID }?.sidebarAppearance.base ?? .standard
+        } set: { settings in
+            guard let space = store.spaces.first(where: { $0.id == spaceID }) else {
+                return
+            }
+            var appearance = space.sidebarAppearance
+            appearance.base = settings
+            appearance.pinnedOverride = nil
+            _ = store.customizeSpace(
+                spaceID,
+                name: space.name,
+                symbolName: space.symbolName,
+                colorHex: space.colorHex,
+                profileID: space.profileID,
+                sidebarAppearance: appearance,
+                persistImmediately: false
+            )
+        }
+    }
+
+    private func openSidebarThemeColorPicker(for spaceID: SpaceID) {
+        guard store.spaces.contains(where: { $0.id == spaceID }) else {
+            return
+        }
+
+        if sidebarThemeColorPickerSpaceID != spaceID {
+            sidebarThemeColorSamplerController.cancelSampling()
+        }
+
+        withAnimation(.smooth(duration: 0.16, extraBounce: 0)) {
+            sidebarThemeColorPickerSpaceID = spaceID
+        }
+    }
+
+    private func closeSidebarThemeColorPicker() {
+        sidebarThemeColorSamplerController.cancelSampling()
+        withAnimation(.smooth(duration: 0.14, extraBounce: 0)) {
+            sidebarThemeColorPickerSpaceID = nil
+        }
+    }
+
+    private func updateSidebarThemeColor(_ colorHex: String, for spaceID: SpaceID) {
+        guard let space = store.spaces.first(where: { $0.id == spaceID }) else {
+            return
+        }
+
+        var appearance = space.sidebarAppearance
+        appearance.tintSource = .custom
+        appearance.tintHex = colorHex
+        appearance.pinnedOverride = nil
+        _ = store.customizeSpace(
+            spaceID,
+            name: space.name,
+            symbolName: space.symbolName,
+            colorHex: space.colorHex,
+            profileID: space.profileID,
+            sidebarAppearance: appearance,
+            persistImmediately: false
+        )
     }
 
     private func sidebarOverlay(availableHeight: CGFloat) -> some View {
@@ -262,6 +382,7 @@ public struct BrowserWindowView: View {
                 webViewState: webViewState,
                 presentationState: contentPresentationState,
                 activityPageIsSelected: $activityPageIsSelected,
+                tabHasLiveSession: { webViewRegistry.containsSession(for: $0) },
                 updateSidebarChromeTheme: { sidebarChromeTheme = $0 }
             )
             .foregroundStyle(
@@ -440,6 +561,17 @@ public struct BrowserWindowView: View {
             width: sidebarWidth,
             inset: sidebarOuterInset,
             cornerRadius: sidebarCornerRadii.maximumRadius
+        )
+    }
+
+    private var commandBarBackdropSidebarExclusion: CommandBarBackdropSidebarExclusion? {
+        guard sidebarShouldBeMounted else {
+            return nil
+        }
+
+        return CommandBarBackdropSidebarExclusion(
+            edge: store.sidebarRevealEdge,
+            width: sidebarWidth + sidebarOuterInset
         )
     }
 
@@ -1568,17 +1700,56 @@ private final class BrowserKeyboardShortcutMonitorNSView: NSView {
     }
 }
 
+private struct CommandBarBackdropSidebarExclusion {
+    let edge: SidebarRevealEdge
+    let width: CGFloat
+}
+
 private struct CommandBarDismissalBackdrop: View {
+    let sidebarExclusion: CommandBarBackdropSidebarExclusion?
     let dismiss: @MainActor () -> Void
 
     var body: some View {
+        GeometryReader { proxy in
+            HStack(spacing: 0) {
+                if sidebarExclusion?.edge == .left {
+                    sidebarPassthrough(width: sidebarExclusionWidth(in: proxy.size))
+                }
+
+                dismissalRegion
+
+                if sidebarExclusion?.edge == .right {
+                    sidebarPassthrough(width: sidebarExclusionWidth(in: proxy.size))
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .background {
+                CommandBarEscapeKeyMonitor(dismiss: dismiss)
+                    .allowsHitTesting(false)
+            }
+            .accessibilityHidden(true)
+        }
+    }
+
+    private var dismissalRegion: some View {
         Color.clear
             .contentShape(Rectangle())
             .onTapGesture {
                 dismiss()
             }
-            .background(CommandBarEscapeKeyMonitor(dismiss: dismiss))
-            .accessibilityHidden(true)
+    }
+
+    private func sidebarPassthrough(width: CGFloat) -> some View {
+        Color.clear
+            .frame(width: width)
+            .allowsHitTesting(false)
+    }
+
+    private func sidebarExclusionWidth(in size: CGSize) -> CGFloat {
+        guard let sidebarExclusion else {
+            return 0
+        }
+        return min(max(sidebarExclusion.width, 0), max(size.width, 0))
     }
 }
 
@@ -1604,6 +1775,10 @@ private struct CommandBarEscapeKeyMonitor: NSViewRepresentable {
 private final class CommandBarEscapeKeyMonitorNSView: NSView {
     var dismiss: (@MainActor () -> Void)?
     private var eventMonitor: Any?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()

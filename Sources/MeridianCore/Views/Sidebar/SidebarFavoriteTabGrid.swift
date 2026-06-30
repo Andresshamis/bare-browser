@@ -19,13 +19,15 @@ struct SidebarFavoriteTabGrid: View {
             .padding(.bottom, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .dropDestination(for: String.self) { values, _ in
-                clearDropTargetAfterDrop()
-                guard let draggedTabID = droppedTabID(from: values) else {
-                    return false
-                }
-                return moveTabToPlacement(draggedTabID, .favorite)
-            }
+            .onDrop(
+                of: SidebarTabDragPayload.acceptedTypes,
+                delegate: SidebarFavoriteTabDropDelegate(
+                    tabDropState: $tabDropState,
+                    moveTab: { draggedTabID in
+                        moveTabToPlacement(draggedTabID, .favorite)
+                    }
+                )
+            )
     }
 
     @ViewBuilder
@@ -62,17 +64,20 @@ struct SidebarFavoriteTabGrid: View {
                     close: { closeTab(item.tab) },
                     setPlacement: { placement in setTabPlacement(item.tab.id, placement) },
                     move: { direction in moveTab(item.tab.id, direction) },
+                    canClose: item.hasLiveSession,
                     canMoveUp: item.canMoveUp,
                     canMoveDown: item.canMoveDown,
                     dragStarted: { tabDropState.beginDrag() }
                 )
-                .dropDestination(for: String.self) { values, _ in
-                    clearDropTargetAfterDrop()
-                    guard let draggedTabID = droppedTabID(from: values) else {
-                        return false
-                    }
-                    return moveTabBefore(draggedTabID, .favorite, item.tab.id)
-                }
+                .onDrop(
+                    of: SidebarTabDragPayload.acceptedTypes,
+                    delegate: SidebarFavoriteTabDropDelegate(
+                        tabDropState: $tabDropState,
+                        moveTab: { draggedTabID in
+                            moveTabBefore(draggedTabID, .favorite, item.tab.id)
+                        }
+                    )
+                )
             }
         }
         .frame(
@@ -82,11 +87,44 @@ struct SidebarFavoriteTabGrid: View {
         )
     }
 
-    private func droppedTabID(from values: [String]) -> TabID? {
-        values.first.flatMap(UUID.init(uuidString:))
+    private func clearDropTargetAfterDrop() {
+        var transaction = Transaction()
+        transaction.animation = nil
+        withTransaction(transaction) {
+            tabDropState.finishDrop()
+        }
+    }
+}
+
+private struct SidebarFavoriteTabDropDelegate: DropDelegate {
+    @Binding var tabDropState: SidebarTabDropState
+    let moveTab: (TabID) -> Bool
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: SidebarTabDragPayload.acceptedTypes)
     }
 
-    private func clearDropTargetAfterDrop() {
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        finishDrop()
+
+        SidebarTabDragPayload.loadTabID(from: info) { draggedTabID in
+            guard let draggedTabID else {
+                finishDrop()
+                return
+            }
+
+            _ = moveTab(draggedTabID)
+            finishDrop()
+        }
+
+        return true
+    }
+
+    private func finishDrop() {
         var transaction = Transaction()
         transaction.animation = nil
         withTransaction(transaction) {
@@ -148,6 +186,7 @@ private struct SidebarFavoriteTabTile: View {
     let close: () -> Void
     let setPlacement: (BrowserTabPlacement) -> Void
     let move: (BrowserTabReorderDirection) -> Void
+    let canClose: Bool
     let canMoveUp: Bool
     let canMoveDown: Bool
     let dragStarted: () -> Void
@@ -184,11 +223,11 @@ private struct SidebarFavoriteTabTile: View {
 
             Divider()
 
-            Button("Pin Tab") {
+            Button("Add to List Essentials") {
                 setPlacement(.pinned)
             }
 
-            Button("Move to Tabs") {
+            Button("Remove from Essentials") {
                 setPlacement(.regular)
             }
 
@@ -204,9 +243,11 @@ private struct SidebarFavoriteTabTile: View {
             }
             .disabled(!canMoveDown)
 
-            Divider()
+            if canClose {
+                Divider()
 
-            Button("Close Tab", role: .destructive, action: close)
+                Button("Close Tab", role: .destructive, action: close)
+            }
         }
         .help(helpText)
         .accessibilityLabel("Open \(item.tab.title)")

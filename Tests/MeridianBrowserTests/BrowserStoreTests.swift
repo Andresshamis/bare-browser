@@ -496,6 +496,68 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedSpaceID, firstPersonalSpaceID)
     }
 
+    func testMoveSpaceReordersSidebarSpacesAndPersists() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+        let firstSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let secondSpace = store.createSpace(name: "Second")
+        let thirdSpace = store.createSpace(name: "Third")
+        spy.savedSnapshots.removeAll()
+
+        XCTAssertTrue(store.moveSpace(thirdSpace.id, before: firstSpaceID))
+
+        XCTAssertEqual(store.sidebarSpaces.map(\.id), [thirdSpace.id, firstSpaceID, secondSpace.id])
+        XCTAssertEqual(spy.savedSnapshots.last?.spaces.map(\.id), [thirdSpace.id, firstSpaceID, secondSpace.id])
+    }
+
+    func testMoveSpaceCanMoveToEndOfSidebarSpaces() throws {
+        let store = BrowserStore()
+        let firstSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let secondSpace = store.createSpace(name: "Second")
+        let thirdSpace = store.createSpace(name: "Third")
+
+        XCTAssertTrue(store.moveSpace(firstSpaceID, before: nil))
+
+        XCTAssertEqual(store.sidebarSpaces.map(\.id), [secondSpace.id, thirdSpace.id, firstSpaceID])
+    }
+
+    func testMoveSpacePreservesHiddenSpaceSlots() throws {
+        let publicProfile = BrowserProfile(name: "Personal")
+        let privateProfile = BrowserProfile.privateBrowsing()
+        let firstSpace = BrowserSpace(name: "First", profileID: publicProfile.id)
+        let privateSpace = BrowserSpace(name: "Private", profileID: privateProfile.id)
+        let secondSpace = BrowserSpace(name: "Second", profileID: publicProfile.id)
+        let thirdSpace = BrowserSpace(name: "Third", profileID: publicProfile.id)
+        let store = BrowserStore(
+            snapshot: BrowserSessionSnapshot(
+                profiles: [publicProfile, privateProfile],
+                spaces: [firstSpace, privateSpace, secondSpace, thirdSpace],
+                folders: [],
+                tabs: [],
+                selectedSpaceID: firstSpace.id
+            )
+        )
+
+        XCTAssertTrue(store.moveSpace(thirdSpace.id, before: firstSpace.id))
+
+        XCTAssertEqual(store.sidebarSpaces.map(\.id), [thirdSpace.id, firstSpace.id, secondSpace.id])
+        XCTAssertEqual(store.spaces.map(\.id), [thirdSpace.id, privateSpace.id, firstSpace.id, secondSpace.id])
+    }
+
+    func testMoveSpaceRejectsInvalidAndNoOpMoves() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+        let firstSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        _ = store.createSpace(name: "Second")
+        spy.savedSnapshots.removeAll()
+
+        XCTAssertFalse(store.moveSpace(firstSpaceID, before: firstSpaceID))
+        XCTAssertFalse(store.moveSpace(UUID(), before: firstSpaceID))
+        XCTAssertFalse(store.moveSpace(firstSpaceID, before: UUID()))
+
+        XCTAssertTrue(spy.savedSnapshots.isEmpty)
+    }
+
     func testBeginNewTabShowsCommandBarWithoutCreatingBlankTab() throws {
         let store = BrowserStore()
         let previousSelectedTabID = store.selectedTabID
@@ -517,6 +579,51 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertTrue(store.isCommandBarPresented)
         XCTAssertEqual(store.commandBarMode, .newTab)
         XCTAssertEqual(store.commandBarFocusRequest, previousFocusRequest + 2)
+    }
+
+    func testSelectingSpacePreservesNewTabCommandBar() throws {
+        let store = BrowserStore()
+        let initialSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let targetSpace = store.createSpace(name: "Work")
+        store.selectSpace(initialSpaceID)
+
+        store.beginNewTab()
+        store.selectSpace(targetSpace.id)
+
+        XCTAssertEqual(store.selectedSpaceID, targetSpace.id)
+        XCTAssertTrue(store.isCommandBarPresented)
+        XCTAssertEqual(store.commandBarMode, .newTab)
+    }
+
+    func testNewTabCommandBarSubmissionUsesSelectedTargetSpaceAfterSwitching() throws {
+        let store = BrowserStore()
+        let initialSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let targetSpace = store.createSpace(name: "Work")
+        store.selectSpace(initialSpaceID)
+
+        store.beginNewTab()
+        store.selectSpace(targetSpace.id)
+        store.submitAddressInput("example.com")
+
+        let activeTab = try XCTUnwrap(store.activeTab)
+        XCTAssertEqual(activeTab.parentSpaceID, targetSpace.id)
+        XCTAssertTrue(store.selectedSpace?.regularTabIDs.contains(activeTab.id) ?? false)
+        XCTAssertFalse(store.isCommandBarPresented)
+        XCTAssertEqual(store.commandBarMode, .address)
+    }
+
+    func testSelectingSpaceClosesAddressCommandBar() throws {
+        let store = BrowserStore()
+        let initialSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let targetSpace = store.createSpace(name: "Work")
+        store.selectSpace(initialSpaceID)
+
+        store.showCommandBar()
+        store.selectSpace(targetSpace.id)
+
+        XCTAssertEqual(store.selectedSpaceID, targetSpace.id)
+        XCTAssertFalse(store.isCommandBarPresented)
+        XCTAssertEqual(store.commandBarMode, .address)
     }
 
     func testNewTabAddressSubmissionCreatesSelectedTab() throws {
@@ -1013,6 +1120,38 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertTrue(savedSnapshot.profiles.contains { $0.id == profile.id })
         XCTAssertEqual(savedSnapshot.spaces.count, spaceCount)
         XCTAssertEqual(savedSnapshot.tabs.count, tabCount)
+    }
+
+    func testPersistentProfileWithInitialSpaceCreatesVisibleSelectedSpace() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+
+        let space = store.createPersistentProfileWithInitialSpace(name: "  Work  ")
+        let profile = try XCTUnwrap(store.profiles.first { $0.id == space.profileID })
+
+        XCTAssertEqual(profile.name, "Work")
+        XCTAssertFalse(profile.isEphemeral)
+        XCTAssertNotNil(profile.persistentWebsiteDataStoreID)
+        XCTAssertEqual(space.name, "Work")
+        XCTAssertEqual(store.selectedSpaceID, space.id)
+        XCTAssertNil(store.selectedTabID)
+        XCTAssertTrue(store.sidebarSpaces.contains { $0.id == space.id })
+
+        let savedSnapshot = try XCTUnwrap(spy.savedSnapshots.last)
+        XCTAssertTrue(savedSnapshot.profiles.contains { $0.id == profile.id })
+        XCTAssertTrue(savedSnapshot.spaces.contains { $0.id == space.id })
+    }
+
+    func testCreateProfileCommandCreatesVisibleSelectedSpace() throws {
+        let store = BrowserStore()
+
+        store.perform(.createProfile("Work"))
+
+        let selectedSpace = try XCTUnwrap(store.selectedSpace)
+        let profile = try XCTUnwrap(store.profiles.first { $0.id == selectedSpace.profileID })
+        XCTAssertEqual(profile.name, "Work")
+        XCTAssertEqual(selectedSpace.name, "Work")
+        XCTAssertTrue(store.sidebarSpaces.contains { $0.id == selectedSpace.id })
     }
 
     func testPersistentSnapshotIncludesPersistentProfilesAndExcludesPrivateProfiles() throws {

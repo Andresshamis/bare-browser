@@ -369,6 +369,19 @@ public final class BrowserStore: ObservableObject {
     }
 
     @discardableResult
+    public func createPersistentProfileWithInitialSpace(name: String) -> BrowserSpace {
+        let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedName = cleanedName.isEmpty ? suggestedPersistentProfileName : cleanedName
+        let profile = BrowserProfile(name: resolvedName)
+        let space = BrowserSpace(name: resolvedName, profileID: profile.id)
+        profiles.append(profile)
+        spaces.append(space)
+        selectSpace(space.id)
+        persistSession()
+        return space
+    }
+
+    @discardableResult
     public func createTab(
         title: String? = nil,
         url: URL? = nil,
@@ -474,11 +487,15 @@ public final class BrowserStore: ObservableObject {
         guard let space = spaces.first(where: { $0.id == id }) else {
             return
         }
+        let shouldPreserveCommandBar = isCommandBarPresented && commandBarMode == .newTab
         selectedSpaceID = id
         selectedTabID = space.selectedTabID
             ?? space.favoriteTabIDs.first
             ?? space.pinnedTabIDs.first
             ?? space.regularTabIDs.first
+        if !shouldPreserveCommandBar {
+            hideCommandBar()
+        }
         refreshActivePageSecurityStatus()
         schedulePersistSession()
     }
@@ -776,6 +793,44 @@ public final class BrowserStore: ObservableObject {
         return didMove
     }
 
+    @discardableResult
+    public func moveSpace(_ spaceID: SpaceID, before targetSpaceID: SpaceID?) -> Bool {
+        let visibleSpaceIDs = sidebarSpaces.map(\.id)
+        guard visibleSpaceIDs.contains(spaceID) else {
+            return false
+        }
+
+        if let targetSpaceID {
+            guard targetSpaceID != spaceID,
+                  visibleSpaceIDs.contains(targetSpaceID) else {
+                return false
+            }
+        }
+
+        var reorderedVisibleSpaceIDs = visibleSpaceIDs.filter { $0 != spaceID }
+        let insertionIndex = targetSpaceID.flatMap { reorderedVisibleSpaceIDs.firstIndex(of: $0) }
+            ?? reorderedVisibleSpaceIDs.endIndex
+        reorderedVisibleSpaceIDs.insert(spaceID, at: insertionIndex)
+
+        guard reorderedVisibleSpaceIDs != visibleSpaceIDs else {
+            return false
+        }
+
+        let spacesByID = Dictionary(uniqueKeysWithValues: spaces.map { ($0.id, $0) })
+        let visibleSpaceIDSet = Set(visibleSpaceIDs)
+        var nextVisibleSpaceIndex = 0
+        spaces = spaces.map { space in
+            guard visibleSpaceIDSet.contains(space.id) else {
+                return space
+            }
+
+            defer { nextVisibleSpaceIndex += 1 }
+            return spacesByID[reorderedVisibleSpaceIDs[nextVisibleSpaceIndex]] ?? space
+        }
+        persistSession()
+        return true
+    }
+
     public func toggleSidebar() {
         toggleSidebarLock()
     }
@@ -911,7 +966,7 @@ public final class BrowserStore: ObservableObject {
         case .createFolder(let name):
             _ = createFolder(name: name)
         case .createProfile(let name):
-            _ = createPersistentProfile(name: name)
+            _ = createPersistentProfileWithInitialSpace(name: name)
         case .switchSpace(let id):
             selectSpace(id)
         case .browserAction(let action):

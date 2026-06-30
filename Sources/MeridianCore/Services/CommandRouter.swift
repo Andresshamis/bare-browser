@@ -225,10 +225,10 @@ public struct CommandRouter: Sendable {
         ),
         BrowserActionSuggestion(
             action: .pinTab,
-            title: "Pin Tab",
-            subtitle: "Move selected tab to Pinned",
+            title: "Add to List Essentials",
+            subtitle: "Move selected tab to List Essentials",
             symbolName: "pin",
-            aliases: ["pin", "pin tab", "pin current tab", "move to pinned"]
+            aliases: ["pin", "pin tab", "pin current tab", "move to pinned", "list essentials"]
         ),
         BrowserActionSuggestion(
             action: .addTabToEssentials,

@@ -7,6 +7,7 @@ public struct SidebarTabRow: View {
     private let close: () -> Void
     private let setPlacement: (BrowserTabPlacement) -> Void
     private let move: (BrowserTabReorderDirection) -> Void
+    private let canClose: Bool
     private let canMoveUp: Bool
     private let canMoveDown: Bool
     private let dragStarted: () -> Void
@@ -21,6 +22,7 @@ public struct SidebarTabRow: View {
         close: @escaping () -> Void,
         setPlacement: @escaping (BrowserTabPlacement) -> Void,
         move: @escaping (BrowserTabReorderDirection) -> Void = { _ in },
+        canClose: Bool = false,
         canMoveUp: Bool = false,
         canMoveDown: Bool = false,
         dragStarted: @escaping () -> Void = {}
@@ -31,6 +33,7 @@ public struct SidebarTabRow: View {
         self.close = close
         self.setPlacement = setPlacement
         self.move = move
+        self.canClose = canClose
         self.canMoveUp = canMoveUp
         self.canMoveDown = canMoveDown
         self.dragStarted = dragStarted
@@ -54,15 +57,17 @@ public struct SidebarTabRow: View {
                     .frame(width: 14, height: 14)
             }
 
-            Button(action: close) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .frame(width: 18, height: 18)
+            if canClose {
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+                .opacity(isHovered || isSelected ? 1 : 0)
+                .help("Close tab")
+                .accessibilityLabel("Close \(tab.title)")
             }
-            .buttonStyle(.plain)
-            .opacity(isHovered || isSelected ? 1 : 0)
-            .help("Close tab")
-            .accessibilityLabel("Close \(tab.title)")
         }
         .padding(.leading, 6)
         .padding(.trailing, 4)
@@ -84,12 +89,12 @@ public struct SidebarTabRow: View {
             }
             .disabled(tab.isFavorite && tab.parentFolderID == nil)
 
-            Button("Pin Tab") {
+            Button("Add to List Essentials") {
                 setPlacement(.pinned)
             }
             .disabled(tab.isPinned && tab.parentFolderID == nil)
 
-            Button("Move to Tabs") {
+            Button(removePlacementTitle) {
                 setPlacement(.regular)
             }
             .disabled(!tab.isPinned && !tab.isFavorite && tab.parentFolderID == nil)
@@ -106,9 +111,11 @@ public struct SidebarTabRow: View {
             }
             .disabled(!canMoveDown)
 
-            Divider()
+            if canClose {
+                Divider()
 
-            Button("Close Tab", role: .destructive, action: close)
+                Button("Close Tab", role: .destructive, action: close)
+            }
         }
         .accessibilityLabel(tab.title)
     }
@@ -160,5 +167,17 @@ public struct SidebarTabRow: View {
             return "pin"
         }
         return "globe"
+    }
+
+    private var removePlacementTitle: String {
+        if tab.isFavorite && tab.parentFolderID == nil {
+            return "Remove from Essentials"
+        }
+
+        if tab.isPinned && tab.parentFolderID == nil {
+            return "Remove from List Essentials"
+        }
+
+        return "Move to Tabs"
     }
 }

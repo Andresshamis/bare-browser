@@ -5,14 +5,18 @@ enum SidebarTabReorderInteractionMetrics {
     static let animation = Animation.smooth(duration: 0.18, extraBounce: 0)
     static let indicatorAnimation = Animation.smooth(duration: 0.12, extraBounce: 0)
     static let rowDropMidlineY: CGFloat = 14
+    static let dropSlotHitHeight: CGFloat = 10
+    static let emptySectionDropSlotHitHeight: CGFloat = 34
 }
 
 struct SidebarTabDropState: Equatable {
     var activeSlotID: String?
+    var isDragging = false
     var suppressTargetsUntilNextDrag = false
 
     mutating func beginDrag() {
         activeSlotID = nil
+        isDragging = true
         suppressTargetsUntilNextDrag = false
     }
 
@@ -34,6 +38,7 @@ struct SidebarTabDropState: Equatable {
 
     mutating func finishDrop() {
         activeSlotID = nil
+        isDragging = false
         suppressTargetsUntilNextDrag = true
     }
 }
@@ -42,10 +47,31 @@ struct SidebarTabDropSlot: View {
     let slotID: String
     let resetToken: String
     @Binding var dropState: SidebarTabDropState
+    let hitHeight: CGFloat
     let moveTab: (TabID) -> Bool
+
+    init(
+        slotID: String,
+        resetToken: String,
+        dropState: Binding<SidebarTabDropState>,
+        hitHeight: CGFloat = SidebarTabReorderInteractionMetrics.dropSlotHitHeight,
+        moveTab: @escaping (TabID) -> Bool
+    ) {
+        self.slotID = slotID
+        self.resetToken = resetToken
+        self._dropState = dropState
+        self.hitHeight = hitHeight
+        self.moveTab = moveTab
+    }
 
     private var isTargeted: Bool {
         dropState.activeSlotID == slotID && !dropState.suppressTargetsUntilNextDrag
+    }
+
+    private var showsIdleDropAffordance: Bool {
+        dropState.isDragging &&
+            !dropState.suppressTargetsUntilNextDrag &&
+            hitHeight > SidebarTabReorderInteractionMetrics.dropSlotHitHeight
     }
 
     var body: some View {
@@ -53,12 +79,13 @@ struct SidebarTabDropSlot: View {
             .frame(height: 2)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 10)
-            .frame(height: 10)
+            .frame(height: hitHeight)
             .frame(maxWidth: .infinity)
-            .opacity(isTargeted ? 1 : 0)
+            .opacity(isTargeted ? 1 : showsIdleDropAffordance ? 0.28 : 0)
             .scaleEffect(x: isTargeted ? 1 : 0.88, anchor: .leading)
             .contentShape(Rectangle())
             .animation(SidebarTabReorderInteractionMetrics.indicatorAnimation, value: isTargeted)
+            .animation(SidebarTabReorderInteractionMetrics.indicatorAnimation, value: showsIdleDropAffordance)
             .onDrop(
                 of: SidebarTabDragPayload.acceptedTypes,
                 delegate: SidebarTabDropSlotDelegate(
@@ -126,11 +153,15 @@ struct SidebarTabDropRegion<Content: View>: View {
     }
 }
 
-private enum SidebarTabDragPayload {
+enum SidebarTabDragPayload {
     static let acceptedTypes: [UTType] = [.plainText, .text]
 
     static func loadTabID(from info: DropInfo, completion: @escaping @MainActor (TabID?) -> Void) {
-        guard let provider = info.itemProviders(for: acceptedTypes).first else {
+        loadTabID(from: info.itemProviders(for: acceptedTypes), completion: completion)
+    }
+
+    static func loadTabID(from providers: [NSItemProvider], completion: @escaping @MainActor (TabID?) -> Void) {
+        guard let provider = providers.first else {
             Task { @MainActor in
                 completion(nil)
             }
