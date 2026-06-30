@@ -142,6 +142,24 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeDescription</key>
+      <string>Bare Browser Sidebar Space Identifier</string>
+      <key>UTTypeIdentifier</key>
+      <string>com.meridianbrowser.sidebar-space-id</string>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.mime-type</key>
+        <string>application/x-bare-browser-sidebar-space-id</string>
+      </dict>
+    </dict>
+  </array>
 </dict>
 </plist>
 PLIST

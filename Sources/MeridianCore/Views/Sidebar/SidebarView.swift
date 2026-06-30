@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -23,6 +24,12 @@ extension EnvironmentValues {
 }
 
 private let sidebarLockControlAnimation = Animation.smooth(duration: 0.24, extraBounce: 0)
+#if DEBUG
+private let sidebarSpaceSwitcherLogger = Logger(
+    subsystem: "app.barebrowser.BareBrowser",
+    category: "SidebarSpaceSwitcher"
+)
+#endif
 
 private enum SidebarHeaderMetrics {
     static let trafficLightEdgeInset: CGFloat = 12
@@ -50,6 +57,15 @@ enum SidebarSpaceSwitcherDropTarget: Equatable {
     case before(SpaceID)
     case tail
 
+    var slotID: String {
+        switch self {
+        case .before(let spaceID):
+            return "before-\(spaceID.uuidString)"
+        case .tail:
+            return "tail"
+        }
+    }
+
     var targetSpaceID: SpaceID? {
         switch self {
         case .before(let spaceID):
@@ -61,6 +77,10 @@ enum SidebarSpaceSwitcherDropTarget: Equatable {
 }
 
 enum SidebarSpaceSwitcherLayout {
+    static func insertionTargets(for spaceIDs: [SpaceID]) -> [SidebarSpaceSwitcherDropTarget] {
+        spaceIDs.map(SidebarSpaceSwitcherDropTarget.before) + [.tail]
+    }
+
     static func target(for locationX: CGFloat, spaceIDs: [SpaceID]) -> SidebarSpaceSwitcherDropTarget? {
         guard !spaceIDs.isEmpty else {
             return nil
@@ -100,6 +120,87 @@ enum SidebarSpaceSwitcherLayout {
     }
 }
 
+struct SidebarSpaceSwitcherDragState: Equatable {
+    static let cancellationDelayNanoseconds: UInt64 = 4_000_000_000
+
+    var activeTarget: SidebarSpaceSwitcherDropTarget?
+    var isDragging = false
+    var generation = 0
+
+    @discardableResult
+    mutating func beginDrag() -> Int {
+        generation += 1
+        activeTarget = nil
+        isDragging = true
+        return generation
+    }
+
+    @discardableResult
+    mutating func target(_ target: SidebarSpaceSwitcherDropTarget) -> Int {
+        if !isDragging {
+            generation += 1
+            isDragging = true
+        }
+
+        activeTarget = target
+        return generation
+    }
+
+    mutating func clear() {
+        guard isDragging || activeTarget != nil else {
+            return
+        }
+
+        generation += 1
+        activeTarget = nil
+        isDragging = false
+    }
+
+    @discardableResult
+    mutating func clearIfCurrentGeneration(_ expectedGeneration: Int) -> Bool {
+        guard generation == expectedGeneration else {
+            return false
+        }
+
+        clear()
+        return true
+    }
+}
+
+enum SidebarSpaceSwitcherDiagnostics {
+    static func dragStarted(_ spaceID: SpaceID) {
+        #if DEBUG
+        sidebarSpaceSwitcherLogger.debug("space drag started id=\(spaceID.uuidString, privacy: .public)")
+        #endif
+    }
+
+    static func validateDrop(_ isValid: Bool, spaceCount: Int) {
+        #if DEBUG
+        sidebarSpaceSwitcherLogger.debug("space drop validation valid=\(isValid, privacy: .public) spaceCount=\(spaceCount, privacy: .public)")
+        #endif
+    }
+
+    static func targetUpdated(_ target: SidebarSpaceSwitcherDropTarget) {
+        #if DEBUG
+        sidebarSpaceSwitcherLogger.debug("space drop target updated target=\(target.slotID, privacy: .public)")
+        #endif
+    }
+
+    static func dropCompleted(draggedSpaceID: SpaceID?, target: SidebarSpaceSwitcherDropTarget?, didMove: Bool) {
+        #if DEBUG
+        let draggedID = draggedSpaceID?.uuidString ?? "nil"
+        let targetID = target?.slotID ?? "nil"
+        sidebarSpaceSwitcherLogger.debug("space drop completed dragged=\(draggedID, privacy: .public) target=\(targetID, privacy: .public) didMove=\(didMove, privacy: .public)")
+        #endif
+    }
+
+    static func dragCleared(reason: String) {
+        #if DEBUG
+        sidebarSpaceSwitcherLogger.debug("space drag cleared reason=\(reason, privacy: .public)")
+        #endif
+    }
+}
+
 public struct SidebarView: View {
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var webViewState: WebViewState
@@ -108,7 +209,7 @@ public struct SidebarView: View {
     @State private var window: NSWindow?
     @State private var previewedSpaceID: SpaceID?
     @State private var pagerNavigationRequest: SidebarSpacePagerNavigationRequest?
-    @State private var targetedSpaceDrop: SidebarSpaceSwitcherDropTarget?
+    @State private var spaceSwitcherDragState = SidebarSpaceSwitcherDragState()
     private let tabHasLiveSession: @MainActor (TabID) -> Bool
     private let updateSidebarChromeTheme: (SidebarChromeTheme?) -> Void
     @Environment(\.colorScheme) private var colorScheme
@@ -277,13 +378,19 @@ public struct SidebarView: View {
                 .help("New space")
             }
             .overlay(alignment: .leading) {
-                if let targetedSpaceDrop,
-                   let indicatorX = SidebarSpaceSwitcherLayout.indicatorX(
-                    for: targetedSpaceDrop,
-                    spaceIDs: sidebarSpaceIDs
-                   ) {
-                    spaceSwitcherDropIndicator
-                        .offset(x: indicatorX - 1.5)
+                ForEach(
+                    SidebarSpaceSwitcherLayout.insertionTargets(for: sidebarSpaceIDs),
+                    id: \.slotID
+                ) { target in
+                    if spaceSwitcherDragState.isDragging,
+                       let indicatorX = SidebarSpaceSwitcherLayout.indicatorX(
+                        for: target,
+                        spaceIDs: sidebarSpaceIDs
+                       ) {
+                        let isActive = spaceSwitcherDragState.activeTarget == target
+                        spaceSwitcherDropIndicator(isActive: isActive)
+                            .offset(x: indicatorX - (isActive ? 1.5 : 1))
+                    }
                 }
             }
             .contentShape(Rectangle())
@@ -291,7 +398,8 @@ public struct SidebarView: View {
                 of: SidebarSpaceDragPayload.acceptedTypes,
                 delegate: SidebarSpaceSwitcherRowDropDelegate(
                     spaceIDs: sidebarSpaceIDs,
-                    activeTarget: $targetedSpaceDrop
+                    dragState: $spaceSwitcherDragState,
+                    scheduleDragCancellation: scheduleSpaceSwitcherDragCancellation
                 ) { draggedSpaceID, targetSpaceID in
                     withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
                         store.moveSpace(draggedSpaceID, before: targetSpaceID)
@@ -316,7 +424,8 @@ public struct SidebarView: View {
         .help(space.name)
         .accessibilityLabel(space.name)
         .onDrag {
-            SidebarSpaceDragPayload.itemProvider(for: space.id)
+            beginSpaceSwitcherDrag(space.id)
+            return SidebarSpaceDragPayload.itemProvider(for: space.id)
         } preview: {
             SpaceSwitcherButtonLabel(
                 space: space,
@@ -350,16 +459,48 @@ public struct SidebarView: View {
         }
     }
 
-    private var spaceSwitcherDropIndicator: some View {
+    private func spaceSwitcherDropIndicator(isActive: Bool) -> some View {
         Capsule()
-            .fill(Color.accentColor)
-            .frame(width: 3, height: SidebarHeaderMetrics.spaceSwitcherButtonSize + 2)
+            .fill(Color.accentColor.opacity(isActive ? 0.95 : 0.32))
+            .frame(
+                width: isActive ? 3 : 2,
+                height: isActive
+                    ? SidebarHeaderMetrics.spaceSwitcherButtonSize + 2
+                    : SidebarHeaderMetrics.spaceSwitcherButtonSize - 8
+            )
             .overlay {
                 Capsule()
-                    .stroke(.white.opacity(0.55), lineWidth: 0.5)
+                    .stroke(.white.opacity(isActive ? 0.55 : 0.25), lineWidth: 0.5)
             }
-            .shadow(color: .accentColor.opacity(0.45), radius: 3)
+            .shadow(color: .accentColor.opacity(isActive ? 0.45 : 0), radius: 3)
             .allowsHitTesting(false)
+            .animation(SidebarTabReorderInteractionMetrics.indicatorAnimation, value: isActive)
+    }
+
+    private func beginSpaceSwitcherDrag(_ spaceID: SpaceID) {
+        let generation: Int = withAnimation(SidebarTabReorderInteractionMetrics.indicatorAnimation) {
+            spaceSwitcherDragState.beginDrag()
+        }
+        SidebarSpaceSwitcherDiagnostics.dragStarted(spaceID)
+        scheduleSpaceSwitcherDragCancellation(generation)
+    }
+
+    private func scheduleSpaceSwitcherDragCancellation(_ generation: Int) {
+        Task {
+            try? await Task.sleep(nanoseconds: SidebarSpaceSwitcherDragState.cancellationDelayNanoseconds)
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await MainActor.run {
+                let didClear = withAnimation(SidebarTabReorderInteractionMetrics.indicatorAnimation) {
+                    spaceSwitcherDragState.clearIfCurrentGeneration(generation)
+                }
+                if didClear {
+                    SidebarSpaceSwitcherDiagnostics.dragCleared(reason: "timeout")
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -868,7 +1009,13 @@ enum SidebarSpaceDragPayload {
     }
 
     static func loadSpaceID(from info: DropInfo, completion: @escaping @MainActor (SpaceID?) -> Void) {
-        guard let provider = info.itemProviders(for: acceptedTypes).first else {
+        loadSpaceID(from: info.itemProviders(for: acceptedTypes), completion: completion)
+    }
+
+    static func loadSpaceID(from providers: [NSItemProvider], completion: @escaping @MainActor (SpaceID?) -> Void) {
+        guard let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(type.identifier)
+        }) else {
             Task { @MainActor in
                 completion(nil)
             }
@@ -885,11 +1032,14 @@ enum SidebarSpaceDragPayload {
 
 private struct SidebarSpaceSwitcherRowDropDelegate: DropDelegate {
     let spaceIDs: [SpaceID]
-    @Binding var activeTarget: SidebarSpaceSwitcherDropTarget?
+    @Binding var dragState: SidebarSpaceSwitcherDragState
+    let scheduleDragCancellation: (Int) -> Void
     let moveSpace: (SpaceID, SpaceID?) -> Bool
 
     func validateDrop(info: DropInfo) -> Bool {
-        !spaceIDs.isEmpty && info.hasItemsConforming(to: SidebarSpaceDragPayload.acceptedTypes)
+        let isValid = !spaceIDs.isEmpty && info.hasItemsConforming(to: SidebarSpaceDragPayload.acceptedTypes)
+        SidebarSpaceSwitcherDiagnostics.validateDrop(isValid, spaceCount: spaceIDs.count)
+        return isValid
     }
 
     func dropEntered(info: DropInfo) {
@@ -902,25 +1052,30 @@ private struct SidebarSpaceSwitcherRowDropDelegate: DropDelegate {
     }
 
     func dropExited(info: DropInfo) {
-        clearTarget()
+        clearDragState(reason: "drop exited")
     }
 
     func performDrop(info: DropInfo) -> Bool {
         guard let target = target(for: info) else {
-            clearTarget()
+            clearDragState(reason: "missing target")
+            SidebarSpaceSwitcherDiagnostics.dropCompleted(draggedSpaceID: nil, target: nil, didMove: false)
             return false
         }
 
-        clearTarget()
+        clearDragState(reason: "perform drop")
 
         SidebarSpaceDragPayload.loadSpaceID(from: info) { draggedSpaceID in
             guard let draggedSpaceID else {
-                clearTarget()
+                SidebarSpaceSwitcherDiagnostics.dropCompleted(draggedSpaceID: nil, target: target, didMove: false)
                 return
             }
 
-            _ = moveSpace(draggedSpaceID, target.targetSpaceID)
-            clearTarget()
+            let didMove = moveSpace(draggedSpaceID, target.targetSpaceID)
+            SidebarSpaceSwitcherDiagnostics.dropCompleted(
+                draggedSpaceID: draggedSpaceID,
+                target: target,
+                didMove: didMove
+            )
         }
 
         return true
@@ -932,27 +1087,32 @@ private struct SidebarSpaceSwitcherRowDropDelegate: DropDelegate {
 
     private func updateTarget(for info: DropInfo) {
         guard let target = target(for: info) else {
-            clearTarget()
+            clearDragState(reason: "missing target")
             return
         }
 
-        guard activeTarget != target else {
+        guard dragState.activeTarget != target else {
+            scheduleDragCancellation(dragState.generation)
             return
         }
 
+        var generation = dragState.generation
         withAnimation(SidebarTabReorderInteractionMetrics.indicatorAnimation) {
-            activeTarget = target
+            generation = dragState.target(target)
         }
+        SidebarSpaceSwitcherDiagnostics.targetUpdated(target)
+        scheduleDragCancellation(generation)
     }
 
-    private func clearTarget() {
-        guard activeTarget != nil else {
+    private func clearDragState(reason: String) {
+        guard dragState.isDragging || dragState.activeTarget != nil else {
             return
         }
 
         withAnimation(SidebarTabReorderInteractionMetrics.indicatorAnimation) {
-            activeTarget = nil
+            dragState.clear()
         }
+        SidebarSpaceSwitcherDiagnostics.dragCleared(reason: reason)
     }
 }
 

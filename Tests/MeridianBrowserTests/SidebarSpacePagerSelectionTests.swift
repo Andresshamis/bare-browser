@@ -21,17 +21,37 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         let spaceID = UUID()
         let provider = SidebarSpaceDragPayload.itemProvider(for: spaceID)
         let loadedPayload = expectation(description: "Loaded space drag payload")
-        var loadedSpaceID: SpaceID?
 
         XCTAssertTrue(provider.hasItemConformingToTypeIdentifier(SidebarSpaceDragPayload.type.identifier))
 
         provider.loadDataRepresentation(forTypeIdentifier: SidebarSpaceDragPayload.type.identifier) { data, _ in
-            loadedSpaceID = data.flatMap(SidebarSpaceDragPayload.spaceID(from:))
+            XCTAssertEqual(data.flatMap(SidebarSpaceDragPayload.spaceID(from:)), spaceID)
             loadedPayload.fulfill()
         }
         wait(for: [loadedPayload], timeout: 1)
+    }
 
-        XCTAssertEqual(loadedSpaceID, spaceID)
+    func testSpaceDragPayloadIgnoresPlainTextProviders() {
+        let spaceID = UUID()
+        let provider = NSItemProvider(object: spaceID.uuidString as NSString)
+        let loadedPayload = expectation(description: "Rejected plain text space payload")
+
+        SidebarSpaceDragPayload.loadSpaceID(from: [provider]) { spaceID in
+            XCTAssertNil(spaceID)
+            loadedPayload.fulfill()
+        }
+        wait(for: [loadedPayload], timeout: 1)
+    }
+
+    func testSpaceSwitcherLayoutGeneratesInsertionTargetsForEachSpaceAndTail() {
+        let firstID = UUID()
+        let secondID = UUID()
+        let thirdID = UUID()
+
+        XCTAssertEqual(
+            SidebarSpaceSwitcherLayout.insertionTargets(for: [firstID, secondID, thirdID]),
+            [.before(firstID), .before(secondID), .before(thirdID), .tail]
+        )
     }
 
     func testSpaceSwitcherLayoutTargetsInsertionSlotsFromPointerPosition() {
@@ -88,6 +108,36 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         XCTAssertLessThan(firstIndicatorX, secondIndicatorX)
         XCTAssertLessThan(secondIndicatorX, thirdIndicatorX)
         XCTAssertLessThan(thirdIndicatorX, tailIndicatorX)
+    }
+
+    func testSpaceSwitcherDragStateBeginsTargetsAndClears() {
+        let targetID = UUID()
+        var state = SidebarSpaceSwitcherDragState()
+
+        let generation = state.beginDrag()
+        XCTAssertTrue(state.isDragging)
+        XCTAssertNil(state.activeTarget)
+
+        XCTAssertEqual(state.target(.before(targetID)), generation)
+        XCTAssertEqual(state.activeTarget, .before(targetID))
+        XCTAssertTrue(state.isDragging)
+
+        state.clear()
+        XCTAssertFalse(state.isDragging)
+        XCTAssertNil(state.activeTarget)
+        XCTAssertGreaterThan(state.generation, generation)
+    }
+
+    func testSpaceSwitcherDragStateIgnoresStaleCancellationGeneration() {
+        var state = SidebarSpaceSwitcherDragState()
+        let staleGeneration = state.beginDrag()
+        let currentGeneration = state.beginDrag()
+
+        XCTAssertFalse(state.clearIfCurrentGeneration(staleGeneration))
+        XCTAssertTrue(state.isDragging)
+
+        XCTAssertTrue(state.clearIfCurrentGeneration(currentGeneration))
+        XCTAssertFalse(state.isDragging)
     }
 
     func testDoesNotCommitNilScrollPosition() {
