@@ -64,7 +64,7 @@ struct SidebarFavoriteTabGrid: View {
                     close: { closeTab(item.tab) },
                     setPlacement: { placement in setTabPlacement(item.tab.id, placement) },
                     move: { direction in moveTab(item.tab.id, direction) },
-                    canClose: item.hasLiveSession,
+                    canClose: item.canClose,
                     canMoveUp: item.canMoveUp,
                     canMoveDown: item.canMoveDown,
                     dragStarted: { tabDropState.beginDrag() }

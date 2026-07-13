@@ -31,47 +31,6 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         wait(for: [loadedPayload], timeout: 1)
     }
 
-    func testSpaceDragPasteboardTypeMatchesUTTypeIdentifier() {
-        XCTAssertEqual(
-            SidebarSpaceDragPayload.pasteboardType.rawValue,
-            SidebarSpaceDragPayload.type.identifier
-        )
-    }
-
-    func testSpaceDragPayloadReadsSpaceIDFromPasteboard() {
-        let spaceID = UUID()
-        let pasteboard = NSPasteboard.withUniqueName()
-        defer { pasteboard.releaseGlobally() }
-
-        pasteboard.clearContents()
-        pasteboard.setData(SidebarSpaceDragPayload.data(for: spaceID), forType: SidebarSpaceDragPayload.pasteboardType)
-
-        XCTAssertEqual(SidebarSpaceDragPayload.spaceID(from: pasteboard), spaceID)
-    }
-
-    func testSpaceDragPayloadRejectsMissingOrInvalidPasteboardData() {
-        let pasteboard = NSPasteboard.withUniqueName()
-        defer { pasteboard.releaseGlobally() }
-
-        pasteboard.clearContents()
-        XCTAssertNil(SidebarSpaceDragPayload.spaceID(from: pasteboard))
-
-        pasteboard.setData(Data("not-a-space-id".utf8), forType: SidebarSpaceDragPayload.pasteboardType)
-        XCTAssertNil(SidebarSpaceDragPayload.spaceID(from: pasteboard))
-    }
-
-    func testSpaceDragPayloadIgnoresPlainTextProviders() {
-        let spaceID = UUID()
-        let provider = NSItemProvider(object: spaceID.uuidString as NSString)
-        let loadedPayload = expectation(description: "Rejected plain text space payload")
-
-        SidebarSpaceDragPayload.loadSpaceID(from: [provider]) { spaceID in
-            XCTAssertNil(spaceID)
-            loadedPayload.fulfill()
-        }
-        wait(for: [loadedPayload], timeout: 1)
-    }
-
     func testSpaceSwitcherLayoutGeneratesInsertionTargetsForEachSpaceAndTail() {
         let firstID = UUID()
         let secondID = UUID()
@@ -107,6 +66,20 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         )
     }
 
+    func testSpaceSwitcherLayoutIdentifiesSpaceIconsOnly() {
+        let firstID = UUID()
+        let secondID = UUID()
+        let thirdID = UUID()
+        let spaceIDs = [firstID, secondID, thirdID]
+
+        XCTAssertNil(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 12, y: 13), spaceIDs: spaceIDs))
+        XCTAssertEqual(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 32, y: 13), spaceIDs: spaceIDs), firstID)
+        XCTAssertEqual(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 64, y: 13), spaceIDs: spaceIDs), secondID)
+        XCTAssertEqual(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 96, y: 13), spaceIDs: spaceIDs), thirdID)
+        XCTAssertNil(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 128, y: 13), spaceIDs: spaceIDs))
+        XCTAssertNil(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 64, y: -1), spaceIDs: spaceIDs))
+    }
+
     func testSpaceSwitcherLayoutIgnoresEmptyOrUnknownTargets() {
         let spaceID = UUID()
 
@@ -139,34 +112,24 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         XCTAssertLessThan(thirdIndicatorX, tailIndicatorX)
     }
 
-    func testSpaceSwitcherDragStateBeginsTargetsAndClears() {
+    func testSpaceSwitcherDragStateTargetsAndClears() {
+        let draggedID = UUID()
         let targetID = UUID()
         var state = SidebarSpaceSwitcherDragState()
 
-        let generation = state.beginDrag()
-        XCTAssertTrue(state.isDragging)
-        XCTAssertNil(state.activeTarget)
+        state.target(.before(targetID), dragging: draggedID, locationX: 64)
 
-        XCTAssertEqual(state.target(.before(targetID)), generation)
-        XCTAssertEqual(state.activeTarget, .before(targetID))
         XCTAssertTrue(state.isDragging)
+        XCTAssertEqual(state.draggedSpaceID, draggedID)
+        XCTAssertEqual(state.activeTarget, .before(targetID))
+        XCTAssertEqual(state.locationX, 64)
 
         state.clear()
+
         XCTAssertFalse(state.isDragging)
+        XCTAssertNil(state.draggedSpaceID)
         XCTAssertNil(state.activeTarget)
-        XCTAssertGreaterThan(state.generation, generation)
-    }
-
-    func testSpaceSwitcherDragStateIgnoresStaleCancellationGeneration() {
-        var state = SidebarSpaceSwitcherDragState()
-        let staleGeneration = state.beginDrag()
-        let currentGeneration = state.beginDrag()
-
-        XCTAssertFalse(state.clearIfCurrentGeneration(staleGeneration))
-        XCTAssertTrue(state.isDragging)
-
-        XCTAssertTrue(state.clearIfCurrentGeneration(currentGeneration))
-        XCTAssertFalse(state.isDragging)
+        XCTAssertNil(state.locationX)
     }
 
     func testDoesNotCommitNilScrollPosition() {
@@ -718,6 +681,60 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
 
         XCTAssertEqual(page.favoriteTabs.first?.hasLiveSession, false)
         XCTAssertEqual(page.regularTabs.first?.hasLiveSession, true)
+    }
+
+    func testSnapshotBuilderKeepsTabsClosableWithoutLiveSessions() throws {
+        let profileID = UUID()
+        var space = BrowserSpace(name: "Work", profileID: profileID)
+        var folder = BrowserFolder(name: "Tools", parentSpaceID: space.id)
+        let favoriteTab = BrowserTab(
+            title: "Essential",
+            parentSpaceID: space.id,
+            isFavorite: true,
+            profileID: profileID
+        )
+        let pinnedPasswordTab = BrowserTab(
+            title: "Passwords",
+            content: .passwordManager,
+            parentSpaceID: space.id,
+            isPinned: true,
+            profileID: profileID
+        )
+        let folderCustomizerTab = BrowserTab(
+            title: "Customize Space",
+            content: .spaceCustomization(space.id),
+            parentSpaceID: space.id,
+            parentFolderID: folder.id,
+            profileID: profileID
+        )
+        let regularTab = BrowserTab(
+            title: "Restored",
+            parentSpaceID: space.id,
+            profileID: profileID
+        )
+
+        folder.tabIDs = [folderCustomizerTab.id]
+        space.favoriteTabIDs = [favoriteTab.id]
+        space.pinnedTabIDs = [pinnedPasswordTab.id]
+        space.folderIDs = [folder.id]
+        space.regularTabIDs = [regularTab.id]
+
+        let pages = SidebarSpacePageSnapshotBuilder.spacePages(
+            activeSpaces: [space],
+            folders: [folder],
+            tabs: [favoriteTab, pinnedPasswordTab, folderCustomizerTab, regularTab],
+            liveSessionTabIDs: []
+        )
+        let page = try XCTUnwrap(pages.first)
+
+        XCTAssertEqual(page.favoriteTabs.first?.canClose, true)
+        XCTAssertEqual(page.favoriteTabs.first?.hasLiveSession, false)
+        XCTAssertEqual(page.pinnedTabs.first?.canClose, true)
+        XCTAssertEqual(page.pinnedTabs.first?.hasLiveSession, false)
+        XCTAssertEqual(page.folders.first?.tabs.first?.canClose, true)
+        XCTAssertEqual(page.folders.first?.tabs.first?.hasLiveSession, false)
+        XCTAssertEqual(page.regularTabs.first?.canClose, true)
+        XCTAssertEqual(page.regularTabs.first?.hasLiveSession, false)
     }
 
     func testShowsEmptyRegularDropSectionDuringDragWhenOnlyEssentialsHaveTabs() throws {

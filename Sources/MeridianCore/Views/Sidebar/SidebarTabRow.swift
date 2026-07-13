@@ -22,7 +22,7 @@ public struct SidebarTabRow: View {
         close: @escaping () -> Void,
         setPlacement: @escaping (BrowserTabPlacement) -> Void,
         move: @escaping (BrowserTabReorderDirection) -> Void = { _ in },
-        canClose: Bool = false,
+        canClose: Bool = true,
         canMoveUp: Bool = false,
         canMoveDown: Bool = false,
         dragStarted: @escaping () -> Void = {}
