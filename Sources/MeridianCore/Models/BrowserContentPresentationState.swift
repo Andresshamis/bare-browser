@@ -7,9 +7,17 @@ public final class BrowserContentPresentationState: ObservableObject {
     @Published public private(set) var activeContentTabID: TabID?
     @Published public private(set) var snapshotHandoffTabID: TabID?
     private var snapshotHandoffID: UUID?
+    private let snapshotHandoffExpirationNanoseconds: UInt64
+    private var snapshotHandoffExpirationTask: Task<Void, Never>?
     private var tabSnapshots: [TabID: NSImage] = [:]
 
-    public init() {}
+    public init(snapshotHandoffExpirationNanoseconds: UInt64 = 1_200_000_000) {
+        self.snapshotHandoffExpirationNanoseconds = snapshotHandoffExpirationNanoseconds
+    }
+
+    deinit {
+        snapshotHandoffExpirationTask?.cancel()
+    }
 
     public func setPreviewTabID(_ tabID: TabID?) {
         guard previewTabID != tabID else {
@@ -46,6 +54,7 @@ public final class BrowserContentPresentationState: ObservableObject {
         let handoffID = UUID()
         snapshotHandoffID = handoffID
         snapshotHandoffTabID = tabID
+        scheduleSnapshotHandoffExpiration(handoffID, tabID: tabID)
         return handoffID
     }
 
@@ -67,6 +76,8 @@ public final class BrowserContentPresentationState: ObservableObject {
     }
 
     public func clearSnapshotHandoff() {
+        snapshotHandoffExpirationTask?.cancel()
+        snapshotHandoffExpirationTask = nil
         snapshotHandoffID = nil
         snapshotHandoffTabID = nil
     }
@@ -97,6 +108,18 @@ public final class BrowserContentPresentationState: ObservableObject {
         if let snapshotHandoffTabID,
            !tabIDs.contains(snapshotHandoffTabID) {
             clearSnapshotHandoff()
+        }
+    }
+
+    private func scheduleSnapshotHandoffExpiration(_ handoffID: UUID, tabID: TabID) {
+        snapshotHandoffExpirationTask?.cancel()
+        snapshotHandoffExpirationTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: self?.snapshotHandoffExpirationNanoseconds ?? 0)
+            guard !Task.isCancelled else {
+                return
+            }
+
+            self?.completeSnapshotHandoff(handoffID, for: tabID)
         }
     }
 }

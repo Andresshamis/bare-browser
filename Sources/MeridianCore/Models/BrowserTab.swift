@@ -3,6 +3,7 @@ import Foundation
 public enum BrowserTabContent: Hashable, Codable, Sendable {
     case web
     case spaceCustomization(SpaceID)
+    case passwordManager
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -12,6 +13,7 @@ public enum BrowserTabContent: Hashable, Codable, Sendable {
     private enum ContentType: String, Codable {
         case web
         case spaceCustomization
+        case passwordManager
     }
 
     public init(from decoder: Decoder) throws {
@@ -22,6 +24,8 @@ public enum BrowserTabContent: Hashable, Codable, Sendable {
             self = .web
         case .spaceCustomization:
             self = .spaceCustomization(try container.decode(SpaceID.self, forKey: .spaceID))
+        case .passwordManager:
+            self = .passwordManager
         }
     }
 
@@ -33,6 +37,8 @@ public enum BrowserTabContent: Hashable, Codable, Sendable {
         case .spaceCustomization(let spaceID):
             try container.encode(ContentType.spaceCustomization, forKey: .type)
             try container.encode(spaceID, forKey: .spaceID)
+        case .passwordManager:
+            try container.encode(ContentType.passwordManager, forKey: .type)
         }
     }
 
@@ -148,7 +154,7 @@ public enum BrowserTabPlacement: String, Equatable, Sendable {
         case .regular:
             return "Tabs"
         case .pinned:
-            return "Pinned"
+            return "List Essentials"
         case .favorite:
             return "Essentials"
         }

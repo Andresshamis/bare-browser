@@ -17,6 +17,8 @@ public struct SidebarSectionHeader: View {
             Text(title)
                 .font(.caption)
                 .textCase(.uppercase)
+                .lineLimit(1)
+                .truncationMode(.tail)
             Spacer()
         }
         .foregroundStyle(.secondary)

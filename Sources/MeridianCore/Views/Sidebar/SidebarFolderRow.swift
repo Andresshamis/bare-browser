@@ -41,6 +41,7 @@ public struct SidebarFolderRow: View {
                         close: { closeTab(tab) },
                         setPlacement: { placement in setTabPlacement(tab.id, placement) },
                         move: { direction in moveTab(tab.id, direction) },
+                        canClose: true,
                         canMoveUp: canMoveTab(tab.id, .up),
                         canMoveDown: canMoveTab(tab.id, .down)
                     )

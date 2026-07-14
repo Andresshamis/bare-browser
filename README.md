@@ -100,8 +100,10 @@ the Xcode app/UI test host and owner-approved signing setup are available.
 ## Privacy And Diagnostics
 
 Bare Browser does not collect product analytics, browsing telemetry, page contents,
-URLs, credentials, cookies, tokens, or private browsing data. The current app has
-no analytics SDK, tracking endpoint, or network reporting path.
+URLs, cookies, tokens, or private browsing data. Website passwords are stored only
+after explicit user confirmation, only for persistent profiles, and only in the
+local macOS Keychain with this-device-only accessibility. The current app has no
+analytics SDK, tracking endpoint, or network reporting path.
 
 Developer diagnostics are local only. `script/build_and_run.sh --logs` streams
 local OS log entries for the Bare Browser process, and `--subsystem-logs` streams
