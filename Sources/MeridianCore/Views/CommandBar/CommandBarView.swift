@@ -207,7 +207,8 @@ public struct CommandBarView: View {
             }
             webViewState.dispatch(.goForward, targetTabID: store.selectedTabID)
             return true
-        case .closeTab, .pinTab, .addTabToEssentials, .moveTabToRegular, .moveTabUp, .moveTabDown, .splitActiveTab:
+        case .closeTab, .pinTab, .addTabToEssentials, .moveTabToRegular, .moveTabUp, .moveTabDown,
+             .splitActiveTab, .openPasswordManager:
             return false
         }
     }

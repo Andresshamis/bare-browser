@@ -20,9 +20,14 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$EXECUTABLE_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
+BUILD_STAMP="$DIST_DIR/.BareBrowserBuildConfiguration"
 APP_ICON_SOURCE="$ROOT_DIR/Resources/$APP_ICON_FILE"
 APP_ICON_PARTIAL_PLIST="$DIST_DIR/AppIconPartialInfo.plist"
 APP_ICON_ACTOOL_OUTPUT="$DIST_DIR/AppIconActoolOutput.plist"
+DEV_SIGNING_IDENTITY="Bare Browser Local Development"
+DEV_SIGNING_DIR="$DIST_DIR/Signing"
+DEV_SIGNING_KEYCHAIN="$DEV_SIGNING_DIR/BareBrowserLocalDevelopment.keychain-db"
+DEV_SIGNING_KEYCHAIN_PASSWORD="bare-browser-local-development"
 
 cd "$ROOT_DIR"
 
@@ -32,9 +37,62 @@ case "$MODE" in
     ;;
 esac
 
+build_stamp_value() {
+  printf '%s|%s|%s|%s\n' "$SWIFT_CONFIGURATION" "$BUNDLE_ID" "$PRODUCT_NAME" "$SWIFT_PRODUCT_NAME"
+}
+
+app_bundle_is_current() {
+  local source_paths=("$ROOT_DIR/Package.swift" "$ROOT_DIR/Sources" "$ROOT_DIR/Resources" "$ROOT_DIR/script/build_and_run.sh")
+  local newest_source
+
+  [[ "${BARE_BROWSER_FORCE_BUILD:-0}" != "1" ]] || return 1
+  [[ -x "$APP_BINARY" && -f "$INFO_PLIST" && -f "$BUILD_STAMP" ]] || return 1
+  [[ "$(cat "$BUILD_STAMP")" == "$(build_stamp_value)" ]] || return 1
+  [[ -f "$ROOT_DIR/Package.resolved" ]] && source_paths+=("$ROOT_DIR/Package.resolved")
+
+  newest_source="$(find "${source_paths[@]}" -type f -newer "$APP_BINARY" -print -quit)"
+  [[ -z "$newest_source" ]]
+}
+
+reuse_current_app_if_possible() {
+  app_bundle_is_current || return 1
+
+  echo "Reusing current signed app bundle. Set BARE_BROWSER_FORCE_BUILD=1 to rebuild."
+  case "$MODE" in
+    run|--release|release)
+      /usr/bin/open -n "$APP_BUNDLE"
+      ;;
+    --debug|debug)
+      lldb -- "$APP_BINARY"
+      ;;
+    --logs|logs)
+      /usr/bin/open -n "$APP_BUNDLE"
+      /usr/bin/log stream --info --style compact --predicate "process == \"$EXECUTABLE_NAME\""
+      ;;
+    --subsystem-logs|subsystem-logs|--telemetry|telemetry)
+      /usr/bin/open -n "$APP_BUNDLE"
+      /usr/bin/log stream --info --style compact --predicate "subsystem == \"$BUNDLE_ID\""
+      ;;
+    --verify|verify|--verify-release|verify-release)
+      /usr/bin/open -n "$APP_BUNDLE"
+      sleep 1
+      pgrep -x "$EXECUTABLE_NAME" >/dev/null
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  exit 0
+}
+
 pkill -x "$EXECUTABLE_NAME" >/dev/null 2>&1 || true
 if [[ "$LEGACY_EXECUTABLE_NAME" != "$EXECUTABLE_NAME" ]]; then
   pkill -x "$LEGACY_EXECUTABLE_NAME" >/dev/null 2>&1 || true
+fi
+
+if reuse_current_app_if_possible; then
+  exit 0
 fi
 
 swift build -c "$SWIFT_CONFIGURATION"
@@ -84,9 +142,207 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeDescription</key>
+      <string>Bare Browser Sidebar Space Identifier</string>
+      <key>UTTypeIdentifier</key>
+      <string>com.meridianbrowser.sidebar-space-id</string>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.mime-type</key>
+        <string>application/x-bare-browser-sidebar-space-id</string>
+      </dict>
+    </dict>
+  </array>
 </dict>
 </plist>
 PLIST
+
+keychain_search_list() {
+  security list-keychains -d user \
+    | sed -e 's/^[[:space:]]*"//' -e 's/"$//'
+}
+
+restore_keychain_search_list() {
+  local keychains=("$@")
+  if [[ "${#keychains[@]}" -gt 0 ]]; then
+    security list-keychains -d user -s "${keychains[@]}" >/dev/null
+  fi
+}
+
+identity_in_keychain() {
+  local keychain="$1"
+  local identity_name="$2"
+  local original_keychains=()
+  local existing_identity
+  local saved_errexit=0
+  local listed_keychain
+
+  case "$-" in
+    *e*) saved_errexit=1 ;;
+  esac
+
+  while IFS= read -r listed_keychain; do
+    [[ -n "$listed_keychain" ]] && original_keychains+=("$listed_keychain")
+  done < <(keychain_search_list)
+
+  set +e
+  security unlock-keychain -p "$DEV_SIGNING_KEYCHAIN_PASSWORD" "$keychain" >/dev/null 2>&1
+  security list-keychains -d user -s "$keychain" "${original_keychains[@]}" >/dev/null 2>&1
+  existing_identity="$(
+    security find-identity -p codesigning -v 2>/dev/null \
+      | awk -F '"' -v name="$identity_name" '$2 == name { print $2; exit }'
+  )"
+  restore_keychain_search_list "${original_keychains[@]}" >/dev/null 2>&1
+  if [[ "$saved_errexit" -eq 1 ]]; then
+    set -e
+  fi
+
+  echo "$existing_identity"
+}
+
+create_local_signing_identity() {
+  local tmp_dir
+  tmp_dir="$(mktemp -d "$DIST_DIR/local-signing.XXXXXX")"
+  mkdir -p "$DEV_SIGNING_DIR"
+  chmod 700 "$DEV_SIGNING_DIR"
+
+  cat >"$tmp_dir/openssl.cnf" <<CERTCONFIG
+[ req ]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_codesign
+prompt = no
+
+[ req_distinguished_name ]
+CN = $DEV_SIGNING_IDENTITY
+
+[ v3_codesign ]
+basicConstraints = critical, CA:true
+keyUsage = critical, digitalSignature, keyCertSign
+extendedKeyUsage = codeSigning
+subjectKeyIdentifier = hash
+CERTCONFIG
+
+  openssl req \
+    -newkey rsa:2048 \
+    -nodes \
+    -keyout "$tmp_dir/key.pem" \
+    -x509 \
+    -days 3650 \
+    -out "$tmp_dir/cert.pem" \
+    -config "$tmp_dir/openssl.cnf" >/dev/null 2>&1
+
+  openssl pkcs12 \
+    -legacy \
+    -export \
+    -inkey "$tmp_dir/key.pem" \
+    -in "$tmp_dir/cert.pem" \
+    -out "$tmp_dir/identity.p12" \
+    -passout "pass:$DEV_SIGNING_KEYCHAIN_PASSWORD" >/dev/null 2>&1
+
+  rm -f "$DEV_SIGNING_KEYCHAIN"
+  security create-keychain -p "$DEV_SIGNING_KEYCHAIN_PASSWORD" "$DEV_SIGNING_KEYCHAIN"
+  security set-keychain-settings -lut 21600 "$DEV_SIGNING_KEYCHAIN"
+  security unlock-keychain -p "$DEV_SIGNING_KEYCHAIN_PASSWORD" "$DEV_SIGNING_KEYCHAIN"
+  security import "$tmp_dir/identity.p12" \
+    -k "$DEV_SIGNING_KEYCHAIN" \
+    -P "$DEV_SIGNING_KEYCHAIN_PASSWORD" \
+    -T /usr/bin/codesign >/dev/null
+  security add-trusted-cert \
+    -r trustRoot \
+    -p codeSign \
+    -k "$DEV_SIGNING_KEYCHAIN" \
+    "$tmp_dir/cert.pem" >/dev/null
+  security set-key-partition-list \
+    -S apple-tool:,apple: \
+    -s \
+    -k "$DEV_SIGNING_KEYCHAIN_PASSWORD" \
+    "$DEV_SIGNING_KEYCHAIN" >/dev/null 2>&1 || true
+
+  rm -rf "$tmp_dir"
+}
+
+ensure_local_signing_identity() {
+  local identity
+
+  if [[ -f "$DEV_SIGNING_KEYCHAIN" ]]; then
+    security unlock-keychain -p "$DEV_SIGNING_KEYCHAIN_PASSWORD" "$DEV_SIGNING_KEYCHAIN" >/dev/null 2>&1 || true
+    identity="$(identity_in_keychain "$DEV_SIGNING_KEYCHAIN" "$DEV_SIGNING_IDENTITY")"
+    if [[ -n "$identity" ]]; then
+      echo "$identity"
+      return
+    fi
+  fi
+
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo ""
+    return
+  fi
+
+  create_local_signing_identity
+  identity="$(identity_in_keychain "$DEV_SIGNING_KEYCHAIN" "$DEV_SIGNING_IDENTITY")"
+  echo "$identity"
+}
+
+sign_with_local_identity() {
+  local identity="$1"
+  local original_keychains=()
+  local keychain
+  local status
+
+  while IFS= read -r keychain; do
+    [[ -n "$keychain" ]] && original_keychains+=("$keychain")
+  done < <(keychain_search_list)
+
+  security unlock-keychain -p "$DEV_SIGNING_KEYCHAIN_PASSWORD" "$DEV_SIGNING_KEYCHAIN" >/dev/null 2>&1 || true
+  security list-keychains -d user -s "$DEV_SIGNING_KEYCHAIN" "${original_keychains[@]}" >/dev/null
+
+  set +e
+  codesign --force \
+    --keychain "$DEV_SIGNING_KEYCHAIN" \
+    --sign "$identity" \
+    --identifier "$BUNDLE_ID" \
+    "$APP_BUNDLE"
+  status=$?
+  set -e
+
+  restore_keychain_search_list "${original_keychains[@]}"
+  return "$status"
+}
+
+sign_app() {
+  local identity="${BARE_BROWSER_CODESIGN_IDENTITY:-}"
+
+  if [[ -z "$identity" ]]; then
+    identity="$(
+      security find-identity -p codesigning -v 2>/dev/null \
+        | awk -F '"' '/"[^"]+"/ { print $2; exit }'
+    )"
+  fi
+
+  if [[ -n "$identity" && "$identity" != "-" ]]; then
+    codesign --force --sign "$identity" --identifier "$BUNDLE_ID" "$APP_BUNDLE"
+    return
+  fi
+
+  identity="$(ensure_local_signing_identity)"
+  if [[ -n "$identity" ]]; then
+    sign_with_local_identity "$identity"
+    return
+  fi
+
+  codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"
+  echo "warning: no valid code-signing identity found and local signing identity creation failed; using ad-hoc signing. Keychain Always Allow may not persist across rebuilt app binaries." >&2
+}
+
+sign_app
+build_stamp_value >"$BUILD_STAMP"
 
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"

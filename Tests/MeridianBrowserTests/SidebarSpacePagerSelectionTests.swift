@@ -4,6 +4,134 @@ import Foundation
 import XCTest
 
 final class SidebarSpacePagerSelectionTests: XCTestCase {
+    func testSpaceDragPayloadRoundTripsSpaceID() {
+        let spaceID = UUID()
+
+        XCTAssertEqual(
+            SidebarSpaceDragPayload.spaceID(from: SidebarSpaceDragPayload.data(for: spaceID)),
+            spaceID
+        )
+    }
+
+    func testSpaceDragPayloadRejectsInvalidData() {
+        XCTAssertNil(SidebarSpaceDragPayload.spaceID(from: Data("not-a-space-id".utf8)))
+    }
+
+    func testSpaceDragItemProviderRegistersSpacePayload() throws {
+        let spaceID = UUID()
+        let provider = SidebarSpaceDragPayload.itemProvider(for: spaceID)
+        let loadedPayload = expectation(description: "Loaded space drag payload")
+
+        XCTAssertTrue(provider.hasItemConformingToTypeIdentifier(SidebarSpaceDragPayload.type.identifier))
+
+        provider.loadDataRepresentation(forTypeIdentifier: SidebarSpaceDragPayload.type.identifier) { data, _ in
+            XCTAssertEqual(data.flatMap(SidebarSpaceDragPayload.spaceID(from:)), spaceID)
+            loadedPayload.fulfill()
+        }
+        wait(for: [loadedPayload], timeout: 1)
+    }
+
+    func testSpaceSwitcherLayoutGeneratesInsertionTargetsForEachSpaceAndTail() {
+        let firstID = UUID()
+        let secondID = UUID()
+        let thirdID = UUID()
+
+        XCTAssertEqual(
+            SidebarSpaceSwitcherLayout.insertionTargets(for: [firstID, secondID, thirdID]),
+            [.before(firstID), .before(secondID), .before(thirdID), .tail]
+        )
+    }
+
+    func testSpaceSwitcherLayoutTargetsInsertionSlotsFromPointerPosition() {
+        let firstID = UUID()
+        let secondID = UUID()
+        let thirdID = UUID()
+        let spaceIDs = [firstID, secondID, thirdID]
+
+        XCTAssertEqual(
+            SidebarSpaceSwitcherLayout.target(for: 0, spaceIDs: spaceIDs),
+            .before(firstID)
+        )
+        XCTAssertEqual(
+            SidebarSpaceSwitcherLayout.target(for: 50, spaceIDs: spaceIDs),
+            .before(secondID)
+        )
+        XCTAssertEqual(
+            SidebarSpaceSwitcherLayout.target(for: 90, spaceIDs: spaceIDs),
+            .before(thirdID)
+        )
+        XCTAssertEqual(
+            SidebarSpaceSwitcherLayout.target(for: 130, spaceIDs: spaceIDs),
+            .tail
+        )
+    }
+
+    func testSpaceSwitcherLayoutIdentifiesSpaceIconsOnly() {
+        let firstID = UUID()
+        let secondID = UUID()
+        let thirdID = UUID()
+        let spaceIDs = [firstID, secondID, thirdID]
+
+        XCTAssertNil(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 12, y: 13), spaceIDs: spaceIDs))
+        XCTAssertEqual(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 32, y: 13), spaceIDs: spaceIDs), firstID)
+        XCTAssertEqual(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 64, y: 13), spaceIDs: spaceIDs), secondID)
+        XCTAssertEqual(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 96, y: 13), spaceIDs: spaceIDs), thirdID)
+        XCTAssertNil(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 128, y: 13), spaceIDs: spaceIDs))
+        XCTAssertNil(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 64, y: -1), spaceIDs: spaceIDs))
+    }
+
+    func testSpaceSwitcherLayoutIgnoresEmptyOrUnknownTargets() {
+        let spaceID = UUID()
+
+        XCTAssertNil(SidebarSpaceSwitcherLayout.target(for: 0, spaceIDs: []))
+        XCTAssertNil(SidebarSpaceSwitcherLayout.indicatorX(for: .before(spaceID), spaceIDs: []))
+        XCTAssertNil(SidebarSpaceSwitcherLayout.indicatorX(for: .before(UUID()), spaceIDs: [spaceID]))
+    }
+
+    func testSpaceSwitcherLayoutIndicatorPositionsAdvanceAcrossSlots() throws {
+        let firstID = UUID()
+        let secondID = UUID()
+        let thirdID = UUID()
+        let spaceIDs = [firstID, secondID, thirdID]
+
+        let firstIndicatorX = try XCTUnwrap(
+            SidebarSpaceSwitcherLayout.indicatorX(for: .before(firstID), spaceIDs: spaceIDs)
+        )
+        let secondIndicatorX = try XCTUnwrap(
+            SidebarSpaceSwitcherLayout.indicatorX(for: .before(secondID), spaceIDs: spaceIDs)
+        )
+        let thirdIndicatorX = try XCTUnwrap(
+            SidebarSpaceSwitcherLayout.indicatorX(for: .before(thirdID), spaceIDs: spaceIDs)
+        )
+        let tailIndicatorX = try XCTUnwrap(
+            SidebarSpaceSwitcherLayout.indicatorX(for: .tail, spaceIDs: spaceIDs)
+        )
+
+        XCTAssertLessThan(firstIndicatorX, secondIndicatorX)
+        XCTAssertLessThan(secondIndicatorX, thirdIndicatorX)
+        XCTAssertLessThan(thirdIndicatorX, tailIndicatorX)
+    }
+
+    func testSpaceSwitcherDragStateTargetsAndClears() {
+        let draggedID = UUID()
+        let targetID = UUID()
+        var state = SidebarSpaceSwitcherDragState()
+
+        state.target(.before(targetID), dragging: draggedID, locationX: 64)
+
+        XCTAssertTrue(state.isDragging)
+        XCTAssertEqual(state.draggedSpaceID, draggedID)
+        XCTAssertEqual(state.activeTarget, .before(targetID))
+        XCTAssertEqual(state.locationX, 64)
+
+        state.clear()
+
+        XCTAssertFalse(state.isDragging)
+        XCTAssertNil(state.draggedSpaceID)
+        XCTAssertNil(state.activeTarget)
+        XCTAssertNil(state.locationX)
+    }
+
     func testDoesNotCommitNilScrollPosition() {
         let selectedID = UUID()
 
@@ -58,6 +186,186 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
                 pageIDs: [.activity, .space(selectedID)]
             ),
             .activity
+        )
+    }
+
+    func testMagneticPagerKeepsCurrentPageForSmallHorizontalDrift() {
+        XCTAssertEqual(
+            SidebarSpacePagerMagnetism.targetPageIndex(
+                originalOffsetX: 200,
+                proposedOffsetX: 400,
+                visibleFractionalPageIndex: 1.30,
+                velocityX: 0,
+                pageWidth: 200,
+                pageCount: 4
+            ),
+            1
+        )
+    }
+
+    func testMagneticPagerAdvancesAfterDeliberateDrag() {
+        XCTAssertEqual(
+            SidebarSpacePagerMagnetism.targetPageIndex(
+                originalOffsetX: 200,
+                proposedOffsetX: 400,
+                visibleFractionalPageIndex: 1.60,
+                velocityX: 0,
+                pageWidth: 200,
+                pageCount: 4
+            ),
+            2
+        )
+    }
+
+    func testMagneticPagerAdvancesAfterShortFastFlick() {
+        XCTAssertEqual(
+            SidebarSpacePagerMagnetism.targetPageIndex(
+                originalOffsetX: 200,
+                proposedOffsetX: 400,
+                visibleFractionalPageIndex: 1.04,
+                velocityX: 1_000,
+                pageWidth: 200,
+                pageCount: 4
+            ),
+            2
+        )
+    }
+
+    func testMagneticPagerCarriesFastFlickWithShortTravel() {
+        XCTAssertEqual(
+            SidebarSpacePagerMagnetism.targetPageIndex(
+                originalOffsetX: 200,
+                proposedOffsetX: 400,
+                visibleFractionalPageIndex: 1.04,
+                velocityX: 1_000,
+                pageWidth: 200,
+                pageCount: 4
+            ),
+            2
+        )
+    }
+
+    func testMagneticPagerKeepsCurrentPageForTinyFastDrift() {
+        XCTAssertEqual(
+            SidebarSpacePagerMagnetism.targetPageIndex(
+                originalOffsetX: 200,
+                proposedOffsetX: 400,
+                visibleFractionalPageIndex: 1.02,
+                velocityX: 1_200,
+                pageWidth: 200,
+                pageCount: 4
+            ),
+            1
+        )
+    }
+
+    func testMagneticPagerKeepsProposedTargetAsHardUpperBound() {
+        XCTAssertEqual(
+            SidebarSpacePagerMagnetism.targetPageIndex(
+                originalOffsetX: 200,
+                proposedOffsetX: 400,
+                visibleFractionalPageIndex: 3.00,
+                velocityX: 0,
+                pageWidth: 200,
+                pageCount: 6
+            ),
+            2
+        )
+    }
+
+    func testMagneticPagerDoesNotGiveConsequentPagesForFree() {
+        XCTAssertEqual(
+            SidebarSpacePagerMagnetism.targetPageIndex(
+                originalOffsetX: 200,
+                proposedOffsetX: 800,
+                visibleFractionalPageIndex: 2.49,
+                velocityX: 0,
+                pageWidth: 200,
+                pageCount: 6
+            ),
+            2
+        )
+    }
+
+    func testMagneticPagerAllowsConsequentPageAfterClearingMagnet() {
+        XCTAssertEqual(
+            SidebarSpacePagerMagnetism.targetPageIndex(
+                originalOffsetX: 200,
+                proposedOffsetX: 800,
+                visibleFractionalPageIndex: 2.56,
+                velocityX: 2_400,
+                pageWidth: 200,
+                pageCount: 6
+            ),
+            3
+        )
+    }
+
+    func testMagneticPagerAllowsMomentumAcrossMultipleClearedMagnets() {
+        XCTAssertEqual(
+            SidebarSpacePagerMagnetism.targetPageIndex(
+                originalOffsetX: 200,
+                proposedOffsetX: 800,
+                visibleFractionalPageIndex: 3.56,
+                velocityX: 0,
+                pageWidth: 200,
+                pageCount: 6
+            ),
+            4
+        )
+    }
+
+    func testMagneticPagerDoesNotLetHighVelocityBypassConsequentMagnets() {
+        XCTAssertEqual(
+            SidebarSpacePagerMagnetism.targetPageIndex(
+                originalOffsetX: 200,
+                proposedOffsetX: 1_000,
+                visibleFractionalPageIndex: 1.04,
+                velocityX: 5_000,
+                pageWidth: 200,
+                pageCount: 6
+            ),
+            2
+        )
+    }
+
+    func testMagneticPagerRetreatsByOnePage() {
+        XCTAssertEqual(
+            SidebarSpacePagerMagnetism.targetPageIndex(
+                originalOffsetX: 400,
+                proposedOffsetX: 0,
+                visibleFractionalPageIndex: 1.44,
+                velocityX: -1_100,
+                pageWidth: 200,
+                pageCount: 4
+            ),
+            1
+        )
+    }
+
+    func testMagneticPagerClampsAtEdges() {
+        XCTAssertEqual(
+            SidebarSpacePagerMagnetism.targetPageIndex(
+                originalOffsetX: 0,
+                proposedOffsetX: -400,
+                visibleFractionalPageIndex: -1,
+                velocityX: -2_000,
+                pageWidth: 200,
+                pageCount: 3
+            ),
+            0
+        )
+
+        XCTAssertEqual(
+            SidebarSpacePagerMagnetism.targetPageIndex(
+                originalOffsetX: 400,
+                proposedOffsetX: 900,
+                visibleFractionalPageIndex: 4.50,
+                velocityX: 2_000,
+                pageWidth: 200,
+                pageCount: 3
+            ),
+            2
         )
     }
 
@@ -202,6 +510,292 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
             SidebarSpacePagerChrome.theme(for: pages, fractionalPageIndex: 1),
             SidebarChromeTheme.theme(for: space)
         )
+    }
+
+    func testTabDropStateTracksActiveDragForRealtimeEmptySections() {
+        var dropState = SidebarTabDropState()
+
+        XCTAssertFalse(dropState.isDragging)
+
+        dropState.beginDrag()
+        XCTAssertTrue(dropState.isDragging)
+        XCTAssertFalse(dropState.suppressTargetsUntilNextDrag)
+
+        dropState.finishDrop()
+        XCTAssertFalse(dropState.isDragging)
+        XCTAssertTrue(dropState.suppressTargetsUntilNextDrag)
+
+        dropState.beginDrag()
+        XCTAssertTrue(dropState.isDragging)
+        XCTAssertFalse(dropState.suppressTargetsUntilNextDrag)
+    }
+
+    func testShowsEmptyPinnedDropSectionDuringDragWhenRegularTabsExist() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let regularTab = sidebarTabItem(title: "Regular", spaceID: space.id, profileID: profileID)
+        let page = sidebarPage(space: space, regularTabs: [regularTab])
+
+        XCTAssertTrue(SidebarSpacePageSectionVisibility.showsEmptyPinnedTabDropSection(for: page, isDragging: true))
+    }
+
+    func testHidesEmptyPinnedDropSectionWhenNotDragging() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let regularTab = sidebarTabItem(title: "Regular", spaceID: space.id, profileID: profileID)
+        let page = sidebarPage(space: space, regularTabs: [regularTab])
+
+        XCTAssertFalse(SidebarSpacePageSectionVisibility.showsEmptyPinnedTabDropSection(for: page, isDragging: false))
+    }
+
+    func testShowsEmptyFavoriteDropSectionDuringDragWhenRegularTabsExist() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let regularTab = sidebarTabItem(title: "Regular", spaceID: space.id, profileID: profileID)
+        let page = sidebarPage(space: space, regularTabs: [regularTab])
+
+        XCTAssertTrue(SidebarSpacePageSectionVisibility.showsEmptyFavoriteTabDropSection(for: page, isDragging: true))
+    }
+
+    func testHidesEmptyFavoriteDropSectionWhenNotDragging() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let regularTab = sidebarTabItem(title: "Regular", spaceID: space.id, profileID: profileID)
+        let page = sidebarPage(space: space, regularTabs: [regularTab])
+
+        XCTAssertFalse(SidebarSpacePageSectionVisibility.showsEmptyFavoriteTabDropSection(for: page, isDragging: false))
+    }
+
+    func testShowsEmptyFavoriteDropSectionDuringDragWhenListEssentialsExist() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let pinnedTab = sidebarTabItem(
+            title: "Pinned",
+            spaceID: space.id,
+            profileID: profileID,
+            isPinned: true
+        )
+        let page = sidebarPage(space: space, pinnedTabs: [pinnedTab])
+
+        XCTAssertTrue(SidebarSpacePageSectionVisibility.showsEmptyFavoriteTabDropSection(for: page, isDragging: true))
+    }
+
+    func testShowsEmptyPinnedDropSectionDuringDragWhenOnlyGridEssentialsExist() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let favoriteTab = sidebarTabItem(
+            title: "Favorite",
+            spaceID: space.id,
+            profileID: profileID,
+            isFavorite: true
+        )
+        let page = sidebarPage(space: space, favoriteTabs: [favoriteTab])
+
+        XCTAssertTrue(SidebarSpacePageSectionVisibility.showsEmptyPinnedTabDropSection(for: page, isDragging: true))
+    }
+
+    func testHidesEmptyPinnedDropSectionForEmptySpace() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let page = sidebarPage(space: space)
+
+        XCTAssertFalse(SidebarSpacePageSectionVisibility.showsEmptyPinnedTabDropSection(for: page, isDragging: true))
+    }
+
+    func testHidesEmptyFavoriteDropSectionForEmptySpace() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let page = sidebarPage(space: space)
+
+        XCTAssertFalse(SidebarSpacePageSectionVisibility.showsEmptyFavoriteTabDropSection(for: page, isDragging: true))
+    }
+
+    func testHidesEmptyFavoriteDropSectionWhenGridEssentialsExist() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let favoriteTab = sidebarTabItem(
+            title: "Favorite",
+            spaceID: space.id,
+            profileID: profileID,
+            isFavorite: true
+        )
+        let page = sidebarPage(space: space, favoriteTabs: [favoriteTab])
+
+        XCTAssertFalse(SidebarSpacePageSectionVisibility.showsEmptyFavoriteTabDropSection(for: page, isDragging: true))
+    }
+
+    func testHidesEmptyPinnedDropSectionWhenPinnedTabsExist() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let pinnedTab = sidebarTabItem(
+            title: "Pinned",
+            spaceID: space.id,
+            profileID: profileID,
+            isPinned: true
+        )
+        let page = sidebarPage(space: space, pinnedTabs: [pinnedTab])
+
+        XCTAssertFalse(SidebarSpacePageSectionVisibility.showsEmptyPinnedTabDropSection(for: page, isDragging: true))
+    }
+
+    func testShowsEmptyPinnedDropSectionDuringDragWhenFolderHasTabs() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let folder = BrowserFolder(name: "Folder", parentSpaceID: space.id)
+        let folderTab = sidebarTabItem(
+            title: "Folder Tab",
+            spaceID: space.id,
+            profileID: profileID,
+            folderID: folder.id
+        )
+        let folderItem = SidebarFolderItemSnapshot(folder: folder, tabs: [folderTab], childFolders: [])
+        let page = sidebarPage(space: space, folders: [folderItem])
+
+        XCTAssertTrue(SidebarSpacePageSectionVisibility.showsEmptyPinnedTabDropSection(for: page, isDragging: true))
+    }
+
+    func testSnapshotBuilderMarksOnlyLiveSessionTabs() throws {
+        let profileID = UUID()
+        var space = BrowserSpace(name: "Work", profileID: profileID)
+        let favoriteTab = BrowserTab(
+            title: "Essential",
+            parentSpaceID: space.id,
+            isFavorite: true,
+            profileID: profileID
+        )
+        let regularTab = BrowserTab(
+            title: "Loaded",
+            parentSpaceID: space.id,
+            profileID: profileID
+        )
+        space.favoriteTabIDs = [favoriteTab.id]
+        space.regularTabIDs = [regularTab.id]
+
+        let pages = SidebarSpacePageSnapshotBuilder.spacePages(
+            activeSpaces: [space],
+            folders: [],
+            tabs: [favoriteTab, regularTab],
+            liveSessionTabIDs: [regularTab.id]
+        )
+        let page = try XCTUnwrap(pages.first)
+
+        XCTAssertEqual(page.favoriteTabs.first?.hasLiveSession, false)
+        XCTAssertEqual(page.regularTabs.first?.hasLiveSession, true)
+    }
+
+    func testSnapshotBuilderKeepsTabsClosableWithoutLiveSessions() throws {
+        let profileID = UUID()
+        var space = BrowserSpace(name: "Work", profileID: profileID)
+        var folder = BrowserFolder(name: "Tools", parentSpaceID: space.id)
+        let favoriteTab = BrowserTab(
+            title: "Essential",
+            parentSpaceID: space.id,
+            isFavorite: true,
+            profileID: profileID
+        )
+        let pinnedPasswordTab = BrowserTab(
+            title: "Passwords",
+            content: .passwordManager,
+            parentSpaceID: space.id,
+            isPinned: true,
+            profileID: profileID
+        )
+        let folderCustomizerTab = BrowserTab(
+            title: "Customize Space",
+            content: .spaceCustomization(space.id),
+            parentSpaceID: space.id,
+            parentFolderID: folder.id,
+            profileID: profileID
+        )
+        let regularTab = BrowserTab(
+            title: "Restored",
+            parentSpaceID: space.id,
+            profileID: profileID
+        )
+
+        folder.tabIDs = [folderCustomizerTab.id]
+        space.favoriteTabIDs = [favoriteTab.id]
+        space.pinnedTabIDs = [pinnedPasswordTab.id]
+        space.folderIDs = [folder.id]
+        space.regularTabIDs = [regularTab.id]
+
+        let pages = SidebarSpacePageSnapshotBuilder.spacePages(
+            activeSpaces: [space],
+            folders: [folder],
+            tabs: [favoriteTab, pinnedPasswordTab, folderCustomizerTab, regularTab],
+            liveSessionTabIDs: []
+        )
+        let page = try XCTUnwrap(pages.first)
+
+        XCTAssertEqual(page.favoriteTabs.first?.canClose, true)
+        XCTAssertEqual(page.favoriteTabs.first?.hasLiveSession, false)
+        XCTAssertEqual(page.pinnedTabs.first?.canClose, true)
+        XCTAssertEqual(page.pinnedTabs.first?.hasLiveSession, false)
+        XCTAssertEqual(page.folders.first?.tabs.first?.canClose, true)
+        XCTAssertEqual(page.folders.first?.tabs.first?.hasLiveSession, false)
+        XCTAssertEqual(page.regularTabs.first?.canClose, true)
+        XCTAssertEqual(page.regularTabs.first?.hasLiveSession, false)
+    }
+
+    func testShowsEmptyRegularDropSectionDuringDragWhenOnlyEssentialsHaveTabs() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let favoriteTab = sidebarTabItem(
+            title: "Favorite",
+            spaceID: space.id,
+            profileID: profileID,
+            isFavorite: true
+        )
+        let page = sidebarPage(space: space, favoriteTabs: [favoriteTab])
+
+        XCTAssertTrue(SidebarSpacePageSectionVisibility.showsEmptyRegularTabDropSection(for: page, isDragging: true))
+    }
+
+    func testHidesEmptyRegularDropSectionWhenNotDragging() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let favoriteTab = sidebarTabItem(
+            title: "Favorite",
+            spaceID: space.id,
+            profileID: profileID,
+            isFavorite: true
+        )
+        let page = sidebarPage(space: space, favoriteTabs: [favoriteTab])
+
+        XCTAssertFalse(SidebarSpacePageSectionVisibility.showsEmptyRegularTabDropSection(for: page, isDragging: false))
+    }
+
+    func testHidesEmptyRegularDropSectionForEmptySpace() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let page = sidebarPage(space: space)
+
+        XCTAssertFalse(SidebarSpacePageSectionVisibility.showsEmptyRegularTabDropSection(for: page, isDragging: true))
+    }
+
+    func testHidesEmptyRegularDropSectionWhenRegularTabsExist() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let regularTab = sidebarTabItem(title: "Regular", spaceID: space.id, profileID: profileID)
+        let page = sidebarPage(space: space, regularTabs: [regularTab])
+
+        XCTAssertFalse(SidebarSpacePageSectionVisibility.showsEmptyRegularTabDropSection(for: page, isDragging: true))
+    }
+
+    func testShowsEmptyRegularDropSectionDuringDragWhenNestedFolderHasTabs() throws {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let folder = BrowserFolder(name: "Folder", parentSpaceID: space.id)
+        let folderTab = sidebarTabItem(
+            title: "Folder Tab",
+            spaceID: space.id,
+            profileID: profileID,
+            folderID: folder.id
+        )
+        let folderItem = SidebarFolderItemSnapshot(folder: folder, tabs: [folderTab], childFolders: [])
+        let page = sidebarPage(space: space, folders: [folderItem])
+
+        XCTAssertTrue(SidebarSpacePageSectionVisibility.showsEmptyRegularTabDropSection(for: page, isDragging: true))
     }
 
     func testFocusUsesEachSpaceSelectedTabIndependently() throws {
@@ -491,5 +1085,59 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         state.removeSnapshots(keeping: [])
 
         XCTAssertNil(state.snapshotHandoffTabID)
+    }
+
+    @MainActor
+    func testPresentationStateExpiresUncompletedSnapshotHandoff() async throws {
+        let tabID = UUID()
+        let state = BrowserContentPresentationState(snapshotHandoffExpirationNanoseconds: 1_000_000)
+        state.storeSnapshot(NSImage(size: NSSize(width: 320, height: 200)), for: tabID)
+
+        XCTAssertNotNil(state.beginSnapshotHandoff(to: tabID))
+        XCTAssertEqual(state.snapshotHandoffTabID, tabID)
+
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertNil(state.snapshotHandoffTabID)
+    }
+
+    private func sidebarPage(
+        space: BrowserSpace,
+        favoriteTabs: [SidebarTabItemSnapshot] = [],
+        pinnedTabs: [SidebarTabItemSnapshot] = [],
+        folders: [SidebarFolderItemSnapshot] = [],
+        regularTabs: [SidebarTabItemSnapshot] = []
+    ) -> SidebarSpacePageSnapshot {
+        SidebarSpacePageSnapshot(
+            index: 0,
+            space: space,
+            favoriteTabs: favoriteTabs,
+            pinnedTabs: pinnedTabs,
+            folders: folders,
+            regularTabs: regularTabs
+        )
+    }
+
+    private func sidebarTabItem(
+        title: String,
+        spaceID: SpaceID,
+        profileID: ProfileID,
+        folderID: FolderID? = nil,
+        isPinned: Bool = false,
+        isFavorite: Bool = false
+    ) -> SidebarTabItemSnapshot {
+        SidebarTabItemSnapshot(
+            tab: BrowserTab(
+                title: title,
+                parentSpaceID: spaceID,
+                parentFolderID: folderID,
+                isPinned: isPinned,
+                isFavorite: isFavorite,
+                profileID: profileID
+            ),
+            isSelected: false,
+            canMoveUp: false,
+            canMoveDown: false
+        )
     }
 }

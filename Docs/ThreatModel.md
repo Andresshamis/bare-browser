@@ -37,9 +37,10 @@
 - Active-site permission controls can change only supported camera, microphone, combined camera/microphone, and pop-up decisions through the same store policy path; unsupported and configuration-only permissions stay disabled rather than pretending to work.
 - Pop-up/new-window requests and WebKit media-capture permission callbacks are routed through store state before any grant; unsupported permission kinds are denied with an explicit message.
 - Autoplay is configured to require a user gesture by default.
+- Password form submissions can create a native save prompt for HTTPS origins and loopback HTTP development origins. Accepted credentials are scoped to the current persistent profile and stored in the local macOS Keychain with this-device-only accessibility; private profiles do not prompt or persist passwords.
 - App Sandbox entitlement file includes only sandbox and outbound network client entitlement.
 - A small `WKContentRuleList` blocks common tracker/ad endpoints without request interception hacks.
-- Bare Browser does not collect product analytics, browsing telemetry, page contents, URLs, credentials, cookies, tokens, or private browsing data; developer log modes stream only local OS logs.
+- Bare Browser does not collect product analytics, browsing telemetry, page contents, URLs, cookies, tokens, or private browsing data; website passwords are stored only after explicit local confirmation, and developer log modes stream only local OS logs.
 
 ## Required Follow-Up
 

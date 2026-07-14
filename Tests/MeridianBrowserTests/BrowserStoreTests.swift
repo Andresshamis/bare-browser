@@ -1,5 +1,6 @@
 import Foundation
 import MeridianCore
+import Security
 import XCTest
 
 @MainActor
@@ -165,6 +166,22 @@ final class BrowserStoreTests: XCTestCase {
 
         XCTAssertEqual(first.id, second.id)
         XCTAssertEqual(store.tabs.filter { $0.content == .spaceCustomization(space.id) }.count, 1)
+        XCTAssertEqual(store.selectedTabID, first.id)
+    }
+
+    func testOpenPasswordManagerCreatesAndReusesInternalTab() throws {
+        let store = BrowserStore()
+        let spaceID = try XCTUnwrap(store.selectedSpaceID)
+
+        let first = try XCTUnwrap(store.openPasswordManager())
+        let second = try XCTUnwrap(store.openPasswordManager())
+
+        XCTAssertEqual(first.id, second.id)
+        XCTAssertEqual(first.title, "Passwords")
+        XCTAssertEqual(first.content, .passwordManager)
+        XCTAssertEqual(first.parentSpaceID, spaceID)
+        XCTAssertNil(first.url)
+        XCTAssertEqual(store.tabs.filter { $0.content == .passwordManager }.count, 1)
         XCTAssertEqual(store.selectedTabID, first.id)
     }
 
@@ -479,6 +496,68 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedSpaceID, firstPersonalSpaceID)
     }
 
+    func testMoveSpaceReordersSidebarSpacesAndPersists() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+        let firstSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let secondSpace = store.createSpace(name: "Second")
+        let thirdSpace = store.createSpace(name: "Third")
+        spy.savedSnapshots.removeAll()
+
+        XCTAssertTrue(store.moveSpace(thirdSpace.id, before: firstSpaceID))
+
+        XCTAssertEqual(store.sidebarSpaces.map(\.id), [thirdSpace.id, firstSpaceID, secondSpace.id])
+        XCTAssertEqual(spy.savedSnapshots.last?.spaces.map(\.id), [thirdSpace.id, firstSpaceID, secondSpace.id])
+    }
+
+    func testMoveSpaceCanMoveToEndOfSidebarSpaces() throws {
+        let store = BrowserStore()
+        let firstSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let secondSpace = store.createSpace(name: "Second")
+        let thirdSpace = store.createSpace(name: "Third")
+
+        XCTAssertTrue(store.moveSpace(firstSpaceID, before: nil))
+
+        XCTAssertEqual(store.sidebarSpaces.map(\.id), [secondSpace.id, thirdSpace.id, firstSpaceID])
+    }
+
+    func testMoveSpacePreservesHiddenSpaceSlots() throws {
+        let publicProfile = BrowserProfile(name: "Personal")
+        let privateProfile = BrowserProfile.privateBrowsing()
+        let firstSpace = BrowserSpace(name: "First", profileID: publicProfile.id)
+        let privateSpace = BrowserSpace(name: "Private", profileID: privateProfile.id)
+        let secondSpace = BrowserSpace(name: "Second", profileID: publicProfile.id)
+        let thirdSpace = BrowserSpace(name: "Third", profileID: publicProfile.id)
+        let store = BrowserStore(
+            snapshot: BrowserSessionSnapshot(
+                profiles: [publicProfile, privateProfile],
+                spaces: [firstSpace, privateSpace, secondSpace, thirdSpace],
+                folders: [],
+                tabs: [],
+                selectedSpaceID: firstSpace.id
+            )
+        )
+
+        XCTAssertTrue(store.moveSpace(thirdSpace.id, before: firstSpace.id))
+
+        XCTAssertEqual(store.sidebarSpaces.map(\.id), [thirdSpace.id, firstSpace.id, secondSpace.id])
+        XCTAssertEqual(store.spaces.map(\.id), [thirdSpace.id, privateSpace.id, firstSpace.id, secondSpace.id])
+    }
+
+    func testMoveSpaceRejectsInvalidAndNoOpMoves() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+        let firstSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        _ = store.createSpace(name: "Second")
+        spy.savedSnapshots.removeAll()
+
+        XCTAssertFalse(store.moveSpace(firstSpaceID, before: firstSpaceID))
+        XCTAssertFalse(store.moveSpace(UUID(), before: firstSpaceID))
+        XCTAssertFalse(store.moveSpace(firstSpaceID, before: UUID()))
+
+        XCTAssertTrue(spy.savedSnapshots.isEmpty)
+    }
+
     func testBeginNewTabShowsCommandBarWithoutCreatingBlankTab() throws {
         let store = BrowserStore()
         let previousSelectedTabID = store.selectedTabID
@@ -500,6 +579,51 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertTrue(store.isCommandBarPresented)
         XCTAssertEqual(store.commandBarMode, .newTab)
         XCTAssertEqual(store.commandBarFocusRequest, previousFocusRequest + 2)
+    }
+
+    func testSelectingSpacePreservesNewTabCommandBar() throws {
+        let store = BrowserStore()
+        let initialSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let targetSpace = store.createSpace(name: "Work")
+        store.selectSpace(initialSpaceID)
+
+        store.beginNewTab()
+        store.selectSpace(targetSpace.id)
+
+        XCTAssertEqual(store.selectedSpaceID, targetSpace.id)
+        XCTAssertTrue(store.isCommandBarPresented)
+        XCTAssertEqual(store.commandBarMode, .newTab)
+    }
+
+    func testNewTabCommandBarSubmissionUsesSelectedTargetSpaceAfterSwitching() throws {
+        let store = BrowserStore()
+        let initialSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let targetSpace = store.createSpace(name: "Work")
+        store.selectSpace(initialSpaceID)
+
+        store.beginNewTab()
+        store.selectSpace(targetSpace.id)
+        store.submitAddressInput("example.com")
+
+        let activeTab = try XCTUnwrap(store.activeTab)
+        XCTAssertEqual(activeTab.parentSpaceID, targetSpace.id)
+        XCTAssertTrue(store.selectedSpace?.regularTabIDs.contains(activeTab.id) ?? false)
+        XCTAssertFalse(store.isCommandBarPresented)
+        XCTAssertEqual(store.commandBarMode, .address)
+    }
+
+    func testSelectingSpaceClosesAddressCommandBar() throws {
+        let store = BrowserStore()
+        let initialSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let targetSpace = store.createSpace(name: "Work")
+        store.selectSpace(initialSpaceID)
+
+        store.showCommandBar()
+        store.selectSpace(targetSpace.id)
+
+        XCTAssertEqual(store.selectedSpaceID, targetSpace.id)
+        XCTAssertFalse(store.isCommandBarPresented)
+        XCTAssertEqual(store.commandBarMode, .address)
     }
 
     func testNewTabAddressSubmissionCreatesSelectedTab() throws {
@@ -996,6 +1120,38 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertTrue(savedSnapshot.profiles.contains { $0.id == profile.id })
         XCTAssertEqual(savedSnapshot.spaces.count, spaceCount)
         XCTAssertEqual(savedSnapshot.tabs.count, tabCount)
+    }
+
+    func testPersistentProfileWithInitialSpaceCreatesVisibleSelectedSpace() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+
+        let space = store.createPersistentProfileWithInitialSpace(name: "  Work  ")
+        let profile = try XCTUnwrap(store.profiles.first { $0.id == space.profileID })
+
+        XCTAssertEqual(profile.name, "Work")
+        XCTAssertFalse(profile.isEphemeral)
+        XCTAssertNotNil(profile.persistentWebsiteDataStoreID)
+        XCTAssertEqual(space.name, "Work")
+        XCTAssertEqual(store.selectedSpaceID, space.id)
+        XCTAssertNil(store.selectedTabID)
+        XCTAssertTrue(store.sidebarSpaces.contains { $0.id == space.id })
+
+        let savedSnapshot = try XCTUnwrap(spy.savedSnapshots.last)
+        XCTAssertTrue(savedSnapshot.profiles.contains { $0.id == profile.id })
+        XCTAssertTrue(savedSnapshot.spaces.contains { $0.id == space.id })
+    }
+
+    func testCreateProfileCommandCreatesVisibleSelectedSpace() throws {
+        let store = BrowserStore()
+
+        store.perform(.createProfile("Work"))
+
+        let selectedSpace = try XCTUnwrap(store.selectedSpace)
+        let profile = try XCTUnwrap(store.profiles.first { $0.id == selectedSpace.profileID })
+        XCTAssertEqual(profile.name, "Work")
+        XCTAssertEqual(selectedSpace.name, "Work")
+        XCTAssertTrue(store.sidebarSpaces.contains { $0.id == selectedSpace.id })
     }
 
     func testPersistentSnapshotIncludesPersistentProfilesAndExcludesPrivateProfiles() throws {
@@ -1640,6 +1796,330 @@ final class BrowserStoreTests: XCTestCase {
         )
     }
 
+    func testPasswordSaveRequestCreatesPendingConfirmationForPublicProfile() throws {
+        let spy = PasswordCredentialStoreSpy()
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let candidate = try XCTUnwrap(PasswordCredentialCandidate(
+            originURL: URL(string: "https://example.com/login?token=secret")!,
+            username: "user@example.com",
+            password: "password-secret",
+            pageTitle: "Example"
+        ))
+
+        store.requestPasswordSave(candidate, profileID: profileID, date: Date(timeIntervalSince1970: 42))
+
+        let request = try XCTUnwrap(store.pendingPasswordSaveRequest)
+        XCTAssertEqual(request.profileID, profileID)
+        XCTAssertEqual(request.origin.absoluteString, "https://example.com")
+        XCTAssertEqual(request.username, "user@example.com")
+        XCTAssertEqual(request.password, "password-secret")
+        XCTAssertEqual(request.createdAt, Date(timeIntervalSince1970: 42))
+        XCTAssertEqual(store.lastUserMessage, "Password save is waiting for confirmation.")
+        XCTAssertFalse(request.confirmationMessage.contains("password-secret"))
+        XCTAssertFalse(request.confirmationMessage.contains("token"))
+    }
+
+    func testPasswordSaveRequestIsSuppressedWhenCredentialAlreadyMatches() throws {
+        let spy = PasswordCredentialStoreSpy()
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        spy.credentialsByProfileAndOrigin["\(profileID.uuidString)|http://localhost:3000"] = [
+            SavedPasswordCredential(username: "member@example.com", password: "secret")
+        ]
+        let candidate = try XCTUnwrap(PasswordCredentialCandidate(
+            originURL: URL(string: "http://localhost:3000/auth/login")!,
+            username: "member@example.com",
+            password: "secret"
+        ))
+
+        store.requestPasswordSave(candidate, profileID: profileID)
+
+        XCTAssertNil(store.pendingPasswordSaveRequest)
+        XCTAssertEqual(store.lastUserMessage, "Password is already saved for localhost:3000.")
+        XCTAssertTrue(spy.savedRequests.isEmpty)
+    }
+
+    func testPasswordSaveRequestStillPromptsWhenSavedPasswordChanged() throws {
+        let spy = PasswordCredentialStoreSpy()
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        spy.credentialsByProfileAndOrigin["\(profileID.uuidString)|https://accounts.example"] = [
+            SavedPasswordCredential(username: "member@example.com", password: "old-secret")
+        ]
+        let candidate = try XCTUnwrap(PasswordCredentialCandidate(
+            originURL: URL(string: "https://accounts.example/sign-in")!,
+            username: "member@example.com",
+            password: "new-secret"
+        ))
+
+        store.requestPasswordSave(candidate, profileID: profileID)
+
+        let request = try XCTUnwrap(store.pendingPasswordSaveRequest)
+        XCTAssertEqual(request.username, "member@example.com")
+        XCTAssertEqual(request.password, "new-secret")
+        XCTAssertEqual(store.lastUserMessage, "Password save is waiting for confirmation.")
+    }
+
+    func testPasswordSaveRequestIsSuppressedWhenCredentialLookupNeedsKeychainAccess() throws {
+        let spy = PasswordCredentialStoreSpy()
+        spy.credentialsError = PasswordCredentialStoreError.keychainStatus(errSecAuthFailed)
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let candidate = try XCTUnwrap(PasswordCredentialCandidate(
+            originURL: URL(string: "https://accounts.example/sign-in")!,
+            username: "member@example.com",
+            password: "secret"
+        ))
+
+        store.requestPasswordSave(candidate, profileID: profileID)
+
+        XCTAssertNil(store.pendingPasswordSaveRequest)
+        XCTAssertEqual(store.lastUserMessage, "Keychain access is needed to check saved passwords.")
+    }
+
+    func testApprovingPasswordSaveStoresCredentialAndClearsPrompt() throws {
+        let spy = PasswordCredentialStoreSpy()
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let candidate = try XCTUnwrap(PasswordCredentialCandidate(
+            originURL: URL(string: "https://accounts.example/sign-in")!,
+            username: "member@example.com",
+            password: "secret"
+        ))
+
+        store.requestPasswordSave(candidate, profileID: profileID)
+        let request = try XCTUnwrap(store.pendingPasswordSaveRequest)
+
+        XCTAssertTrue(store.approvePendingPasswordSaveRequest())
+
+        XCTAssertEqual(spy.savedRequests, [request])
+        XCTAssertNil(store.pendingPasswordSaveRequest)
+        XCTAssertEqual(store.lastUserMessage, "Password saved for accounts.example.")
+        XCTAssertEqual(store.passwordCredentialAutofillRevision, 1)
+    }
+
+    func testCancelingPasswordSaveDoesNotStoreCredential() throws {
+        let spy = PasswordCredentialStoreSpy()
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let candidate = try XCTUnwrap(PasswordCredentialCandidate(
+            originURL: URL(string: "https://example.com/login")!,
+            username: "member@example.com",
+            password: "secret"
+        ))
+
+        store.requestPasswordSave(candidate)
+        store.cancelPendingPasswordSaveRequest()
+
+        XCTAssertTrue(spy.savedRequests.isEmpty)
+        XCTAssertNil(store.pendingPasswordSaveRequest)
+        XCTAssertEqual(store.lastUserMessage, "Password was not saved.")
+        XCTAssertEqual(store.passwordCredentialAutofillRevision, 0)
+    }
+
+    func testPasswordSaveIsSuppressedForPrivateProfiles() throws {
+        let spy = PasswordCredentialStoreSpy()
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let privateProfile = store.createProfile(name: "Private", ephemeral: true)
+        let candidate = try XCTUnwrap(PasswordCredentialCandidate(
+            originURL: URL(string: "https://private.example/login")!,
+            username: "member@example.com",
+            password: "secret"
+        ))
+
+        store.requestPasswordSave(candidate, profileID: privateProfile.id)
+
+        XCTAssertNil(store.pendingPasswordSaveRequest)
+        XCTAssertTrue(spy.savedRequests.isEmpty)
+        XCTAssertEqual(store.lastUserMessage, "Password was not saved for this private profile.")
+    }
+
+    func testPasswordSaveFailureClearsPromptWithoutPersistingSecretToSession() throws {
+        let spy = PasswordCredentialStoreSpy()
+        spy.saveError = PasswordCredentialStoreError.keychainStatus(errSecAuthFailed)
+        let sessionSpy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(passwordCredentialStore: spy, sessionPersistence: sessionSpy)
+        let candidate = try XCTUnwrap(PasswordCredentialCandidate(
+            originURL: URL(string: "https://example.com/login")!,
+            username: "member@example.com",
+            password: "secret"
+        ))
+
+        store.requestPasswordSave(candidate)
+
+        XCTAssertFalse(store.approvePendingPasswordSaveRequest())
+        XCTAssertNil(store.pendingPasswordSaveRequest)
+        XCTAssertEqual(store.lastUserMessage, "Password could not be saved to Keychain.")
+        XCTAssertEqual(store.passwordCredentialAutofillRevision, 0)
+        XCTAssertTrue(sessionSpy.savedSnapshots.isEmpty)
+    }
+
+    func testSavedPasswordKeychainAccessCheckReadsStoredSecrets() throws {
+        let spy = PasswordCredentialStoreSpy()
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let account = SavedPasswordAccount(
+            profileID: profileID,
+            origin: URL(string: "http://localhost:3000")!,
+            username: "member@example.com"
+        )
+        spy.credentialsByProfileAndOrigin["\(profileID.uuidString)|http://localhost:3000"] = [
+            SavedPasswordCredential(username: "member@example.com", password: "secret")
+        ]
+
+        let result = store.checkSavedPasswordKeychainAccess(for: [account])
+
+        XCTAssertEqual(result, .available)
+        XCTAssertNil(store.lastUserMessage)
+    }
+
+    func testSavedPasswordKeychainAccessCheckCanAvoidSystemPrompt() throws {
+        let spy = PasswordCredentialStoreSpy()
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let account = SavedPasswordAccount(
+            profileID: profileID,
+            origin: URL(string: "http://localhost:3000")!,
+            username: "member@example.com"
+        )
+        spy.credentialsByProfileAndOrigin["\(profileID.uuidString)|http://localhost:3000"] = [
+            SavedPasswordCredential(username: "member@example.com", password: "secret")
+        ]
+
+        let result = store.checkSavedPasswordKeychainAccess(
+            for: [account],
+            allowsKeychainPrompt: false
+        )
+
+        XCTAssertEqual(result, .available)
+        XCTAssertEqual(spy.credentialReadOptions, [.nonInteractive])
+    }
+
+    func testSavedPasswordKeychainAccessCheckPublishesMessageWhenSecretReadFails() throws {
+        let spy = PasswordCredentialStoreSpy()
+        spy.credentialsError = PasswordCredentialStoreError.keychainStatus(errSecAuthFailed)
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let account = SavedPasswordAccount(
+            profileID: profileID,
+            origin: URL(string: "https://accounts.example")!,
+            username: "member@example.com"
+        )
+
+        let result = store.checkSavedPasswordKeychainAccess(for: [account])
+
+        XCTAssertEqual(result, .unavailable)
+        XCTAssertEqual(store.lastUserMessage, "Keychain access is needed to autofill saved passwords.")
+    }
+
+    func testSavedPasswordCredentialsAreScopedToPublicProfileAndOrigin() throws {
+        let spy = PasswordCredentialStoreSpy()
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let origin = URL(string: "https://accounts.example/login")!
+        spy.credentialsByProfileAndOrigin["\(profileID.uuidString)|https://accounts.example"] = [
+            SavedPasswordCredential(username: "member@example.com", password: "secret")
+        ]
+
+        let credentials = store.savedPasswordCredentials(for: origin, profileID: profileID)
+
+        XCTAssertEqual(credentials, [
+            SavedPasswordCredential(username: "member@example.com", password: "secret")
+        ])
+        XCTAssertEqual(spy.credentialReadOptions, [.userInitiated])
+    }
+
+    func testSavedPasswordCredentialsCanAvoidSystemPrompt() throws {
+        let spy = PasswordCredentialStoreSpy()
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let origin = URL(string: "https://accounts.example/login")!
+        spy.credentialsByProfileAndOrigin["\(profileID.uuidString)|https://accounts.example"] = [
+            SavedPasswordCredential(username: "member@example.com", password: "secret")
+        ]
+
+        let credentials = store.savedPasswordCredentials(
+            for: origin,
+            profileID: profileID,
+            allowsKeychainPrompt: false
+        )
+
+        XCTAssertEqual(credentials, [
+            SavedPasswordCredential(username: "member@example.com", password: "secret")
+        ])
+        XCTAssertEqual(spy.credentialReadOptions, [.nonInteractive])
+    }
+
+    func testSavedPasswordCredentialsAreSuppressedForPrivateProfiles() throws {
+        let spy = PasswordCredentialStoreSpy()
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let privateProfile = store.createProfile(name: "Private", ephemeral: true)
+        spy.credentialsByProfileAndOrigin["\(privateProfile.id.uuidString)|https://private.example"] = [
+            SavedPasswordCredential(username: "member@example.com", password: "secret")
+        ]
+
+        let credentials = store.savedPasswordCredentials(
+            for: URL(string: "https://private.example/login")!,
+            profileID: privateProfile.id
+        )
+
+        XCTAssertTrue(credentials.isEmpty)
+    }
+
+    func testSavedPasswordCredentialLookupFailureDoesNotPublishStatusMessage() throws {
+        let spy = PasswordCredentialStoreSpy()
+        spy.error = PasswordCredentialStoreError.keychainStatus(errSecInteractionNotAllowed)
+        let store = BrowserStore(passwordCredentialStore: spy)
+
+        let credentials = store.savedPasswordCredentials(for: URL(string: "https://example.com")!)
+
+        XCTAssertTrue(credentials.isEmpty)
+        XCTAssertNil(store.lastUserMessage)
+    }
+
+    func testSavedPasswordAccountsListsPersistentProfilesOnly() throws {
+        let spy = PasswordCredentialStoreSpy()
+        let store = BrowserStore(passwordCredentialStore: spy)
+        let personalProfileID = try XCTUnwrap(store.activeProfile?.id)
+        let workProfile = store.createPersistentProfile(name: "Work")
+        let privateProfile = store.createProfile(name: "Private", ephemeral: true)
+        spy.accountsByProfile[personalProfileID.uuidString] = [
+            SavedPasswordAccount(
+                profileID: personalProfileID,
+                origin: URL(string: "https://accounts.example")!,
+                username: "personal@example.com"
+            )
+        ]
+        spy.accountsByProfile[workProfile.id.uuidString] = [
+            SavedPasswordAccount(
+                profileID: workProfile.id,
+                origin: URL(string: "https://work.example")!,
+                username: "work@example.com"
+            )
+        ]
+        spy.accountsByProfile[privateProfile.id.uuidString] = [
+            SavedPasswordAccount(
+                profileID: privateProfile.id,
+                origin: URL(string: "https://private.example")!,
+                username: "private@example.com"
+            )
+        ]
+
+        let accounts = store.savedPasswordAccounts()
+
+        XCTAssertEqual(accounts.map(\.username), ["personal@example.com", "work@example.com"])
+        XCTAssertFalse(accounts.contains { $0.profileID == privateProfile.id })
+    }
+
+    func testSavedPasswordAccountLookupFailurePublishesStatusMessage() {
+        let spy = PasswordCredentialStoreSpy()
+        spy.error = PasswordCredentialStoreError.keychainStatus(errSecInteractionNotAllowed)
+        let store = BrowserStore(passwordCredentialStore: spy)
+
+        XCTAssertTrue(store.savedPasswordAccounts().isEmpty)
+        XCTAssertEqual(store.lastUserMessage, "Saved passwords could not be loaded from Keychain.")
+    }
+
     func testExternalURLCreatesPendingConfirmationInsteadOfOpeningTab() {
         let store = BrowserStore()
         let initialTabCount = store.tabs.count
@@ -2026,5 +2506,45 @@ private final class BrowserStoreSessionPersistenceSpy: SessionSnapshotPersisting
     func saveSnapshot(_ snapshot: BrowserSessionSnapshot, fallback: BrowserSessionSnapshot) throws {
         savedSnapshots.append(snapshot)
         fallbacks.append(fallback)
+    }
+}
+
+private final class PasswordCredentialStoreSpy: PasswordCredentialPersisting {
+    var savedRequests: [PasswordSaveRequest] = []
+    var credentialsByProfileAndOrigin: [String: [SavedPasswordCredential]] = [:]
+    var accountsByProfile: [String: [SavedPasswordAccount]] = [:]
+    var credentialReadOptions: [PasswordCredentialReadOptions] = []
+    var error: Error?
+    var saveError: Error?
+    var credentialsError: Error?
+    var accountsError: Error?
+
+    func save(_ request: PasswordSaveRequest) throws {
+        if let error = saveError ?? error {
+            throw error
+        }
+
+        savedRequests.append(request)
+    }
+
+    func savedCredentials(
+        for origin: URL,
+        profileID: ProfileID,
+        options: PasswordCredentialReadOptions
+    ) throws -> [SavedPasswordCredential] {
+        if let error = credentialsError ?? error {
+            throw error
+        }
+
+        credentialReadOptions.append(options)
+        return credentialsByProfileAndOrigin["\(profileID.uuidString)|\(origin.absoluteString)"] ?? []
+    }
+
+    func savedAccounts(for profileID: ProfileID) throws -> [SavedPasswordAccount] {
+        if let error = accountsError ?? error {
+            throw error
+        }
+
+        return accountsByProfile[profileID.uuidString] ?? []
     }
 }
