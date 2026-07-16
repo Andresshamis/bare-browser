@@ -31,6 +31,7 @@ Current coverage:
 - Pending confirmation state for external app and local file URLs.
 - Insecure HTTP detection, HTTPS-first explicit HTTP opens, controlled HTTP fallback warning publication, and stale insecure-status clearing after successful HTTPS updates.
 - Download filename sanitization, risk classification, safe destination selection, and pending confirmation state.
+- Password credential candidate sanitization, HTTPS plus loopback HTTP prompt gating, public-profile save confirmation, private-profile suppression, cancellation, profile-scoped account listing, password-manager tab reuse, and Keychain failure handling.
 - Site permission origin sanitization, supported/unsupported defaults, stored allow/deny decisions, manual active-site allow/block/reset management, pending store state, restored public decisions, and private-profile persistence exclusion.
 - Profile metadata for persistent and private browsing.
 - Browser store relationships for spaces, folders, tabs, tab placement across Essentials/Pinned/Tabs, sidebar tab reordering within the current section or folder, and session snapshots.

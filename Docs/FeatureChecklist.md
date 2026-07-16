@@ -18,6 +18,8 @@
 - HTTPS-first upgrade attempts for non-local HTTP main-frame navigations, with controlled HTTP fallback warnings.
 - Native pending confirmation for external app and local file URL handoff.
 - WebKit download delegate handling with native destination approval and risky download confirmation.
+- Opt-in HTTPS and loopback HTTP password-save prompt backed by local macOS Keychain storage for persistent profiles.
+- Native password manager view with profile filtering and account/site search across saved persistent-profile accounts.
 - Site permission policy with public-profile allow/deny persistence and private-profile session-only filtering.
 - Active-site permission controls for camera, microphone, combined camera/microphone, and pop-up decisions.
 - Session snapshot model and JSON round-trip tests.

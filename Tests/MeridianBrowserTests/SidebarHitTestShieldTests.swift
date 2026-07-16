@@ -71,4 +71,45 @@ final class SidebarHitTestShieldTests: XCTestCase {
         XCTAssertTrue(blocker.hitTest(NSPoint(x: 120, y: 200)) === blocker)
         XCTAssertNil(blocker.hitTest(NSPoint(x: 2, y: 2)))
     }
+
+    func testHiddenWebContentBlockerDoesNotConsumeHits() {
+        let blocker = WebContentHitTestBlockerView(frame: NSRect(x: 0, y: 0, width: 240, height: 400))
+        blocker.isHidden = true
+
+        XCTAssertNil(blocker.hitTest(NSPoint(x: 120, y: 200)))
+    }
+
+    func testClearingWebContentExclusionRestoresHitsToWebView() {
+        let container = BrowserWebViewContainerView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700))
+        let webView = WKWebView(frame: container.bounds)
+        container.attach(webView)
+        container.mouseExclusionRegion = WebContentMouseExclusionRegion(
+            edge: .left,
+            width: 280,
+            inset: 8,
+            cornerRadius: 12
+        )
+
+        let formerlyBlockedPoint = NSPoint(x: 120, y: 200)
+        XCTAssertTrue(container.hitTest(formerlyBlockedPoint) is WebContentHitTestBlockerView)
+
+        container.mouseExclusionRegion = nil
+
+        let restoredHit = container.hitTest(formerlyBlockedPoint)
+        XCTAssertNotNil(restoredHit)
+        XCTAssertFalse(restoredHit is WebContentHitTestBlockerView)
+        XCTAssertTrue(restoredHit.map(viewBelongsToWebView) == true)
+    }
+
+    private func viewBelongsToWebView(_ view: NSView) -> Bool {
+        var candidate: NSView? = view
+        while let current = candidate {
+            if current is WKWebView {
+                return true
+            }
+            candidate = current.superview
+        }
+
+        return false
+    }
 }
