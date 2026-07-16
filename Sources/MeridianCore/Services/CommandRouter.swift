@@ -25,6 +25,7 @@ public struct CommandRouter: Sendable {
         case moveTabUp
         case moveTabDown
         case splitActiveTab
+        case openPasswordManager
     }
 
     public struct BrowserActionAvailability: Equatable, Sendable {
@@ -180,6 +181,8 @@ public struct CommandRouter: Sendable {
                 return availability.canMoveTabDown
             case .splitActiveTab:
                 return false
+            case .openPasswordManager:
+                return true
             }
         }
     }
@@ -222,10 +225,10 @@ public struct CommandRouter: Sendable {
         ),
         BrowserActionSuggestion(
             action: .pinTab,
-            title: "Pin Tab",
-            subtitle: "Move selected tab to Pinned",
+            title: "Add to List Essentials",
+            subtitle: "Move selected tab to List Essentials",
             symbolName: "pin",
-            aliases: ["pin", "pin tab", "pin current tab", "move to pinned"]
+            aliases: ["pin", "pin tab", "pin current tab", "move to pinned", "list essentials"]
         ),
         BrowserActionSuggestion(
             action: .addTabToEssentials,
@@ -254,6 +257,13 @@ public struct CommandRouter: Sendable {
             subtitle: "Reorder within current sidebar section",
             symbolName: "arrow.down",
             aliases: ["move tab down", "tab down", "move down", "reorder tab down"]
+        ),
+        BrowserActionSuggestion(
+            action: .openPasswordManager,
+            title: "Password Manager",
+            subtitle: "Saved accounts",
+            symbolName: "key",
+            aliases: ["password manager", "passwords", "saved passwords", "accounts", "saved accounts"]
         )
     ]
 

@@ -25,7 +25,39 @@ public enum ContentBlockerService {
     [
       {
         "trigger": {
-          "url-filter": ".*://.*(doubleclick\\.net|googlesyndication\\.com|google-analytics\\.com|facebook\\.com/tr|connect\\.facebook\\.net).*"
+          "url-filter": "doubleclick\\.net"
+        },
+        "action": {
+          "type": "block"
+        }
+      },
+      {
+        "trigger": {
+          "url-filter": "googlesyndication\\.com"
+        },
+        "action": {
+          "type": "block"
+        }
+      },
+      {
+        "trigger": {
+          "url-filter": "google-analytics\\.com"
+        },
+        "action": {
+          "type": "block"
+        }
+      },
+      {
+        "trigger": {
+          "url-filter": "facebook\\.com/tr"
+        },
+        "action": {
+          "type": "block"
+        }
+      },
+      {
+        "trigger": {
+          "url-filter": "connect\\.facebook\\.net"
         },
         "action": {
           "type": "block"

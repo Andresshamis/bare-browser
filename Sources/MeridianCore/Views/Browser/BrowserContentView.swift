@@ -19,6 +19,7 @@ public struct BrowserContentView: View {
     private let webViewRegistry: BrowserWebViewRegistry
     private let dataStoreProvider: ProfileWebsiteDataStoreProvider
     private let webContentMouseExclusionRegion: WebContentMouseExclusionRegion?
+    private let openSidebarThemeColorPicker: (SpaceID) -> Void
 
     public init(
         store: BrowserStore,
@@ -27,7 +28,8 @@ public struct BrowserContentView: View {
         webViewRegistry: BrowserWebViewRegistry,
         dataStoreProvider: ProfileWebsiteDataStoreProvider,
         activityPageIsSelected: Binding<Bool> = .constant(false),
-        webContentMouseExclusionRegion: WebContentMouseExclusionRegion? = nil
+        webContentMouseExclusionRegion: WebContentMouseExclusionRegion? = nil,
+        openSidebarThemeColorPicker: @escaping (SpaceID) -> Void = { _ in }
     ) {
         self.store = store
         self.webViewState = webViewState
@@ -36,6 +38,7 @@ public struct BrowserContentView: View {
         self.webViewRegistry = webViewRegistry
         self.dataStoreProvider = dataStoreProvider
         self.webContentMouseExclusionRegion = webContentMouseExclusionRegion
+        self.openSidebarThemeColorPicker = openSidebarThemeColorPicker
     }
 
     public var body: some View {
@@ -139,6 +142,7 @@ public struct BrowserContentView: View {
                 activeTab: activeWebTab,
                 activeProfile: activeWebProfile,
                 isActive: !activityPageIsSelected,
+                passwordAutofillRevision: store.passwordCredentialAutofillRevision,
                 registry: webViewRegistry,
                 dataStoreProvider: dataStoreProvider,
                 securityPolicy: store.urlSecurityPolicy,
@@ -203,6 +207,20 @@ public struct BrowserContentView: View {
                     return .deny(reason: "Site permission request was blocked because the tab is not active.")
                 }
                 return store.requestSitePermission(kind: kind, origin: origin, profileID: profileID)
+            } onPasswordCredentialCaptured: { tabID, profileID, candidate in
+                guard isSelected(tabID: tabID) else {
+                    return
+                }
+                store.requestPasswordSave(candidate, profileID: profileID)
+            } onPasswordCredentialsRequested: { tabID, profileID, origin in
+                guard isSelected(tabID: tabID) else {
+                    return []
+                }
+                return store.savedPasswordCredentials(
+                    for: origin,
+                    profileID: profileID,
+                    allowsKeychainPrompt: false
+                )
             } onSnapshotCaptured: { tabID, image in
                 presentationState.storeSnapshot(image, for: tabID)
             } onWebViewActivated: { tabID in
@@ -284,12 +302,16 @@ public struct BrowserContentView: View {
                     SpaceCustomizationView(
                         store: store,
                         space: space,
-                        profiles: store.persistentProfiles
+                        profiles: store.persistentProfiles,
+                        openThemeColorPicker: openSidebarThemeColorPicker
                     )
                     .id(space.id)
                 } else {
                     EmptyView()
                 }
+            case .passwordManager:
+                PasswordManagerView(store: store)
+                    .id("password-manager")
             case .web:
                 EmptyView()
             }
@@ -620,14 +642,17 @@ public struct BrowserContentView: View {
 
     private func statusIcon(for message: String) -> String {
         let normalizedMessage = message.lowercased()
-        if normalizedMessage.contains("download finished") || normalizedMessage.contains("saved") {
-            return "checkmark.circle.fill"
-        }
         if normalizedMessage.contains("blocked")
             || normalizedMessage.contains("failed")
             || normalizedMessage.contains("unsafe")
-            || normalizedMessage.contains("unavailable") {
+            || normalizedMessage.contains("unavailable")
+            || normalizedMessage.contains("could not") {
             return "exclamationmark.triangle.fill"
+        }
+        if normalizedMessage.contains("download finished")
+            || (normalizedMessage.contains("saved")
+                && !normalizedMessage.contains("not saved")) {
+            return "checkmark.circle.fill"
         }
 
         return "info.circle.fill"
@@ -668,6 +693,7 @@ public struct BrowserContentView: View {
             || normalizedMessage.contains("failed")
             || normalizedMessage.contains("unsafe")
             || normalizedMessage.contains("unavailable")
+            || normalizedMessage.contains("could not")
             ? 7
             : 4
 
@@ -929,9 +955,9 @@ private struct BrowserSpaceContentPreviewColumn: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         tabSection("Essentials", symbolName: "sparkle", tabs: page.favoriteTabs)
-                        tabSection("Pinned", symbolName: "pin.fill", tabs: page.pinnedTabs)
+                        tabSection("List Essentials", symbolName: "pin.fill", tabs: page.pinnedTabs)
                         folderSection
-                        tabSection("Tabs", symbolName: "rectangle.stack", tabs: page.regularTabs)
+                        tabSection(page.space.name, symbolName: "rectangle.stack", tabs: page.regularTabs)
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1148,14 +1174,21 @@ private struct BrowserSpaceContentPreviewTabRow: View {
         switch item.tab.content {
         case .spaceCustomization:
             return "Customize Space"
+        case .passwordManager:
+            return "Saved Passwords"
         case .web:
             return item.tab.url?.host(percentEncoded: false)
         }
     }
 
     private var tabIconName: String {
-        if case .spaceCustomization = item.tab.content {
+        switch item.tab.content {
+        case .spaceCustomization:
             return "slider.horizontal.3"
+        case .passwordManager:
+            return "key"
+        case .web:
+            break
         }
         if item.tab.isFavorite {
             return "sparkle"

@@ -1,14 +1,24 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 private struct SidebarForegroundColorEnvironmentKey: EnvironmentKey {
     static let defaultValue = Color.primary
+}
+
+private struct SidebarUsesDarkForegroundEnvironmentKey: EnvironmentKey {
+    static let defaultValue = false
 }
 
 extension EnvironmentValues {
     var sidebarForegroundColor: Color {
         get { self[SidebarForegroundColorEnvironmentKey.self] }
         set { self[SidebarForegroundColorEnvironmentKey.self] = newValue }
+    }
+
+    var sidebarUsesDarkForeground: Bool {
+        get { self[SidebarUsesDarkForegroundEnvironmentKey.self] }
+        set { self[SidebarUsesDarkForegroundEnvironmentKey.self] = newValue }
     }
 }
 
@@ -36,6 +46,112 @@ private enum SidebarHeaderMetrics {
     }
 }
 
+enum SidebarSpaceSwitcherDropTarget: Equatable {
+    case before(SpaceID)
+    case tail
+
+    var slotID: String {
+        switch self {
+        case .before(let spaceID):
+            return "before-\(spaceID.uuidString)"
+        case .tail:
+            return "tail"
+        }
+    }
+
+    var targetSpaceID: SpaceID? {
+        switch self {
+        case .before(let spaceID):
+            return spaceID
+        case .tail:
+            return nil
+        }
+    }
+}
+
+enum SidebarSpaceSwitcherLayout {
+    static func insertionTargets(for spaceIDs: [SpaceID]) -> [SidebarSpaceSwitcherDropTarget] {
+        spaceIDs.map(SidebarSpaceSwitcherDropTarget.before) + [.tail]
+    }
+
+    static func target(for locationX: CGFloat, spaceIDs: [SpaceID]) -> SidebarSpaceSwitcherDropTarget? {
+        guard !spaceIDs.isEmpty else {
+            return nil
+        }
+
+        for (index, spaceID) in spaceIDs.enumerated() where locationX < spaceCenterX(at: index) {
+            return .before(spaceID)
+        }
+
+        return .tail
+    }
+
+    static func indicatorX(for target: SidebarSpaceSwitcherDropTarget, spaceIDs: [SpaceID]) -> CGFloat? {
+        guard !spaceIDs.isEmpty else {
+            return nil
+        }
+
+        switch target {
+        case .before(let spaceID):
+            guard let index = spaceIDs.firstIndex(of: spaceID) else {
+                return nil
+            }
+            return spaceLeftX(at: index) - SidebarHeaderMetrics.spaceSwitcherSpacing / 2
+        case .tail:
+            return spaceLeftX(at: spaceIDs.count) - SidebarHeaderMetrics.spaceSwitcherSpacing / 2
+        }
+    }
+
+    static func spaceID(at location: CGPoint, spaceIDs: [SpaceID]) -> SpaceID? {
+        guard location.y >= 0,
+              location.y <= SidebarHeaderMetrics.spaceSwitcherButtonSize else {
+            return nil
+        }
+
+        for (index, spaceID) in spaceIDs.enumerated() {
+            let leftX = spaceLeftX(at: index)
+            let rightX = leftX + SidebarHeaderMetrics.spaceSwitcherButtonSize
+            if location.x >= leftX, location.x <= rightX {
+                return spaceID
+            }
+        }
+
+        return nil
+    }
+
+    private static func spaceLeftX(at index: Int) -> CGFloat {
+        let buttonSize = SidebarHeaderMetrics.spaceSwitcherButtonSize
+        let itemStride = buttonSize + SidebarHeaderMetrics.spaceSwitcherSpacing
+        return buttonSize + SidebarHeaderMetrics.spaceSwitcherSpacing + CGFloat(index) * itemStride
+    }
+
+    private static func spaceCenterX(at index: Int) -> CGFloat {
+        spaceLeftX(at: index) + SidebarHeaderMetrics.spaceSwitcherButtonSize / 2
+    }
+}
+
+struct SidebarSpaceSwitcherDragState: Equatable {
+    var draggedSpaceID: SpaceID?
+    var activeTarget: SidebarSpaceSwitcherDropTarget?
+    var locationX: CGFloat?
+
+    var isDragging: Bool {
+        draggedSpaceID != nil
+    }
+
+    mutating func target(_ target: SidebarSpaceSwitcherDropTarget, dragging spaceID: SpaceID, locationX: CGFloat) {
+        draggedSpaceID = spaceID
+        activeTarget = target
+        self.locationX = locationX
+    }
+
+    mutating func clear() {
+        draggedSpaceID = nil
+        activeTarget = nil
+        locationX = nil
+    }
+}
+
 public struct SidebarView: View {
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var webViewState: WebViewState
@@ -44,19 +160,25 @@ public struct SidebarView: View {
     @State private var window: NSWindow?
     @State private var previewedSpaceID: SpaceID?
     @State private var pagerNavigationRequest: SidebarSpacePagerNavigationRequest?
+    @State private var spaceSwitcherDragState = SidebarSpaceSwitcherDragState()
+    private let tabHasLiveSession: @MainActor (TabID) -> Bool
     private let updateSidebarChromeTheme: (SidebarChromeTheme?) -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.sidebarUsesDarkForeground) private var sidebarUsesDarkForeground
 
     public init(
         store: BrowserStore,
         webViewState: WebViewState,
         presentationState: BrowserContentPresentationState,
         activityPageIsSelected: Binding<Bool> = .constant(false),
+        tabHasLiveSession: @escaping @MainActor (TabID) -> Bool = { _ in false },
         updateSidebarChromeTheme: @escaping (SidebarChromeTheme?) -> Void = { _ in }
     ) {
         self.store = store
         self.webViewState = webViewState
         self.presentationState = presentationState
         self._activityPageIsSelected = activityPageIsSelected
+        self.tabHasLiveSession = tabHasLiveSession
         self.updateSidebarChromeTheme = updateSidebarChromeTheme
     }
 
@@ -64,10 +186,10 @@ public struct SidebarView: View {
         VStack(spacing: 0) {
             browserControlsHeader
             compactAddressButton
-            Divider()
+            sidebarSeparator
             spacePager
                 .frame(maxHeight: .infinity)
-            Divider()
+            sidebarSeparator
             spaceSwitcher
         }
         .accessibilityLabel("Sidebar")
@@ -142,6 +264,20 @@ public struct SidebarView: View {
         )
     }
 
+    private var sidebarSeparator: some View {
+        Divider()
+            .opacity(sidebarSeparatorOpacity)
+            .accessibilityHidden(true)
+    }
+
+    private var sidebarSeparatorOpacity: Double {
+        guard !sidebarUsesDarkForeground else {
+            return 0
+        }
+
+        return colorScheme == .dark ? 0.12 : 1
+    }
+
     private var commandTargetTabID: TabID? {
         guard !activityPageIsSelected else {
             return nil
@@ -160,6 +296,9 @@ public struct SidebarView: View {
 
     private var spaceSwitcher: some View {
         ScrollView(.horizontal, showsIndicators: false) {
+            let sidebarSpaces = store.sidebarSpaces
+            let sidebarSpaceIDs = sidebarSpaces.map(\.id)
+
             HStack(spacing: SidebarHeaderMetrics.spaceSwitcherSpacing) {
                 Button {
                     showActivity()
@@ -170,43 +309,11 @@ public struct SidebarView: View {
                 .help("History and Downloads")
                 .accessibilityLabel("History and Downloads")
 
-                ForEach(store.sidebarSpaces) { space in
-                    Button {
-                        showSpace(space.id)
-                    } label: {
-                        SpaceSwitcherButtonLabel(
-                            space: space,
-                            isSelected: visualSelectedSpaceID == space.id
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .help(space.name)
-                    .accessibilityLabel(space.name)
-                    .contextMenu {
-                        Button {
-                            beginCustomizing(space)
-                        } label: {
-                            Label("Customize Space", systemImage: "slider.horizontal.3")
-                        }
-
-                        Divider()
-
-                        Button {
-                            showSpace(space.id)
-                        } label: {
-                            Label("Switch to Space", systemImage: "arrow.right.circle")
-                        }
-                        .disabled(store.selectedSpaceID == space.id)
-
-                        Divider()
-
-                        Button(role: .destructive) {
-                            _ = store.deleteSpace(space.id)
-                        } label: {
-                            Label("Delete Space", systemImage: "trash")
-                        }
-                        .disabled(!store.canDeleteSpace(space.id))
-                    }
+                ForEach(sidebarSpaces) { space in
+                    spaceSwitcherButton(
+                        space,
+                        isBeingDragged: spaceSwitcherDragState.draggedSpaceID == space.id
+                    )
                 }
 
                 Button {
@@ -224,9 +331,114 @@ public struct SidebarView: View {
                 .buttonStyle(.plain)
                 .help("New space")
             }
+            .overlay(alignment: .leading) {
+                ZStack(alignment: .leading) {
+                    if spaceSwitcherDragState.isDragging,
+                       let target = spaceSwitcherDragState.activeTarget,
+                       let indicatorX = SidebarSpaceSwitcherLayout.indicatorX(
+                        for: target,
+                        spaceIDs: sidebarSpaceIDs
+                       ) {
+                        spaceSwitcherDropIndicator
+                            .offset(x: indicatorX - 1)
+                    }
+
+                    if let draggedSpaceID = spaceSwitcherDragState.draggedSpaceID,
+                       let locationX = spaceSwitcherDragState.locationX,
+                       let draggedSpace = sidebarSpaces.first(where: { $0.id == draggedSpaceID }) {
+                        spaceSwitcherDragPreview(draggedSpace)
+                            .offset(x: locationX - SidebarHeaderMetrics.spaceSwitcherButtonSize / 2)
+                    }
+                }
+            }
+            .overlay {
+                SidebarSpaceSwitcherReorderEventLayer(
+                    spaceIDs: sidebarSpaceIDs,
+                    dragState: $spaceSwitcherDragState,
+                    selectSpace: { showSpace($0) },
+                    moveSpace: { draggedSpaceID, targetSpaceID in
+                        withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
+                            store.moveSpace(draggedSpaceID, before: targetSpaceID)
+                        }
+                    }
+                )
+            }
+            .contentShape(Rectangle())
             .padding(.horizontal, 12)
             .padding(.vertical, SidebarHeaderMetrics.spaceSwitcherVerticalInset)
         }
+    }
+
+    private func spaceSwitcherButton(_ space: BrowserSpace, isBeingDragged: Bool) -> some View {
+        Button {
+            showSpace(space.id)
+        } label: {
+            SpaceSwitcherButtonLabel(
+                space: space,
+                isSelected: visualSelectedSpaceID == space.id
+            )
+        }
+        .buttonStyle(.plain)
+        .help(space.name)
+        .accessibilityLabel(space.name)
+        .opacity(isBeingDragged ? 0.22 : 1)
+        .scaleEffect(isBeingDragged ? 0.88 : 1)
+        .animation(SidebarTabReorderInteractionMetrics.indicatorAnimation, value: isBeingDragged)
+        .contextMenu {
+            Button {
+                beginCustomizing(space)
+            } label: {
+                Label("Customize Space", systemImage: "slider.horizontal.3")
+            }
+
+            Divider()
+
+            Button {
+                showSpace(space.id)
+            } label: {
+                Label("Switch to Space", systemImage: "arrow.right.circle")
+            }
+            .disabled(store.selectedSpaceID == space.id)
+
+            Divider()
+
+            Button(role: .destructive) {
+                _ = store.deleteSpace(space.id)
+            } label: {
+                Label("Delete Space", systemImage: "trash")
+            }
+            .disabled(!store.canDeleteSpace(space.id))
+        }
+    }
+
+    private var spaceSwitcherDropIndicator: some View {
+        Capsule()
+            .fill(Color.accentColor.opacity(0.95))
+            .frame(width: 3, height: SidebarHeaderMetrics.spaceSwitcherButtonSize + 2)
+            .overlay {
+                Capsule()
+                    .stroke(.white.opacity(0.55), lineWidth: 0.5)
+            }
+            .shadow(color: .accentColor.opacity(0.45), radius: 3)
+            .allowsHitTesting(false)
+            .animation(SidebarTabReorderInteractionMetrics.indicatorAnimation, value: spaceSwitcherDragState.activeTarget)
+    }
+
+    private func spaceSwitcherDragPreview(_ space: BrowserSpace) -> some View {
+        SpaceSwitcherButtonLabel(
+            space: space,
+            isSelected: visualSelectedSpaceID == space.id
+        )
+        .background(.regularMaterial, in: Circle())
+        .overlay {
+            Circle()
+                .stroke(.white.opacity(0.55), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.22), radius: 7, y: 3)
+        .scaleEffect(1.12)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .animation(SidebarTabReorderInteractionMetrics.indicatorAnimation, value: space.id)
     }
 
     @ViewBuilder
@@ -316,10 +528,12 @@ public struct SidebarView: View {
 
     private func makeSpacePagerSnapshot() -> SidebarSpacePagerSnapshot {
         let activeSpaces = store.sidebarSpaces
+        let liveSessionTabIDs = Set(store.tabs.lazy.filter { tabHasLiveSession($0.id) }.map(\.id))
         let spacePages = SidebarSpacePageSnapshotBuilder.spacePages(
             activeSpaces: activeSpaces,
             folders: store.folders,
-            tabs: store.tabs
+            tabs: store.tabs,
+            liveSessionTabIDs: liveSessionTabIDs
         )
         let activityPage = SidebarActivityPageSnapshot(
             profiles: store.profiles,
@@ -399,6 +613,7 @@ private struct SidebarAddressControls: View {
     @ObservedObject private var presentationState: BrowserContentPresentationState
     let isActivitySelected: Bool
     @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
+    @Environment(\.sidebarUsesDarkForeground) private var sidebarUsesDarkForeground
     @State private var didCopyCurrentURL = false
 
     init(
@@ -456,8 +671,10 @@ private struct SidebarAddressControls: View {
             .frame(height: 26)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(.separator.opacity(0.35), lineWidth: 0.5)
+                if !sidebarUsesDarkForeground {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(.separator.opacity(0.35), lineWidth: 0.5)
+                }
             }
 
             sitePermissionsMenu
@@ -523,8 +740,13 @@ private struct SidebarAddressControls: View {
             return "clock.arrow.circlepath"
         }
 
-        guard presentedTab?.content.isWeb != false else {
+        switch presentedTab?.content {
+        case .spaceCustomization:
             return "slider.horizontal.3"
+        case .passwordManager:
+            return "key"
+        case .web, nil:
+            break
         }
         guard let url = presentedTab?.url else {
             return "magnifyingglass"
@@ -571,8 +793,10 @@ private struct SidebarAddressControls: View {
                 .frame(width: 26, height: 26)
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(.separator.opacity(0.35), lineWidth: 0.5)
+                    if !sidebarUsesDarkForeground {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(.separator.opacity(0.35), lineWidth: 0.5)
+                    }
                 }
         }
         .menuStyle(.borderlessButton)
@@ -694,6 +918,189 @@ private struct SidebarAddressControls: View {
         .cameraAndMicrophone,
         .popupWindow
     ]
+}
+
+enum SidebarSpaceDragPayload {
+    static let type = UTType(exportedAs: "com.meridianbrowser.sidebar-space-id")
+    static let acceptedTypes: [UTType] = [type]
+
+    static func itemProvider(for spaceID: SpaceID) -> NSItemProvider {
+        let provider = NSItemProvider()
+        let data = data(for: spaceID)
+        provider.registerDataRepresentation(
+            forTypeIdentifier: type.identifier,
+            visibility: .all
+        ) { completion in
+            completion(data, nil)
+            return nil
+        }
+        return provider
+    }
+
+    static func data(for spaceID: SpaceID) -> Data {
+        Data(spaceID.uuidString.utf8)
+    }
+
+    static func spaceID(from data: Data) -> SpaceID? {
+        String(data: data, encoding: .utf8)
+            .flatMap(UUID.init(uuidString:))
+    }
+
+    static func loadSpaceID(from info: DropInfo, completion: @escaping @MainActor (SpaceID?) -> Void) {
+        guard let provider = info.itemProviders(for: acceptedTypes).first else {
+            Task { @MainActor in
+                completion(nil)
+            }
+            return
+        }
+
+        provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, _ in
+            Task { @MainActor in
+                completion(data.flatMap(spaceID(from:)))
+            }
+        }
+    }
+}
+
+private struct SidebarSpaceSwitcherReorderEventLayer: NSViewRepresentable {
+    let spaceIDs: [SpaceID]
+    @Binding var dragState: SidebarSpaceSwitcherDragState
+    let selectSpace: (SpaceID) -> Void
+    let moveSpace: (SpaceID, SpaceID?) -> Bool
+
+    func makeNSView(context: Context) -> SidebarSpaceSwitcherReorderNSView {
+        let view = SidebarSpaceSwitcherReorderNSView()
+        view.configure(
+            spaceIDs: spaceIDs,
+            dragState: $dragState,
+            selectSpace: selectSpace,
+            moveSpace: moveSpace
+        )
+        return view
+    }
+
+    func updateNSView(_ nsView: SidebarSpaceSwitcherReorderNSView, context: Context) {
+        nsView.configure(
+            spaceIDs: spaceIDs,
+            dragState: $dragState,
+            selectSpace: selectSpace,
+            moveSpace: moveSpace
+        )
+    }
+}
+
+private final class SidebarSpaceSwitcherReorderNSView: NSView {
+    private var spaceIDs: [SpaceID] = []
+    private var dragState: Binding<SidebarSpaceSwitcherDragState> = .constant(SidebarSpaceSwitcherDragState())
+    private var selectSpace: (SpaceID) -> Void = { _ in }
+    private var moveSpace: (SpaceID, SpaceID?) -> Bool = { _, _ in false }
+    private var draggedSpaceID: SpaceID?
+    private var mouseDownLocation: CGPoint?
+    private var didStartDrag = false
+    private let dragThreshold: CGFloat = 3
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    func configure(
+        spaceIDs: [SpaceID],
+        dragState: Binding<SidebarSpaceSwitcherDragState>,
+        selectSpace: @escaping (SpaceID) -> Void,
+        moveSpace: @escaping (SpaceID, SpaceID?) -> Bool
+    ) {
+        self.spaceIDs = spaceIDs
+        self.dragState = dragState
+        self.selectSpace = selectSpace
+        self.moveSpace = moveSpace
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard NSApp.currentEvent?.type == .leftMouseDown,
+              SidebarSpaceSwitcherLayout.spaceID(at: point, spaceIDs: spaceIDs) != nil else {
+            return nil
+        }
+
+        return self
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        draggedSpaceID = SidebarSpaceSwitcherLayout.spaceID(at: location, spaceIDs: spaceIDs)
+        mouseDownLocation = location
+        didStartDrag = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let draggedSpaceID,
+              let mouseDownLocation else {
+            return
+        }
+
+        let location = convert(event.locationInWindow, from: nil)
+        let dragDistance = hypot(location.x - mouseDownLocation.x, location.y - mouseDownLocation.y)
+        guard didStartDrag || dragDistance >= dragThreshold else {
+            return
+        }
+
+        didStartDrag = true
+        updateTarget(for: location.x, dragging: draggedSpaceID)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer {
+            clearDrag()
+        }
+
+        guard let draggedSpaceID else {
+            return
+        }
+
+        let location = convert(event.locationInWindow, from: nil)
+        if didStartDrag,
+           let target = SidebarSpaceSwitcherLayout.target(for: location.x, spaceIDs: spaceIDs) {
+            _ = moveSpace(draggedSpaceID, target.targetSpaceID)
+        } else {
+            selectSpace(draggedSpaceID)
+        }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        nextResponder?.rightMouseDown(with: event)
+    }
+
+    private func updateTarget(for locationX: CGFloat, dragging spaceID: SpaceID) {
+        guard let target = SidebarSpaceSwitcherLayout.target(for: locationX, spaceIDs: spaceIDs),
+              dragState.wrappedValue.draggedSpaceID != spaceID ||
+                dragState.wrappedValue.activeTarget != target ||
+                dragState.wrappedValue.locationX != locationX else {
+            return
+        }
+
+        var transaction = Transaction()
+        transaction.animation = nil
+        withTransaction(transaction) {
+            var state = dragState.wrappedValue
+            state.target(target, dragging: spaceID, locationX: locationX)
+            dragState.wrappedValue = state
+        }
+    }
+
+    private func clearDrag() {
+        draggedSpaceID = nil
+        mouseDownLocation = nil
+        didStartDrag = false
+
+        guard dragState.wrappedValue.isDragging || dragState.wrappedValue.activeTarget != nil else {
+            return
+        }
+
+        withAnimation(SidebarTabReorderInteractionMetrics.indicatorAnimation) {
+            var state = dragState.wrappedValue
+            state.clear()
+            dragState.wrappedValue = state
+        }
+    }
 }
 
 struct SpaceCustomizationDraft: Identifiable {
@@ -962,7 +1369,6 @@ struct SpaceCustomizationSheet: View {
                 }
             }
 
-            sharedSidebarControls
         }
         .padding(14)
         .background {
@@ -999,9 +1405,13 @@ struct SpaceCustomizationSheet: View {
 
             Spacer(minLength: 0)
 
-            ThemeColorEditorButton(colorHex: themeColorHex) { colorHex in
+            SidebarThemeColorEditorButton(
+                colorHex: themeColorHex,
+                settings: sidebarSettingsBinding
+            ) { colorHex in
                 sidebarAppearance.tintSource = .custom
                 sidebarAppearance.tintHex = colorHex
+                sidebarAppearance.pinnedOverride = nil
             }
         }
         .padding(12)
@@ -1015,30 +1425,6 @@ struct SpaceCustomizationSheet: View {
         }
     }
 
-    private var sharedSidebarControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Material")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            SidebarGlassSlider(
-                title: "Color",
-                value: settingBinding(\.tintOpacity),
-                lowLabel: "Neutral",
-                highLabel: "Color"
-            )
-            SidebarGlassSlider(
-                title: "Density",
-                value: settingBinding(\.glassOpacity),
-                lowLabel: "Clear",
-                highLabel: "Dense"
-            )
-            SidebarColorNoiseControl(
-                level: settingBinding(\.colorNoiseLevel)
-            )
-        }
-    }
-
     private var iconColumns: [GridItem] {
         Array(repeating: GridItem(.fixed(40), spacing: 8), count: 8)
     }
@@ -1047,11 +1433,11 @@ struct SpaceCustomizationSheet: View {
         [GridItem(.adaptive(minimum: 88), spacing: 8)]
     }
 
-    private func settingBinding(_ keyPath: WritableKeyPath<SidebarGlassSettings, Double>) -> Binding<Double> {
+    private var sidebarSettingsBinding: Binding<SidebarGlassSettings> {
         Binding(
-            get: { sidebarAppearance.base[keyPath: keyPath] },
-            set: { value in
-                sidebarAppearance.base[keyPath: keyPath] = value
+            get: { sidebarAppearance.base },
+            set: { settings in
+                sidebarAppearance.base = settings
                 sidebarAppearance.pinnedOverride = nil
             }
         )
@@ -1305,7 +1691,10 @@ struct SpaceCustomizationView: View {
     let space: BrowserSpace
     let profiles: [BrowserProfile]
     let deferredIconGridDelayNanoseconds: UInt64?
+    let openThemeColorPicker: (SpaceID) -> Void
 
+    @AppStorage(SpaceCustomizationGlassPreviewBackdropSettings.storageKey)
+    private var showsGlassPreviewBackdrop = false
     @State private var draftName: String
     @State private var selectedIconCategoryID: String
     @State private var showsIconSection: Bool
@@ -1314,12 +1703,14 @@ struct SpaceCustomizationView: View {
         store: BrowserStore,
         space: BrowserSpace,
         profiles: [BrowserProfile],
-        deferredIconGridDelayNanoseconds: UInt64? = 420_000_000
+        deferredIconGridDelayNanoseconds: UInt64? = 420_000_000,
+        openThemeColorPicker: @escaping (SpaceID) -> Void = { _ in }
     ) {
         self.store = store
         self.space = space
         self.profiles = profiles
         self.deferredIconGridDelayNanoseconds = deferredIconGridDelayNanoseconds
+        self.openThemeColorPicker = openThemeColorPicker
         _draftName = State(initialValue: space.name)
         _selectedIconCategoryID = State(initialValue: SpaceCustomizationSheet.initialIconCategoryID(for: space.symbolName))
         _showsIconSection = State(initialValue: deferredIconGridDelayNanoseconds == nil)
@@ -1345,7 +1736,10 @@ struct SpaceCustomizationView: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollIndicators(.visible)
-        .background(.background)
+        .background {
+            pageBackground
+        }
+        .animation(.smooth(duration: 0.18), value: showsGlassPreviewBackdrop)
         .task(id: deferredIconSectionTaskID) {
             await revealDeferredIconSectionIfNeeded()
         }
@@ -1384,7 +1778,19 @@ struct SpaceCustomizationView: View {
             }
 
             Spacer(minLength: 0)
+
+            glassPreviewBackdropToggle
         }
+    }
+
+    private var glassPreviewBackdropToggle: some View {
+        Toggle(isOn: $showsGlassPreviewBackdrop) {
+            Label("Backdrop", systemImage: "photo")
+                .font(.caption.weight(.semibold))
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .help("Show preview backdrop")
     }
 
     private var identitySection: some View {
@@ -1455,35 +1861,7 @@ struct SpaceCustomizationView: View {
                         }
                     }
                 }
-
-                Divider()
-
-                materialControls
             }
-        }
-    }
-
-    private var materialControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Material")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            SidebarGlassSlider(
-                title: "Color",
-                value: settingBinding(\.tintOpacity),
-                lowLabel: "Neutral",
-                highLabel: "Color"
-            )
-            SidebarGlassSlider(
-                title: "Density",
-                value: settingBinding(\.glassOpacity),
-                lowLabel: "Clear",
-                highLabel: "Dense"
-            )
-            SidebarColorNoiseControl(
-                level: settingBinding(\.colorNoiseLevel)
-            )
         }
     }
 
@@ -1510,7 +1888,11 @@ struct SpaceCustomizationView: View {
 
             Spacer(minLength: 0)
 
-            ThemeColorEditorButton(colorHex: themeColorHex) { colorHex in
+            SidebarThemeColorEditorButton(
+                colorHex: themeColorHex,
+                settings: sidebarSettingsBinding,
+                openPersistentPicker: { openThemeColorPicker(currentSpace.id) }
+            ) { colorHex in
                 var appearance = currentSpace.sidebarAppearance
                 appearance.tintSource = .custom
                 appearance.tintHex = colorHex
@@ -1590,6 +1972,15 @@ struct SpaceCustomizationView: View {
         [GridItem(.adaptive(minimum: 92), spacing: 8)]
     }
 
+    @ViewBuilder
+    private var pageBackground: some View {
+        if showsGlassPreviewBackdrop {
+            SpaceCustomizationGlassPreviewBackdrop()
+        } else {
+            Color(nsColor: .windowBackgroundColor)
+        }
+    }
+
     @MainActor
     private func revealDeferredIconSectionIfNeeded() async {
         guard let deferredIconGridDelayNanoseconds,
@@ -1608,12 +1999,12 @@ struct SpaceCustomizationView: View {
         }
     }
 
-    private func settingBinding(_ keyPath: WritableKeyPath<SidebarGlassSettings, Double>) -> Binding<Double> {
+    private var sidebarSettingsBinding: Binding<SidebarGlassSettings> {
         Binding(
-            get: { currentSpace.sidebarAppearance.base[keyPath: keyPath] },
-            set: { value in
+            get: { currentSpace.sidebarAppearance.base },
+            set: { settings in
                 var appearance = currentSpace.sidebarAppearance
-                appearance.base[keyPath: keyPath] = value
+                appearance.base = settings
                 appearance.pinnedOverride = nil
                 _ = updateSpace(sidebarAppearance: appearance)
             }
@@ -1662,6 +2053,9 @@ struct SpaceCustomizationPreviewShell: View {
     let space: BrowserSpace
     var profileName: String?
 
+    @AppStorage(SpaceCustomizationGlassPreviewBackdropSettings.storageKey)
+    private var showsGlassPreviewBackdrop = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -1678,7 +2072,9 @@ struct SpaceCustomizationPreviewShell: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollIndicators(.visible)
-        .background(.background)
+        .background {
+            pageBackground
+        }
     }
 
     private var customizationHeader: some View {
@@ -1820,6 +2216,15 @@ struct SpaceCustomizationPreviewShell: View {
     private var pageColumns: [GridItem] {
         [GridItem(.adaptive(minimum: 430), spacing: 18, alignment: .top)]
     }
+
+    @ViewBuilder
+    private var pageBackground: some View {
+        if showsGlassPreviewBackdrop {
+            SpaceCustomizationGlassPreviewBackdrop()
+        } else {
+            Color(nsColor: .windowBackgroundColor)
+        }
+    }
 }
 
 private struct SpaceCustomizationPanel<Content: View>: View {
@@ -1904,130 +2309,6 @@ private struct SidebarTintPresetButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-    }
-}
-
-private struct ThemeColorEditorButton: View {
-    let colorHex: String
-    let colorChanged: (String) -> Void
-    @StateObject private var colorPanel = ThemeColorPanelController()
-    @State private var isHovered = false
-
-    var body: some View {
-        Button {
-            colorPanel.open(initialHex: colorHex, colorChanged: colorChanged)
-        } label: {
-            Label("Edit", systemImage: "paintpalette")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .background {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isHovered ? Color.primary.opacity(0.10) : Color.primary.opacity(0.06))
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(Color(nsColor: .separatorColor).opacity(0.34), lineWidth: 0.6)
-                }
-                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
-        .help("Edit theme color")
-    }
-}
-
-@MainActor
-private final class ThemeColorPanelController: NSObject, ObservableObject {
-    private var colorChanged: ((String) -> Void)?
-
-    func open(initialHex: String, colorChanged: @escaping (String) -> Void) {
-        self.colorChanged = colorChanged
-
-        let panel = NSColorPanel.shared
-        panel.color = NSColor(Color(hex: initialHex)).usingColorSpace(.sRGB) ?? NSColor(calibratedRed: 0.31, green: 0.49, blue: 0.67, alpha: 1)
-        panel.showsAlpha = false
-        panel.isContinuous = true
-        panel.setTarget(self)
-        panel.setAction(#selector(colorDidChange(_:)))
-        panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    @objc private func colorDidChange(_ sender: NSColorPanel) {
-        guard let hexString = Color(nsColor: sender.color).hexString else {
-            return
-        }
-        colorChanged?(hexString)
-    }
-}
-
-private struct SidebarGlassSlider: View {
-    let title: String
-    @Binding var value: Double
-    var lowLabel: String? = nil
-    var highLabel: String? = nil
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 10) {
-                Text(title)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 92, alignment: .leading)
-
-                Slider(value: $value, in: 0...1, step: 0.01)
-
-                Text("\(Int((value * 100).rounded()))")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, alignment: .trailing)
-            }
-
-            if lowLabel != nil || highLabel != nil {
-                HStack {
-                    Text(lowLabel ?? "")
-                    Spacer()
-                    Text(highLabel ?? "")
-                }
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.tertiary)
-                .padding(.leading, 102)
-                .padding(.trailing, 40)
-            }
-        }
-    }
-}
-
-private struct SidebarColorNoiseControl: View {
-    @Binding var level: Double
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 10) {
-                Text("Color Noise")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 92, alignment: .leading)
-
-                Slider(value: $level, in: 0...1, step: 0.01)
-
-                Text("\(Int((level * 100).rounded()))")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, alignment: .trailing)
-            }
-
-            HStack {
-                Text("Clean")
-                Spacer()
-                Text("Grain")
-            }
-            .font(.system(size: 9, weight: .medium))
-            .foregroundStyle(.tertiary)
-            .padding(.leading, 102)
-            .padding(.trailing, 40)
-        }
     }
 }
 
@@ -2289,8 +2570,71 @@ struct SidebarTabItemSnapshot: Identifiable, Equatable, Sendable {
 
     let tab: BrowserTab
     let isSelected: Bool
+    let hasLiveSession: Bool
+    let canClose: Bool
     let canMoveUp: Bool
     let canMoveDown: Bool
+
+    init(
+        tab: BrowserTab,
+        isSelected: Bool,
+        hasLiveSession: Bool = false,
+        canClose: Bool = true,
+        canMoveUp: Bool,
+        canMoveDown: Bool
+    ) {
+        self.tab = tab
+        self.isSelected = isSelected
+        self.hasLiveSession = hasLiveSession
+        self.canClose = canClose
+        self.canMoveUp = canMoveUp
+        self.canMoveDown = canMoveDown
+    }
+}
+
+struct SidebarSpacePageSectionVisibility {
+    static func showsEmptyFavoriteTabDropSection(
+        for page: SidebarSpacePageSnapshot,
+        isDragging: Bool
+    ) -> Bool {
+        isDragging && page.favoriteTabs.isEmpty && hasTabsOutsideFavorites(in: page)
+    }
+
+    static func showsEmptyPinnedTabDropSection(
+        for page: SidebarSpacePageSnapshot,
+        isDragging: Bool
+    ) -> Bool {
+        isDragging && page.pinnedTabs.isEmpty && hasTabsOutsidePinnedList(in: page)
+    }
+
+    static func showsEmptyRegularTabDropSection(
+        for page: SidebarSpacePageSnapshot,
+        isDragging: Bool
+    ) -> Bool {
+        isDragging && page.regularTabs.isEmpty && hasTabsOutsideRegular(in: page)
+    }
+
+    private static func hasTabsOutsideFavorites(in page: SidebarSpacePageSnapshot) -> Bool {
+        !page.pinnedTabs.isEmpty
+            || !page.regularTabs.isEmpty
+            || page.folders.contains(where: folderContainsTabs)
+    }
+
+    private static func hasTabsOutsidePinnedList(in page: SidebarSpacePageSnapshot) -> Bool {
+        !page.favoriteTabs.isEmpty
+            || !page.regularTabs.isEmpty
+            || page.folders.contains(where: folderContainsTabs)
+    }
+
+    private static func hasTabsOutsideRegular(in page: SidebarSpacePageSnapshot) -> Bool {
+        !page.favoriteTabs.isEmpty
+            || !page.pinnedTabs.isEmpty
+            || page.folders.contains(where: folderContainsTabs)
+    }
+
+    private static func folderContainsTabs(_ folder: SidebarFolderItemSnapshot) -> Bool {
+        !folder.tabs.isEmpty || folder.childFolders.contains(where: folderContainsTabs)
+    }
 }
 
 private struct SidebarSpacePagerView: View {
@@ -2314,6 +2658,7 @@ private struct SidebarSpacePagerView: View {
 
     @State private var scrollPositionPageID: SidebarSpacePagerPageID?
     @State private var scrollIsActive = false
+    @State private var visibleFractionalPageIndex: CGFloat?
 
     var body: some View {
         GeometryReader { proxy in
@@ -2335,7 +2680,10 @@ private struct SidebarSpacePagerView: View {
             .overlay {
                 ScrollIndicatorHiderOverlay(axes: .horizontal)
             }
-            .scrollTargetBehavior(.paging)
+            .scrollTargetBehavior(SidebarMagneticPageScrollTargetBehavior(
+                pageCount: snapshot.pageCount,
+                visibleFractionalPageIndex: visibleFractionalPageIndex
+            ))
             .scrollPosition(id: $scrollPositionPageID)
             .scrollDisabled(snapshot.pageCount <= 1)
             .onAppear {
@@ -2392,13 +2740,18 @@ private struct SidebarSpacePagerView: View {
                     previewSpace(nil)
                 }
             }
-            .onScrollGeometryChange(for: SidebarChromeTheme?.self) { geometry in
-                SidebarSpacePagerChrome.theme(
-                    for: snapshot.pages,
-                    fractionalPageIndex: Double(geometry.contentOffset.x / pageWidth)
+            .onScrollGeometryChange(for: SidebarSpacePagerGeometryState.self) { geometry in
+                let fractionalPageIndex = geometry.contentOffset.x / pageWidth
+                return SidebarSpacePagerGeometryState(
+                    fractionalPageIndex: fractionalPageIndex,
+                    chromeTheme: SidebarSpacePagerChrome.theme(
+                        for: snapshot.pages,
+                        fractionalPageIndex: Double(fractionalPageIndex)
+                    )
                 )
-            } action: { _, newTheme in
-                updateSidebarChromeTheme(newTheme)
+            } action: { _, newState in
+                visibleFractionalPageIndex = newState.fractionalPageIndex
+                updateSidebarChromeTheme(newState.chromeTheme)
             }
             .onDisappear {
                 updateSidebarChromeTheme(nil)
@@ -2453,6 +2806,10 @@ private struct SidebarSpacePagerView: View {
             return
         }
 
+        if let selectedPageIndex = snapshot.pages.firstIndex(where: { $0.id == selectedPageID }) {
+            visibleFractionalPageIndex = CGFloat(selectedPageIndex)
+        }
+
         if animated {
             withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
                 scrollPositionPageID = selectedPageID
@@ -2496,6 +2853,11 @@ private struct SidebarSpacePagerView: View {
     }
 }
 
+private struct SidebarSpacePagerGeometryState: Equatable {
+    let fractionalPageIndex: CGFloat
+    let chromeTheme: SidebarChromeTheme?
+}
+
 struct SidebarSpacePagerChrome {
     static func theme(
         for pages: [SidebarSpacePagerPageSnapshot],
@@ -2524,6 +2886,134 @@ struct SidebarSpacePagerSelection {
     }
 }
 
+private struct SidebarMagneticPageScrollTargetBehavior: ScrollTargetBehavior {
+    let pageCount: Int
+    let visibleFractionalPageIndex: CGFloat?
+
+    func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
+        guard context.axes.contains(.horizontal),
+              pageCount > 0 else {
+            return
+        }
+
+        let pageWidth = context.containerSize.width
+        let targetPageIndex = SidebarSpacePagerMagnetism.targetPageIndex(
+            originalOffsetX: context.originalTarget.rect.minX,
+            proposedOffsetX: target.rect.minX,
+            visibleFractionalPageIndex: visibleFractionalPageIndex,
+            velocityX: context.velocity.dx,
+            pageWidth: pageWidth,
+            pageCount: pageCount
+        )
+
+        target.rect.origin.x = CGFloat(targetPageIndex) * pageWidth
+        target.anchor = .topLeading
+    }
+}
+
+struct SidebarSpacePagerMagnetism {
+    static func targetPageIndex(
+        originalOffsetX: CGFloat,
+        proposedOffsetX: CGFloat,
+        visibleFractionalPageIndex: CGFloat?,
+        velocityX: CGFloat,
+        pageWidth: CGFloat,
+        pageCount: Int
+    ) -> Int {
+        guard pageCount > 0,
+              pageWidth.isFinite,
+              pageWidth > 0 else {
+            return 0
+        }
+
+        let currentPageIndex = clampedPageIndex(
+            Int((finiteOffset(originalOffsetX) / pageWidth).rounded()),
+            pageCount: pageCount
+        )
+        let currentPagePosition = CGFloat(currentPageIndex)
+        let proposedPagePosition = finiteOffset(proposedOffsetX) / pageWidth
+        let proposedDeltaInPages = proposedPagePosition - currentPagePosition
+        let proposedDistance = abs(proposedDeltaInPages)
+
+        guard proposedDistance > 0 else {
+            return currentPageIndex
+        }
+
+        let direction = proposedDeltaInPages > 0 ? 1 : -1
+        let actualScrolledDistance = actualScrolledDistance(
+            from: currentPagePosition,
+            toward: direction,
+            visibleFractionalPageIndex: visibleFractionalPageIndex,
+            proposedDistance: proposedDistance
+        )
+        let velocityBonusPages = velocityBonusPages(
+            velocityX: velocityX,
+            actualScrolledDistance: actualScrolledDistance
+        )
+        let effectiveDistance = min(proposedDistance, actualScrolledDistance + velocityBonusPages)
+        let pageStepCount = magneticPageStepCount(effectiveDistance: effectiveDistance)
+        return clampedPageIndex(currentPageIndex + direction * pageStepCount, pageCount: pageCount)
+    }
+
+    private static func finiteOffset(_ offset: CGFloat) -> CGFloat {
+        offset.isFinite ? offset : 0
+    }
+
+    private static func actualScrolledDistance(
+        from currentPagePosition: CGFloat,
+        toward direction: Int,
+        visibleFractionalPageIndex: CGFloat?,
+        proposedDistance: CGFloat
+    ) -> CGFloat {
+        guard let visibleFractionalPageIndex,
+              visibleFractionalPageIndex.isFinite else {
+            return proposedDistance
+        }
+
+        let actualDelta = direction > 0
+            ? visibleFractionalPageIndex - currentPagePosition
+            : currentPagePosition - visibleFractionalPageIndex
+        return min(max(actualDelta, 0), proposedDistance)
+    }
+
+    private static func velocityBonusPages(
+        velocityX: CGFloat,
+        actualScrolledDistance: CGFloat
+    ) -> CGFloat {
+        guard actualScrolledDistance >= SidebarSpacePagerMetrics.magneticFastFlickDistanceThreshold else {
+            return 0
+        }
+
+        let speed = abs(velocityX)
+        guard speed >= SidebarSpacePagerMetrics.magneticFlickVelocityThreshold else {
+            return 0
+        }
+
+        let velocityRange = max(
+            SidebarSpacePagerMetrics.magneticMaxVelocityBonusVelocity
+                - SidebarSpacePagerMetrics.magneticFlickVelocityThreshold,
+            1
+        )
+        let normalizedVelocity = min(
+            max((speed - SidebarSpacePagerMetrics.magneticFlickVelocityThreshold) / velocityRange, 0),
+            1
+        )
+        return normalizedVelocity * SidebarSpacePagerMetrics.magneticMaxVelocityBonusPages
+    }
+
+    private static func magneticPageStepCount(effectiveDistance: CGFloat) -> Int {
+        guard effectiveDistance >= SidebarSpacePagerMetrics.magneticPageDistanceThreshold else {
+            return 0
+        }
+
+        return Int((effectiveDistance - SidebarSpacePagerMetrics.magneticPageDistanceThreshold).rounded(.down)) + 1
+    }
+
+    private static func clampedPageIndex(_ pageIndex: Int, pageCount: Int) -> Int {
+        min(max(pageIndex, 0), pageCount - 1)
+    }
+}
+
 struct SidebarSpacePagerFocus {
     static func focusedTabID(
         for space: BrowserSpace,
@@ -2542,7 +3032,8 @@ struct SidebarSpacePageSnapshotBuilder {
     static func spacePages(
         activeSpaces: [BrowserSpace],
         folders: [BrowserFolder],
-        tabs: [BrowserTab]
+        tabs: [BrowserTab],
+        liveSessionTabIDs: Set<TabID> = []
     ) -> [SidebarSpacePageSnapshot] {
         let pageSpaceIDs = Set(activeSpaces.map(\.id))
         let foldersByID = Dictionary(
@@ -2575,15 +3066,31 @@ struct SidebarSpacePageSnapshotBuilder {
             return SidebarSpacePageSnapshot(
                 index: index,
                 space: space,
-                favoriteTabs: tabItems(for: space.favoriteTabIDs, focusedTabID: focusedTabID, tabsByID: tabsByID),
-                pinnedTabs: tabItems(for: space.pinnedTabIDs, focusedTabID: focusedTabID, tabsByID: tabsByID),
+                favoriteTabs: tabItems(
+                    for: space.favoriteTabIDs,
+                    focusedTabID: focusedTabID,
+                    tabsByID: tabsByID,
+                    liveSessionTabIDs: liveSessionTabIDs
+                ),
+                pinnedTabs: tabItems(
+                    for: space.pinnedTabIDs,
+                    focusedTabID: focusedTabID,
+                    tabsByID: tabsByID,
+                    liveSessionTabIDs: liveSessionTabIDs
+                ),
                 folders: folderItems(
                     for: space.folderIDs,
                     focusedTabID: focusedTabID,
                     foldersByID: foldersByID,
-                    tabsByID: tabsByID
+                    tabsByID: tabsByID,
+                    liveSessionTabIDs: liveSessionTabIDs
                 ),
-                regularTabs: tabItems(for: space.regularTabIDs, focusedTabID: focusedTabID, tabsByID: tabsByID)
+                regularTabs: tabItems(
+                    for: space.regularTabIDs,
+                    focusedTabID: focusedTabID,
+                    tabsByID: tabsByID,
+                    liveSessionTabIDs: liveSessionTabIDs
+                )
             )
         }
     }
@@ -2591,13 +3098,15 @@ struct SidebarSpacePageSnapshotBuilder {
     private static func tabItems(
         for ids: [TabID],
         focusedTabID: TabID?,
-        tabsByID: [TabID: BrowserTab]
+        tabsByID: [TabID: BrowserTab],
+        liveSessionTabIDs: Set<TabID>
     ) -> [SidebarTabItemSnapshot] {
         let orderedTabs = ids.compactMap { tabsByID[$0] }
         return orderedTabs.enumerated().map { index, tab in
             SidebarTabItemSnapshot(
                 tab: tab,
                 isSelected: SidebarSpacePagerFocus.isFocused(tabID: tab.id, focusedTabID: focusedTabID),
+                hasLiveSession: liveSessionTabIDs.contains(tab.id),
                 canMoveUp: index > 0,
                 canMoveDown: index < orderedTabs.count - 1
             )
@@ -2608,7 +3117,8 @@ struct SidebarSpacePageSnapshotBuilder {
         for ids: [FolderID],
         focusedTabID: TabID?,
         foldersByID: [FolderID: BrowserFolder],
-        tabsByID: [TabID: BrowserTab]
+        tabsByID: [TabID: BrowserTab],
+        liveSessionTabIDs: Set<TabID>
     ) -> [SidebarFolderItemSnapshot] {
         ids.compactMap { id in
             guard let folder = foldersByID[id] else {
@@ -2617,12 +3127,18 @@ struct SidebarSpacePageSnapshotBuilder {
 
             return SidebarFolderItemSnapshot(
                 folder: folder,
-                tabs: tabItems(for: folder.tabIDs, focusedTabID: focusedTabID, tabsByID: tabsByID),
+                tabs: tabItems(
+                    for: folder.tabIDs,
+                    focusedTabID: focusedTabID,
+                    tabsByID: tabsByID,
+                    liveSessionTabIDs: liveSessionTabIDs
+                ),
                 childFolders: folderItems(
                     for: folder.childFolderIDs,
                     focusedTabID: focusedTabID,
                     foldersByID: foldersByID,
-                    tabsByID: tabsByID
+                    tabsByID: tabsByID,
+                    liveSessionTabIDs: liveSessionTabIDs
                 )
             )
         }
@@ -2661,6 +3177,7 @@ private struct SidebarActivityPageView: View, Equatable {
     let openHistoryEntry: (BrowserHistoryEntry) -> Void
     let revealDownload: (BrowserDownload) -> Void
 
+    @Environment(\.sidebarUsesDarkForeground) private var sidebarUsesDarkForeground
     @State private var selectedProfileID: ProfileID?
     @State private var selectedMode: SidebarActivityMode = .history
     @State private var profileFilterIsPresented = false
@@ -2746,8 +3263,10 @@ private struct SidebarActivityPageView: View, Equatable {
                     .fill(isSelected ? Color.primary.opacity(0.10) : Color.clear)
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.primary.opacity(isSelected ? 0.16 : 0.08), lineWidth: 1)
+                if !sidebarUsesDarkForeground {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.primary.opacity(isSelected ? 0.16 : 0.08), lineWidth: 1)
+                }
             }
             .overlay(alignment: .topTrailing) {
                 activityCountBadge(count, isSelected: isSelected)
@@ -3081,18 +3600,24 @@ private struct SidebarSpacePageView: View, Equatable {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 12) {
                 favoriteTabGrid
+                emptyFavoriteTabDropTarget
                 tabSection(
-                    "Pinned",
+                    "List Essentials",
                     tabs: page.pinnedTabs,
                     symbolName: "pin.fill",
                     placement: .pinned
                 )
+                emptyPinnedTabDropTarget
                 folderSection
                 tabSection(
-                    "Tabs",
+                    page.space.name,
                     tabs: page.regularTabs,
                     symbolName: "rectangle.stack",
-                    placement: .regular
+                    placement: .regular,
+                    showsWhenEmpty: SidebarSpacePageSectionVisibility.showsEmptyRegularTabDropSection(
+                        for: page,
+                        isDragging: tabDropState.isDragging
+                    )
                 )
             }
             .padding(.horizontal, 10)
@@ -3101,6 +3626,7 @@ private struct SidebarSpacePageView: View, Equatable {
             .frame(maxWidth: .infinity, minHeight: 1, alignment: .topLeading)
             .contentShape(Rectangle())
             .background(EnclosingScrollIndicatorHider())
+            .animation(SidebarTabReorderInteractionMetrics.indicatorAnimation, value: tabDropState.isDragging)
         }
         .scrollIndicators(.hidden)
         .background(EnclosingScrollIndicatorHider())
@@ -3139,13 +3665,48 @@ private struct SidebarSpacePageView: View, Equatable {
     }
 
     @ViewBuilder
+    private var emptyFavoriteTabDropTarget: some View {
+        if SidebarSpacePageSectionVisibility.showsEmptyFavoriteTabDropSection(
+            for: page,
+            isDragging: tabDropState.isDragging
+        ) {
+            SidebarTabDropSlot(
+                slotID: tabDropSlotID(placement: .favorite, targetTabID: nil),
+                resetToken: tabDropResetToken(for: page.favoriteTabs),
+                dropState: $tabDropState,
+                hitHeight: SidebarTabReorderInteractionMetrics.emptySectionDropSlotHitHeight
+            ) { draggedTabID in
+                moveTabToPlacement(draggedTabID, .favorite)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var emptyPinnedTabDropTarget: some View {
+        if SidebarSpacePageSectionVisibility.showsEmptyPinnedTabDropSection(
+            for: page,
+            isDragging: tabDropState.isDragging
+        ) {
+            SidebarTabDropSlot(
+                slotID: tabDropSlotID(placement: .pinned, targetTabID: nil),
+                resetToken: tabDropResetToken(for: page.pinnedTabs),
+                dropState: $tabDropState,
+                hitHeight: SidebarTabReorderInteractionMetrics.emptySectionDropSlotHitHeight
+            ) { draggedTabID in
+                moveTabToPlacement(draggedTabID, .pinned)
+            }
+        }
+    }
+
+    @ViewBuilder
     private func tabSection(
         _ title: String,
         tabs: [SidebarTabItemSnapshot],
         symbolName: String,
-        placement: BrowserTabPlacement
+        placement: BrowserTabPlacement,
+        showsWhenEmpty: Bool = false
     ) -> some View {
-        if !tabs.isEmpty {
+        if !tabs.isEmpty || showsWhenEmpty {
             let resetToken = tabDropResetToken(for: tabs)
             let indexedTabs = Array(tabs.enumerated())
 
@@ -3174,7 +3735,10 @@ private struct SidebarSpacePageView: View, Equatable {
                 SidebarTabDropSlot(
                     slotID: tabDropSlotID(placement: placement, targetTabID: nil),
                     resetToken: resetToken,
-                    dropState: $tabDropState
+                    dropState: $tabDropState,
+                    hitHeight: tabs.isEmpty
+                        ? SidebarTabReorderInteractionMetrics.emptySectionDropSlotHitHeight
+                        : SidebarTabReorderInteractionMetrics.dropSlotHitHeight
                 ) { draggedTabID in
                     moveTabToPlacement(draggedTabID, placement)
                 }
@@ -3218,6 +3782,7 @@ private struct SidebarSpacePageView: View, Equatable {
                 close: { closeTab(item.tab) },
                 setPlacement: { placement in setTabPlacement(item.tab.id, placement) },
                 move: { direction in moveTab(item.tab.id, direction) },
+                canClose: item.canClose,
                 canMoveUp: item.canMoveUp,
                 canMoveDown: item.canMoveDown,
                 dragStarted: { tabDropState.beginDrag() }
@@ -3528,6 +4093,7 @@ private struct SidebarFolderNodeView: View {
                 close: { closeTab(item.tab) },
                 setPlacement: { placement in setTabPlacement(item.tab.id, placement) },
                 move: { direction in moveTab(item.tab.id, direction) },
+                canClose: item.canClose,
                 canMoveUp: item.canMoveUp,
                 canMoveDown: item.canMoveDown,
                 dragStarted: { tabDropState.beginDrag() }
@@ -3591,4 +4157,11 @@ private struct SidebarFolderNodeView: View {
 
 enum SidebarSpacePagerMetrics {
     static let selectionAnimation: Animation = .smooth(duration: 0.18, extraBounce: 0)
+    static let magneticPageDistanceThreshold: CGFloat = 0.55
+    static let magneticFlickDistanceThreshold: CGFloat = 0.16
+    static let magneticFlickVelocityThreshold: CGFloat = 600
+    static let magneticFastFlickDistanceThreshold: CGFloat = 0.03
+    static let magneticFastFlickVelocityThreshold: CGFloat = 900
+    static let magneticMaxVelocityBonusPages: CGFloat = 0.9
+    static let magneticMaxVelocityBonusVelocity: CGFloat = 900
 }

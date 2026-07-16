@@ -37,6 +37,7 @@ final class CommandRouterTests: XCTestCase {
         XCTAssertEqual(router.route(input: "move to tabs"), .browserAction(.moveTabToRegular))
         XCTAssertEqual(router.route(input: "move tab up"), .browserAction(.moveTabUp))
         XCTAssertEqual(router.route(input: "move tab down"), .browserAction(.moveTabDown))
+        XCTAssertEqual(router.route(input: "password manager"), .browserAction(.openPasswordManager))
     }
 
     func testBrowserActionSuggestionsRespectAvailability() {
@@ -122,5 +123,16 @@ final class CommandRouterTests: XCTestCase {
             return XCTFail("Expected a search command.")
         }
         XCTAssertEqual(query, "backlog grooming")
+    }
+
+    func testPasswordManagerActionIsAlwaysSuggested() {
+        let router = CommandRouter()
+
+        let suggestions = router.browserActionSuggestions(
+            for: "passwords",
+            availability: CommandRouter.BrowserActionAvailability()
+        )
+
+        XCTAssertEqual(suggestions.map(\.action), [.openPasswordManager])
     }
 }
