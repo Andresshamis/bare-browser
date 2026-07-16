@@ -1613,9 +1613,11 @@ final class BrowserWebViewContainerView: NSView {
             return nil
         }
 
-        let blockerPoint = convert(point, to: hitTestBlocker)
-        if let blockerHit = hitTestBlocker.hitTest(blockerPoint) {
-            return blockerHit
+        if !hitTestBlocker.isHidden {
+            let blockerPoint = convert(point, to: hitTestBlocker)
+            if let blockerHit = hitTestBlocker.hitTest(blockerPoint) {
+                return blockerHit
+            }
         }
 
         guard let activeWebView,
@@ -1647,6 +1649,7 @@ final class BrowserWebViewContainerView: NSView {
     private func updateHitTestBlockerFrame() {
         guard let mouseExclusionRegion else {
             hitTestBlocker.isHidden = true
+            hitTestBlocker.frame = .zero
             return
         }
 
@@ -1674,7 +1677,11 @@ final class WebContentHitTestBlockerView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        hitRegionContains(point) ? self : nil
+        guard !isHidden else {
+            return nil
+        }
+
+        return hitRegionContains(point) ? self : nil
     }
 
     override func resetCursorRects() {
