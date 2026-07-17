@@ -503,13 +503,32 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         ]
 
         XCTAssertEqual(
-            SidebarSpacePagerChrome.theme(for: pages, fractionalPageIndex: 0),
+            SidebarSpacePagerChrome.theme(for: .activity, in: pages),
             .standard
         )
         XCTAssertEqual(
-            SidebarSpacePagerChrome.theme(for: pages, fractionalPageIndex: 1),
+            SidebarSpacePagerChrome.theme(for: .space(space.id), in: pages),
             SidebarChromeTheme.theme(for: space)
         )
+        XCTAssertNil(
+            SidebarSpacePagerChrome.theme(for: .space(UUID()), in: pages)
+        )
+    }
+
+    func testActivityRelativeTimestampFormattingIsStableForFixedDates() {
+        let referenceDate = Date(timeIntervalSince1970: 2_000_000)
+        let date = referenceDate.addingTimeInterval(-125)
+        let first = SidebarActivityRelativeTimeFormatter.string(
+            for: date,
+            relativeTo: referenceDate
+        )
+        let second = SidebarActivityRelativeTimeFormatter.string(
+            for: date,
+            relativeTo: referenceDate
+        )
+
+        XCTAssertFalse(first.isEmpty)
+        XCTAssertEqual(first, second)
     }
 
     func testTabDropStateTracksActiveDragForRealtimeEmptySections() {

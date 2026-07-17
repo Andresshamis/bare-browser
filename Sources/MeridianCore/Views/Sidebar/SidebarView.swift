@@ -2658,7 +2658,9 @@ private struct SidebarSpacePagerView: View {
 
     @State private var scrollPositionPageID: SidebarSpacePagerPageID?
     @State private var scrollIsActive = false
-    @State private var visibleFractionalPageIndex: CGFloat?
+    // This tracker is deliberately non-observable. The target behavior needs the
+    // latest offset, but publishing every offset would rebuild the pager per frame.
+    @State private var geometryTracker = SidebarSpacePagerGeometryTracker()
 
     var body: some View {
         GeometryReader { proxy in
@@ -2682,7 +2684,7 @@ private struct SidebarSpacePagerView: View {
             }
             .scrollTargetBehavior(SidebarMagneticPageScrollTargetBehavior(
                 pageCount: snapshot.pageCount,
-                visibleFractionalPageIndex: visibleFractionalPageIndex
+                geometryTracker: geometryTracker
             ))
             .scrollPosition(id: $scrollPositionPageID)
             .scrollDisabled(snapshot.pageCount <= 1)
@@ -2723,9 +2725,6 @@ private struct SidebarSpacePagerView: View {
                     scrollPositionPageID = request.pageID
                 }
             }
-            .onChange(of: scrollPositionPageID) { _, newValue in
-                previewPage(newValue)
-            }
             .onChange(of: snapshot) { _, _ in
                 if !scrollIsActive {
                     previewSpace(nil)
@@ -2736,22 +2735,26 @@ private struct SidebarSpacePagerView: View {
                 scrollIsActive = newPhase != .idle
 
                 if newPhase == .idle {
+                    // Keep the expensive Liquid Glass tree fixed while the pager
+                    // is moving, then publish the exact destination theme once.
+                    // Interpolating and publishing here on every geometry sample
+                    // forces a full-height glass rebuild each display frame.
+                    updateSidebarChromeTheme(
+                        SidebarSpacePagerChrome.theme(
+                            for: scrollPositionPageID,
+                            in: snapshot.pages
+                        ) ?? selectedChromeTheme
+                    )
                     commitPageIfNeeded(scrollPositionPageID)
                     previewSpace(nil)
                 }
             }
-            .onScrollGeometryChange(for: SidebarSpacePagerGeometryState.self) { geometry in
-                let fractionalPageIndex = geometry.contentOffset.x / pageWidth
-                return SidebarSpacePagerGeometryState(
-                    fractionalPageIndex: fractionalPageIndex,
-                    chromeTheme: SidebarSpacePagerChrome.theme(
-                        for: snapshot.pages,
-                        fractionalPageIndex: Double(fractionalPageIndex)
-                    )
-                )
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.x / pageWidth
             } action: { _, newState in
-                visibleFractionalPageIndex = newState.fractionalPageIndex
-                updateSidebarChromeTheme(newState.chromeTheme)
+                // This reference is deliberately non-observable. Magnetism gets
+                // the live offset without invalidating any SwiftUI view.
+                geometryTracker.visibleFractionalPageIndex = newState
             }
             .onDisappear {
                 updateSidebarChromeTheme(nil)
@@ -2807,7 +2810,7 @@ private struct SidebarSpacePagerView: View {
         }
 
         if let selectedPageIndex = snapshot.pages.firstIndex(where: { $0.id == selectedPageID }) {
-            visibleFractionalPageIndex = CGFloat(selectedPageIndex)
+            geometryTracker.visibleFractionalPageIndex = CGFloat(selectedPageIndex)
         }
 
         if animated {
@@ -2816,21 +2819,6 @@ private struct SidebarSpacePagerView: View {
             }
         } else {
             scrollPositionPageID = selectedPageID
-        }
-    }
-
-    private func previewPage(_ pageID: SidebarSpacePagerPageID?) {
-        withTransaction(Transaction(animation: nil)) {
-            switch pageID {
-            case .activity:
-                selectAuxiliaryPage(.activity)
-                previewSpace(nil)
-            case .space(let spaceID):
-                selectAuxiliaryPage(nil)
-                previewSpace(spaceID)
-            case nil:
-                previewSpace(nil)
-            }
         }
     }
 
@@ -2853,20 +2841,20 @@ private struct SidebarSpacePagerView: View {
     }
 }
 
-private struct SidebarSpacePagerGeometryState: Equatable {
-    let fractionalPageIndex: CGFloat
-    let chromeTheme: SidebarChromeTheme?
+private final class SidebarSpacePagerGeometryTracker {
+    var visibleFractionalPageIndex: CGFloat?
 }
 
 struct SidebarSpacePagerChrome {
     static func theme(
-        for pages: [SidebarSpacePagerPageSnapshot],
-        fractionalPageIndex: Double
+        for pageID: SidebarSpacePagerPageID?,
+        in pages: [SidebarSpacePagerPageSnapshot]
     ) -> SidebarChromeTheme? {
-        SidebarChromeTheme.interpolated(
-            themes: pages.map(\.chromeTheme),
-            fractionalIndex: fractionalPageIndex
-        )
+        guard let pageID else {
+            return nil
+        }
+
+        return pages.first(where: { $0.id == pageID })?.chromeTheme
     }
 }
 
@@ -2888,7 +2876,7 @@ struct SidebarSpacePagerSelection {
 
 private struct SidebarMagneticPageScrollTargetBehavior: ScrollTargetBehavior {
     let pageCount: Int
-    let visibleFractionalPageIndex: CGFloat?
+    let geometryTracker: SidebarSpacePagerGeometryTracker
 
     func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
         guard context.axes.contains(.horizontal),
@@ -2900,7 +2888,7 @@ private struct SidebarMagneticPageScrollTargetBehavior: ScrollTargetBehavior {
         let targetPageIndex = SidebarSpacePagerMagnetism.targetPageIndex(
             originalOffsetX: context.originalTarget.rect.minX,
             proposedOffsetX: target.rect.minX,
-            visibleFractionalPageIndex: visibleFractionalPageIndex,
+            visibleFractionalPageIndex: geometryTracker.visibleFractionalPageIndex,
             velocityX: context.velocity.dx,
             pageWidth: pageWidth,
             pageCount: pageCount
@@ -3172,6 +3160,15 @@ private enum SidebarActivityMode: CaseIterable, Identifiable {
     }
 }
 
+struct SidebarActivityRelativeTimeFormatter {
+    static func string(for date: Date, relativeTo referenceDate: Date = Date()) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.dateTimeStyle = .numeric
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: referenceDate)
+    }
+}
+
 private struct SidebarActivityPageView: View, Equatable {
     nonisolated let snapshot: SidebarActivityPageSnapshot
     let openHistoryEntry: (BrowserHistoryEntry) -> Void
@@ -3418,7 +3415,10 @@ private struct SidebarActivityPageView: View, Equatable {
                     Text("-")
                     Text(profileName(for: download.profileID))
                     Spacer(minLength: 0)
-                    Text(download.updatedAt, style: .relative)
+                    // A plain String is intentional. Text(Date, style: .relative)
+                    // installs a display-rate time source; this retained offscreen
+                    // page otherwise relayouts every timestamp on every frame.
+                    Text(SidebarActivityRelativeTimeFormatter.string(for: download.updatedAt))
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -3457,7 +3457,7 @@ private struct SidebarActivityPageView: View, Equatable {
                     HStack(spacing: 6) {
                         Text(profileName(for: entry.profileID))
                         Text("-")
-                        Text(entry.lastVisitedAt, style: .relative)
+                        Text(SidebarActivityRelativeTimeFormatter.string(for: entry.lastVisitedAt))
                         if entry.visitCount > 1 {
                             Text("-")
                             Text("\(entry.visitCount) visits")
@@ -3710,7 +3710,11 @@ private struct SidebarSpacePageView: View, Equatable {
             let resetToken = tabDropResetToken(for: tabs)
             let indexedTabs = Array(tabs.enumerated())
 
-            VStack(alignment: .leading, spacing: 0) {
+            // Keep rows lazy within the vertically scrolling page. Wrapping this
+            // section in an eager VStack realizes every tab (and its favicon,
+            // drag source, context menu, and drop targets) as the page enters the
+            // horizontal pager, making swipe cost grow with the tab count.
+            LazyVStack(alignment: .leading, spacing: 0) {
                 SidebarSectionHeader(title: title, symbolName: symbolName)
 
                 ForEach(indexedTabs, id: \.element.id) { offset, item in
@@ -3782,6 +3786,7 @@ private struct SidebarSpacePageView: View, Equatable {
                 close: { closeTab(item.tab) },
                 setPlacement: { placement in setTabPlacement(item.tab.id, placement) },
                 move: { direction in moveTab(item.tab.id, direction) },
+                showsLoadingIndicator: item.hasLiveSession,
                 canClose: item.canClose,
                 canMoveUp: item.canMoveUp,
                 canMoveDown: item.canMoveDown,
@@ -3874,41 +3879,71 @@ private struct EnclosingScrollIndicatorHider: NSViewRepresentable {
 }
 
 private final class EnclosingScrollIndicatorHidingView: NSView {
+    private weak var configuredScrollView: NSScrollView?
+    private var deferredConfigurationIsScheduled = false
+
     var axes: ScrollIndicatorHiderAxes = .all {
         didSet {
+            guard oldValue != axes else {
+                return
+            }
+
+            configuredScrollView = nil
             hideEnclosingIndicators()
         }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        configuredScrollView = nil
         hideEnclosingIndicators()
     }
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
+        configuredScrollView = nil
         hideEnclosingIndicators()
     }
 
     override func layout() {
         super.layout()
-        hideEnclosingIndicators()
+        configureMatchingScrollView()
     }
 
     func hideEnclosingIndicators() {
-        configureMatchingScrollViews()
-
-        DispatchQueue.main.async { [weak self] in
-            self?.configureMatchingScrollViews()
-        }
-    }
-
-    private func configureMatchingScrollViews() {
-        guard let nearestScrollView else {
+        if configureMatchingScrollView() {
             return
         }
 
+        guard !deferredConfigurationIsScheduled else {
+            return
+        }
+
+        deferredConfigurationIsScheduled = true
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            self.deferredConfigurationIsScheduled = false
+            self.configureMatchingScrollView()
+        }
+    }
+
+    @discardableResult
+    private func configureMatchingScrollView() -> Bool {
+        if configuredScrollView != nil {
+            return true
+        }
+
+        guard let nearestScrollView else {
+            return false
+        }
+
+        configuredScrollView = nearestScrollView
         configure(nearestScrollView)
+        return true
     }
 
     private var nearestScrollView: NSScrollView? {
@@ -3924,23 +3959,51 @@ private final class EnclosingScrollIndicatorHidingView: NSView {
     }
 
     private func configure(_ scrollView: NSScrollView) {
-        scrollView.autohidesScrollers = true
-        scrollView.usesPredominantAxisScrolling = true
-        scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsets()
-        scrollView.scrollerInsets = NSEdgeInsets()
+        if !scrollView.autohidesScrollers {
+            scrollView.autohidesScrollers = true
+        }
+        if !scrollView.usesPredominantAxisScrolling {
+            scrollView.usesPredominantAxisScrolling = true
+        }
+        if scrollView.automaticallyAdjustsContentInsets {
+            scrollView.automaticallyAdjustsContentInsets = false
+        }
+        if !scrollView.contentInsets.isZero {
+            scrollView.contentInsets = NSEdgeInsets()
+        }
+        if !scrollView.scrollerInsets.isZero {
+            scrollView.scrollerInsets = NSEdgeInsets()
+        }
 
         if axes.hidesHorizontal {
-            scrollView.hasHorizontalScroller = false
-            scrollView.horizontalScroller?.isHidden = true
-            scrollView.horizontalScrollElasticity = .none
+            if scrollView.hasHorizontalScroller {
+                scrollView.hasHorizontalScroller = false
+            }
+            if scrollView.horizontalScroller?.isHidden == false {
+                scrollView.horizontalScroller?.isHidden = true
+            }
+            if scrollView.horizontalScrollElasticity != .none {
+                scrollView.horizontalScrollElasticity = .none
+            }
         }
 
         if axes.hidesVertical {
-            scrollView.hasVerticalScroller = false
-            scrollView.verticalScroller?.isHidden = true
-            scrollView.verticalScrollElasticity = .none
+            if scrollView.hasVerticalScroller {
+                scrollView.hasVerticalScroller = false
+            }
+            if scrollView.verticalScroller?.isHidden == false {
+                scrollView.verticalScroller?.isHidden = true
+            }
+            if scrollView.verticalScrollElasticity != .none {
+                scrollView.verticalScrollElasticity = .none
+            }
         }
+    }
+}
+
+private extension NSEdgeInsets {
+    var isZero: Bool {
+        top == 0 && left == 0 && bottom == 0 && right == 0
     }
 }
 
@@ -3991,7 +4054,10 @@ private struct SidebarFolderNodeView: View {
             let resetToken = tabDropResetToken(for: folderItem.tabs)
             let indexedTabs = Array(folderItem.tabs.enumerated())
 
-            VStack(alignment: .leading, spacing: 2) {
+            // Folder contents participate in the same vertical viewport as the
+            // surrounding page, so expanded trees must not eagerly realize all
+            // descendant tab rows during a horizontal page transition.
+            LazyVStack(alignment: .leading, spacing: 2) {
                 SidebarFolderTreeView(
                     folders: folderItem.childFolders,
                     spaceID: spaceID,
@@ -4093,6 +4159,7 @@ private struct SidebarFolderNodeView: View {
                 close: { closeTab(item.tab) },
                 setPlacement: { placement in setTabPlacement(item.tab.id, placement) },
                 move: { direction in moveTab(item.tab.id, direction) },
+                showsLoadingIndicator: item.hasLiveSession,
                 canClose: item.canClose,
                 canMoveUp: item.canMoveUp,
                 canMoveDown: item.canMoveDown,

@@ -42,16 +42,17 @@ private struct SidebarGlassTintOverlay<ClipShape: Shape>: View {
             shape
                 .fill(tintColor.opacity(recipe.themeFillOpacity))
 
-            LinearGradient(
-                colors: [
-                    .white.opacity(recipe.neutralHighlightOpacity),
-                    tintColor.opacity(recipe.themeHighlightOpacity),
-                    .clear
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+            shape.fill(
+                LinearGradient(
+                    colors: [
+                        .white.opacity(recipe.neutralHighlightOpacity),
+                        tintColor.opacity(recipe.themeHighlightOpacity),
+                        .clear
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
             )
-            .clipShape(shape)
         }
         .allowsHitTesting(false)
     }
