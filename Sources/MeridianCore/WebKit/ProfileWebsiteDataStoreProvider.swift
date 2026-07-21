@@ -2,7 +2,12 @@ import Foundation
 import WebKit
 
 @MainActor
-public final class ProfileWebsiteDataStoreProvider {
+public protocol ProfileWebsiteDataStoreDeleting: AnyObject {
+    func removeWebsiteDataStore(identifier: UUID) async throws
+}
+
+@MainActor
+public final class ProfileWebsiteDataStoreProvider: ProfileWebsiteDataStoreDeleting {
     public init() {}
 
     public func websiteDataStore(for profile: BrowserProfile) -> WKWebsiteDataStore {
@@ -16,5 +21,17 @@ public final class ProfileWebsiteDataStoreProvider {
         }
 
         return WKWebsiteDataStore(forIdentifier: identifier)
+    }
+
+    public func removeWebsiteDataStore(identifier: UUID) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            WKWebsiteDataStore.remove(forIdentifier: identifier) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        }
     }
 }

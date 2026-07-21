@@ -270,7 +270,7 @@ private struct SidebarFavoriteTabTile: View {
             return AnyShapeStyle(sidebarForegroundColor.opacity(selectionBackgroundOpacity))
         }
         if isHovered {
-            return AnyShapeStyle(Color.primary.opacity(hoverBackgroundOpacity))
+            return AnyShapeStyle(sidebarForegroundColor.opacity(hoverBackgroundOpacity))
         }
         return AnyShapeStyle(.clear)
     }
@@ -282,7 +282,7 @@ private struct SidebarFavoriteTabTile: View {
         if item.isSelected {
             return sidebarForegroundColor.opacity(colorScheme == .dark ? 0.24 : 0.18)
         }
-        return Color.primary.opacity(isHovered ? 0.14 : 0.06)
+        return sidebarForegroundColor.opacity(isHovered ? 0.14 : 0.06)
     }
 
     private var selectionBackgroundOpacity: Double {
@@ -390,43 +390,91 @@ private final class SidebarFaviconImageLoader: ObservableObject {
             return
         }
 
+        if let cachedImage = SidebarFaviconImageCache.image(for: url) {
+            image = cachedImage
+            return
+        }
+
+        guard let cgImage = await SidebarFaviconRepository.shared.image(for: url),
+              !Task.isCancelled else {
+            return
+        }
+
+        let decodedImage = NSImage(cgImage: cgImage, size: .zero)
+        SidebarFaviconImageCache.insert(decodedImage, for: url)
+        image = decodedImage
+    }
+}
+
+@MainActor
+private enum SidebarFaviconImageCache {
+    private static let cache = NSCache<NSURL, NSImage>()
+
+    static func image(for url: URL) -> NSImage? {
+        cache.object(forKey: url as NSURL)
+    }
+
+    static func insert(_ image: NSImage, for url: URL) {
+        cache.setObject(image, forKey: url as NSURL)
+    }
+}
+
+private actor SidebarFaviconRepository {
+    static let shared = SidebarFaviconRepository()
+    private static let maximumDecodedPixelSize = 64
+
+    private var inFlightRequests: [URL: Task<CGImage?, Never>] = [:]
+
+    func image(for url: URL) async -> CGImage? {
+        if let request = inFlightRequests[url] {
+            return await request.value
+        }
+
+        let request = Task.detached(priority: .utility) {
+            await Self.loadAndDecode(url)
+        }
+        inFlightRequests[url] = request
+
+        let image = await request.value
+        inFlightRequests[url] = nil
+        return image
+    }
+
+    nonisolated private static func loadAndDecode(_ url: URL) async -> CGImage? {
         do {
             var request = URLRequest(url: url)
             request.cachePolicy = .returnCacheDataElseLoad
             request.timeoutInterval = 8
 
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard !Task.isCancelled,
-                  (response as? HTTPURLResponse).map({ 200..<400 ~= $0.statusCode }) ?? true else {
-                return
+            guard (response as? HTTPURLResponse).map({ 200..<400 ~= $0.statusCode }) ?? true else {
+                return nil
             }
 
-            image = Self.image(from: data)
+            return decodedImage(from: data)
         } catch {
-            image = nil
+            return nil
         }
     }
 
-    private static func image(from data: Data) -> NSImage? {
-        if let image = NSImage(data: data),
-           image.isValid {
-            return image
-        }
-
+    nonisolated private static func decodedImage(from data: Data) -> CGImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               CGImageSourceGetCount(source) > 0 else {
             return nil
         }
 
         let imageIndex = bestImageIndex(in: source)
-        guard let cgImage = CGImageSourceCreateImageAtIndex(source, imageIndex, nil) else {
-            return nil
-        }
-
-        return NSImage(cgImage: cgImage, size: .zero)
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maximumDecodedPixelSize,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, imageIndex, thumbnailOptions as CFDictionary)
+            ?? CGImageSourceCreateImageAtIndex(source, imageIndex, nil)
     }
 
-    private static func bestImageIndex(in source: CGImageSource) -> Int {
+    nonisolated private static func bestImageIndex(in source: CGImageSource) -> Int {
         let count = CGImageSourceGetCount(source)
         guard count > 1 else {
             return 0
@@ -437,7 +485,7 @@ private final class SidebarFaviconImageLoader: ObservableObject {
         } ?? 0
     }
 
-    private static func pixelArea(at index: Int, in source: CGImageSource) -> Double {
+    nonisolated private static func pixelArea(at index: Int, in source: CGImageSource) -> Double {
         guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any] else {
             return 0
         }
