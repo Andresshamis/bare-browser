@@ -498,7 +498,8 @@ public struct SidebarView: View {
     }
 
     private func spaceSwitcherButton(_ space: BrowserSpace, isBeingDragged: Bool) -> some View {
-        Button {
+        let profileName = store.profiles.first { $0.id == space.profileID }?.name ?? "Unknown Profile"
+        return Button {
             showSpace(space.id)
         } label: {
             SpaceSwitcherButtonLabel(
@@ -507,8 +508,8 @@ public struct SidebarView: View {
             )
         }
         .buttonStyle(.plain)
-        .help(space.name)
-        .accessibilityLabel(space.name)
+        .help("\(space.name) — \(profileName)")
+        .accessibilityLabel("\(space.name), \(profileName) profile")
         .opacity(isBeingDragged ? 0.22 : 1)
         .scaleEffect(isBeingDragged ? 0.88 : 1)
         .animation(SidebarTabReorderInteractionMetrics.indicatorAnimation, value: isBeingDragged)
@@ -644,7 +645,9 @@ public struct SidebarView: View {
             return
         }
 
-        presentationState.beginSnapshotHandoff(to: addressPreviewTabID(for: id))
+        presentationState.beginSnapshotHandoff(
+            to: addressPreviewTabID(for: id).flatMap(store.profileContext(for:))
+        )
         withTransaction(Transaction(animation: nil)) {
             store.selectSpace(id)
         }
@@ -819,6 +822,16 @@ private struct SidebarAddressControls: View {
             }
 
             sitePermissionsMenu
+
+            Text(presentedProfileName)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(sidebarForegroundColor)
+                .lineLimit(1)
+                .padding(.horizontal, 7)
+                .frame(height: 26)
+                .background(.thinMaterial, in: Capsule())
+                .help("Website data profile: \(presentedProfileName)")
+                .accessibilityLabel("Website data profile \(presentedProfileName)")
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
@@ -836,6 +849,15 @@ private struct SidebarAddressControls: View {
         }
 
         return store.activeTab
+    }
+
+    private var presentedProfileName: String {
+        guard !isActivitySelected,
+              let tab = presentedTab,
+              let profileID = store.profileContext(for: tab.id)?.profileID else {
+            return "All Profiles"
+        }
+        return store.profiles.first { $0.id == profileID }?.name ?? "Unknown Profile"
     }
 
     private var currentURLForCopy: URL? {
@@ -991,10 +1013,11 @@ private struct SidebarAddressControls: View {
     private var activeSitePermissionContext: ActiveSitePermissionContext? {
         guard let tab = presentedTab,
               let url = tab.url,
-              let origin = SitePermissionOrigin(url: url) else {
+              let origin = SitePermissionOrigin(url: url),
+              let profileID = store.profileContext(for: tab.id)?.profileID else {
             return nil
         }
-        return ActiveSitePermissionContext(origin: origin, profileID: tab.profileID)
+        return ActiveSitePermissionContext(origin: origin, profileID: profileID)
     }
 
     private func decision(
@@ -1840,6 +1863,7 @@ struct SpaceCustomizationView: View {
     @State private var draftName: String
     @State private var selectedIconCategoryID: String
     @State private var showsIconSection: Bool
+    @State private var pendingProfileID: ProfileID?
 
     init(
         store: BrowserStore,
@@ -1856,6 +1880,7 @@ struct SpaceCustomizationView: View {
         _draftName = State(initialValue: space.name)
         _selectedIconCategoryID = State(initialValue: SpaceCustomizationSheet.initialIconCategoryID(for: space.symbolName))
         _showsIconSection = State(initialValue: deferredIconGridDelayNanoseconds == nil)
+        _pendingProfileID = State(initialValue: nil)
     }
 
     var body: some View {
@@ -1887,6 +1912,26 @@ struct SpaceCustomizationView: View {
         }
         .onDisappear {
             store.flushScheduledSessionPersistence()
+        }
+        .alert(
+            "Change Space Profile?",
+            isPresented: Binding(
+                get: { pendingProfileID != nil },
+                set: { if !$0 { pendingProfileID = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) {
+                pendingProfileID = nil
+            }
+            Button("Change Profile") {
+                guard let profileID = pendingProfileID else {
+                    return
+                }
+                pendingProfileID = nil
+                _ = store.setProfile(profileID, forSpace: currentSpace.id)
+            }
+        } message: {
+            Text("Every tab in this space will reload using \(pendingProfileName)’s website data. Existing sign-ins and sessions remain in the original profile.")
         }
     }
 
@@ -1963,7 +2008,10 @@ struct SpaceCustomizationView: View {
                     Picker("Profile", selection: Binding(
                         get: { currentSpace.profileID },
                         set: { profileID in
-                            _ = updateSpace(profileID: profileID)
+                            guard profileID != currentSpace.profileID else {
+                                return
+                            }
+                            pendingProfileID = profileID
                         }
                     )) {
                         ForEach(profiles) { profile in
@@ -2093,6 +2141,10 @@ struct SpaceCustomizationView: View {
         }
     }
 
+    private var pendingProfileName: String {
+        profiles.first { $0.id == pendingProfileID }?.name ?? "the selected profile"
+    }
+
     private var visibleSymbolOptions: [String] {
         SpaceCustomizationSheet.iconCategories.first { $0.id == selectedIconCategoryID }?.symbolNames
             ?? SpaceCustomizationSheet.allSymbolOptions
@@ -2173,7 +2225,6 @@ struct SpaceCustomizationView: View {
     private func updateSpace(
         name: String? = nil,
         symbolName: String? = nil,
-        profileID: ProfileID? = nil,
         sidebarAppearance: SidebarAppearance? = nil
     ) -> Bool {
         let space = currentSpace
@@ -2184,7 +2235,6 @@ struct SpaceCustomizationView: View {
             name: name ?? space.name,
             symbolName: symbolName ?? space.symbolName,
             colorHex: space.colorHex,
-            profileID: profileID,
             sidebarAppearance: appearance,
             persistImmediately: false
         )

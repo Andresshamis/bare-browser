@@ -16,6 +16,9 @@
 - Run full unit and UI tests.
 - Run signed Xcode app/UI smoke tests in a signing-capable environment until CI signing is explicitly configured.
 - Run manual QA checklist.
+- Run Google profile-isolation QA in both profile directions, after relaunch, and after space reassignment; distinguish page session state, account chooser hints, URL hints, cached visuals, and macOS AutoFill.
+- Copy Profile Isolation Diagnostics and verify it reports no invariant failures and contains no URLs, profile/account names, cookies, emails, page data, or credentials.
+- Confirm persistent profile store IDs are unique, stale reassignment callbacks are rejected, and no prior-profile snapshot flashes.
 - Profile launch, memory, CPU, hangs, and energy use.
 - Archive, validate, notarize, staple, and verify Gatekeeper behavior.
 - Document any App Store-specific limitations or review notes.

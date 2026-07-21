@@ -40,6 +40,7 @@ public struct BrowserWindowView: View {
     @StateObject private var webViewRegistry = BrowserWebViewRegistry()
     @StateObject private var contentPresentationState = BrowserContentPresentationState()
     @StateObject private var sidebarThemeColorSamplerController = SidebarThemeColorSamplerController()
+    @StateObject private var dataStoreProvider = ProfileWebsiteDataStoreProvider()
     @AppStorage(BrowserSidebarSizing.widthStorageKey) private var storedSidebarWidth = BrowserSidebarSizing.defaultWidth
     @State private var sidebarResizeStartWidth: CGFloat?
     @State private var sidebarResizeLiveWidth: CGFloat?
@@ -52,8 +53,8 @@ public struct BrowserWindowView: View {
     @State private var autoPresentedDownloadID: UUID?
     @State private var activityPageIsSelected = false
     @State private var sidebarThemeColorPickerSpaceID: SpaceID?
+    @State private var showsProfileIsolationRepairAlert = false
     @Namespace private var passwordPromptGlassNamespace
-    private let dataStoreProvider = ProfileWebsiteDataStoreProvider()
     private let floatingSidebarInset: CGFloat = 8
     private let floatingSidebarCornerRadius: CGFloat = 12
     private var sidebarVisibilityAnimation: Animation {
@@ -99,6 +100,22 @@ public struct BrowserWindowView: View {
             )
             .overlay(alignment: .top) {
                 WindowDragStrip()
+            }
+            .onAppear {
+                showsProfileIsolationRepairAlert = store.profileIsolationRepairOccurredThisLaunch
+            }
+            .alert("Profile Isolation Repaired", isPresented: $showsProfileIsolationRepairAlert) {
+                Button("Copy Diagnostics") {
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.setString(
+                        store.profileIsolationDiagnostics().redactedText,
+                        forType: .string
+                    )
+                }
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(store.profileIsolationRepairReport.userMessage ?? "Bare Browser repaired saved profile assignments before browsing began.")
             }
             .overlay {
                 if store.isCommandBarPresented {
@@ -303,7 +320,6 @@ public struct BrowserWindowView: View {
                 name: space.name,
                 symbolName: space.symbolName,
                 colorHex: space.colorHex,
-                profileID: space.profileID,
                 sidebarAppearance: appearance,
                 persistImmediately: false
             )
@@ -345,7 +361,6 @@ public struct BrowserWindowView: View {
             name: space.name,
             symbolName: space.symbolName,
             colorHex: space.colorHex,
-            profileID: space.profileID,
             sidebarAppearance: appearance,
             persistImmediately: false
         )

@@ -1062,25 +1062,25 @@ enum BrowserWebContentAppearance {
 
 @MainActor
 final class BrowserWebViewSession {
-    let tabID: TabID
-    let profileID: ProfileID
+    let identity: WebContentSessionIdentity
     let webView: WKWebView
     let coordinator: WebViewHost.Coordinator
     fileprivate var lastUsedSequence: UInt64
 
     init(
-        tabID: TabID,
-        profileID: ProfileID,
+        identity: WebContentSessionIdentity,
         webView: WKWebView,
         coordinator: WebViewHost.Coordinator,
         lastUsedSequence: UInt64
     ) {
-        self.tabID = tabID
-        self.profileID = profileID
+        self.identity = identity
         self.webView = webView
         self.coordinator = coordinator
         self.lastUsedSequence = lastUsedSequence
     }
+
+    var tabID: TabID { identity.tabID }
+    var profileID: ProfileID { identity.profileID }
 
     var lastLoadedURL: URL? {
         coordinator.lastLoadedRequestedURL
@@ -1123,8 +1123,14 @@ public final class BrowserWebViewRegistry: ObservableObject {
         passwordAutofillRevision: Int = 0
     ) -> BrowserWebViewSession {
         let sequence = nextUsageSequence()
+        let identity = WebContentSessionIdentity(
+            tabID: tab.id,
+            spaceID: tab.parentSpaceID,
+            profileID: profile.id,
+            websiteDataStoreID: profile.persistentWebsiteDataStoreID
+        )
         if let session = sessions[tab.id] {
-            guard session.profileID == profile.id else {
+            guard session.identity == identity else {
                 detach(session.webView)
                 sessions.removeValue(forKey: tab.id)
                 return makeSession(
@@ -1205,8 +1211,12 @@ public final class BrowserWebViewRegistry: ObservableObject {
             coordinator: coordinator
         )
         let session = BrowserWebViewSession(
-            tabID: tab.id,
-            profileID: profile.id,
+            identity: WebContentSessionIdentity(
+                tabID: tab.id,
+                spaceID: tab.parentSpaceID,
+                profileID: profile.id,
+                websiteDataStoreID: profile.persistentWebsiteDataStoreID
+            ),
             webView: webView,
             coordinator: coordinator,
             lastUsedSequence: sequence
@@ -1756,20 +1766,20 @@ public struct WebViewHost: NSViewRepresentable {
     private let downloadSafetyPolicy: DownloadSafetyPolicy
     private let sitePermissionPolicy: SitePermissionPolicy
     private let mouseExclusionRegion: WebContentMouseExclusionRegion?
-    private let onStateChange: @MainActor (TabID, String?, URL?, Bool, String?) -> Void
-    private let onFaviconChange: @MainActor (TabID, URL?) -> Void
-    private let onSecurityMessage: @MainActor (TabID, String) -> Void
-    private let onURLConfirmationRequired: @MainActor (TabID, URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
-    private let onDownloadConfirmationRequired: @MainActor (TabID, DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
-    private let onDownloadStarted: @MainActor (TabID, DownloadConfirmationRequest, URL, @escaping @MainActor () -> Void) -> Void
-    private let onDownloadProgress: @MainActor (TabID, UUID, Double?) -> Void
-    private let onDownloadFinished: @MainActor (TabID, UUID, URL?, Bool) -> Void
-    private let onDownloadFailed: @MainActor (TabID, UUID, String) -> Void
-    private let onSitePermissionRequest: @MainActor (TabID, ProfileID, SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
-    private let onPasswordCredentialCaptured: @MainActor (TabID, ProfileID, PasswordCredentialCandidate) -> Void
-    private let onPasswordCredentialsRequested: @MainActor (TabID, ProfileID, URL) -> [SavedPasswordCredential]
-    private let onSnapshotCaptured: @MainActor (TabID, NSImage) -> Void
-    private let onWebViewActivated: @MainActor (TabID) -> Void
+    private let onStateChange: @MainActor (WebContentSessionIdentity, String?, URL?, Bool, String?) -> Void
+    private let onFaviconChange: @MainActor (WebContentSessionIdentity, URL?) -> Void
+    private let onSecurityMessage: @MainActor (WebContentSessionIdentity, String) -> Void
+    private let onURLConfirmationRequired: @MainActor (WebContentSessionIdentity, URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void
+    private let onDownloadConfirmationRequired: @MainActor (WebContentSessionIdentity, DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void
+    private let onDownloadStarted: @MainActor (WebContentSessionIdentity, DownloadConfirmationRequest, URL, @escaping @MainActor () -> Void) -> Void
+    private let onDownloadProgress: @MainActor (WebContentSessionIdentity, UUID, Double?) -> Void
+    private let onDownloadFinished: @MainActor (WebContentSessionIdentity, UUID, URL?, Bool) -> Void
+    private let onDownloadFailed: @MainActor (WebContentSessionIdentity, UUID, String) -> Void
+    private let onSitePermissionRequest: @MainActor (WebContentSessionIdentity, SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
+    private let onPasswordCredentialCaptured: @MainActor (WebContentSessionIdentity, PasswordCredentialCandidate) -> Void
+    private let onPasswordCredentialsRequested: @MainActor (WebContentSessionIdentity, URL) -> [SavedPasswordCredential]
+    private let onSnapshotCaptured: @MainActor (WebContentSessionIdentity, NSImage) -> Void
+    private let onWebViewActivated: @MainActor (WebContentSessionIdentity) -> Void
 
     public init(
         state: WebViewState,
@@ -1783,22 +1793,22 @@ public struct WebViewHost: NSViewRepresentable {
         downloadSafetyPolicy: DownloadSafetyPolicy = DownloadSafetyPolicy(),
         sitePermissionPolicy: SitePermissionPolicy = SitePermissionPolicy(),
         mouseExclusionRegion: WebContentMouseExclusionRegion? = nil,
-        onStateChange: @escaping @MainActor (TabID, String?, URL?, Bool, String?) -> Void,
-        onFaviconChange: @escaping @MainActor (TabID, URL?) -> Void = { _, _ in },
-        onSecurityMessage: @escaping @MainActor (TabID, String) -> Void = { _, _ in },
-        onURLConfirmationRequired: @escaping @MainActor (TabID, URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void = { _, _, _, _ in },
-        onDownloadConfirmationRequired: @escaping @MainActor (TabID, DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void = { _, _, completion in completion(nil) },
-        onDownloadStarted: @escaping @MainActor (TabID, DownloadConfirmationRequest, URL, @escaping @MainActor () -> Void) -> Void = { _, _, _, _ in },
-        onDownloadProgress: @escaping @MainActor (TabID, UUID, Double?) -> Void = { _, _, _ in },
-        onDownloadFinished: @escaping @MainActor (TabID, UUID, URL?, Bool) -> Void = { _, _, _, _ in },
-        onDownloadFailed: @escaping @MainActor (TabID, UUID, String) -> Void = { _, _, _ in },
-        onSitePermissionRequest: @escaping @MainActor (TabID, ProfileID, SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation = { _, _, _, _ in
+        onStateChange: @escaping @MainActor (WebContentSessionIdentity, String?, URL?, Bool, String?) -> Void,
+        onFaviconChange: @escaping @MainActor (WebContentSessionIdentity, URL?) -> Void = { _, _ in },
+        onSecurityMessage: @escaping @MainActor (WebContentSessionIdentity, String) -> Void = { _, _ in },
+        onURLConfirmationRequired: @escaping @MainActor (WebContentSessionIdentity, URLConfirmationRequest.Kind, URL, URLConfirmationSourceContext) -> Void = { _, _, _, _ in },
+        onDownloadConfirmationRequired: @escaping @MainActor (WebContentSessionIdentity, DownloadConfirmationRequest, @escaping @MainActor (URL?) -> Void) -> Void = { _, _, completion in completion(nil) },
+        onDownloadStarted: @escaping @MainActor (WebContentSessionIdentity, DownloadConfirmationRequest, URL, @escaping @MainActor () -> Void) -> Void = { _, _, _, _ in },
+        onDownloadProgress: @escaping @MainActor (WebContentSessionIdentity, UUID, Double?) -> Void = { _, _, _ in },
+        onDownloadFinished: @escaping @MainActor (WebContentSessionIdentity, UUID, URL?, Bool) -> Void = { _, _, _, _ in },
+        onDownloadFailed: @escaping @MainActor (WebContentSessionIdentity, UUID, String) -> Void = { _, _, _ in },
+        onSitePermissionRequest: @escaping @MainActor (WebContentSessionIdentity, SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation = { _, _, _ in
             .deny(reason: "Site permission request was blocked because no permission handler is installed.")
         },
-        onPasswordCredentialCaptured: @escaping @MainActor (TabID, ProfileID, PasswordCredentialCandidate) -> Void = { _, _, _ in },
-        onPasswordCredentialsRequested: @escaping @MainActor (TabID, ProfileID, URL) -> [SavedPasswordCredential] = { _, _, _ in [] },
-        onSnapshotCaptured: @escaping @MainActor (TabID, NSImage) -> Void = { _, _ in },
-        onWebViewActivated: @escaping @MainActor (TabID) -> Void = { _ in }
+        onPasswordCredentialCaptured: @escaping @MainActor (WebContentSessionIdentity, PasswordCredentialCandidate) -> Void = { _, _ in },
+        onPasswordCredentialsRequested: @escaping @MainActor (WebContentSessionIdentity, URL) -> [SavedPasswordCredential] = { _, _ in [] },
+        onSnapshotCaptured: @escaping @MainActor (WebContentSessionIdentity, NSImage) -> Void = { _, _ in },
+        onWebViewActivated: @escaping @MainActor (WebContentSessionIdentity) -> Void = { _ in }
     ) {
         self.state = state
         self.activeTab = activeTab
@@ -1877,45 +1887,52 @@ public struct WebViewHost: NSViewRepresentable {
             return
         }
 
+        let identity = WebContentSessionIdentity(
+            tabID: tab.id,
+            spaceID: tab.parentSpaceID,
+            profileID: profile.id,
+            websiteDataStoreID: profile.persistentWebsiteDataStoreID
+        )
+
         let callbacks = BrowserWebViewCallbacks(
             onStateChange: { title, url, isLoading, securityMessage in
-                onStateChange(tab.id, title, url, isLoading, securityMessage)
+                onStateChange(identity, title, url, isLoading, securityMessage)
             },
             onFaviconChange: { faviconURL in
-                onFaviconChange(tab.id, faviconURL)
+                onFaviconChange(identity, faviconURL)
             },
             onSecurityMessage: { message in
-                onSecurityMessage(tab.id, message)
+                onSecurityMessage(identity, message)
             },
             onURLConfirmationRequired: { kind, url, sourceContext in
-                onURLConfirmationRequired(tab.id, kind, url, sourceContext)
+                onURLConfirmationRequired(identity, kind, url, sourceContext)
             },
             onDownloadConfirmationRequired: { request, completion in
-                onDownloadConfirmationRequired(tab.id, request, completion)
+                onDownloadConfirmationRequired(identity, request, completion)
             },
             onDownloadStarted: { request, destinationURL, cancel in
-                onDownloadStarted(tab.id, request, destinationURL, cancel)
+                onDownloadStarted(identity, request, destinationURL, cancel)
             },
             onDownloadProgress: { downloadID, progress in
-                onDownloadProgress(tab.id, downloadID, progress)
+                onDownloadProgress(identity, downloadID, progress)
             },
             onDownloadFinished: { downloadID, destinationURL, quarantineApplied in
-                onDownloadFinished(tab.id, downloadID, destinationURL, quarantineApplied)
+                onDownloadFinished(identity, downloadID, destinationURL, quarantineApplied)
             },
             onDownloadFailed: { downloadID, message in
-                onDownloadFailed(tab.id, downloadID, message)
+                onDownloadFailed(identity, downloadID, message)
             },
             onSitePermissionRequest: { kind, origin in
-                onSitePermissionRequest(tab.id, profile.id, kind, origin)
+                onSitePermissionRequest(identity, kind, origin)
             },
             onPasswordCredentialCaptured: { candidate in
-                onPasswordCredentialCaptured(tab.id, profile.id, candidate)
+                onPasswordCredentialCaptured(identity, candidate)
             },
             onPasswordCredentialsRequested: { origin in
-                onPasswordCredentialsRequested(tab.id, profile.id, origin)
+                onPasswordCredentialsRequested(identity, origin)
             },
             onSnapshot: { image in
-                onSnapshotCaptured(tab.id, image)
+                onSnapshotCaptured(identity, image)
             }
         )
         let session = registry.session(
@@ -1936,7 +1953,7 @@ public struct WebViewHost: NSViewRepresentable {
         session.coordinator.applyPendingState(to: session.webView)
         if didActivateWebView && isActive {
             session.coordinator.publishCurrentState(from: session.webView)
-            onWebViewActivated(tab.id)
+            onWebViewActivated(identity)
         }
     }
 
