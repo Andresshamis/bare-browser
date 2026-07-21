@@ -34,12 +34,15 @@ Current coverage:
 - Password credential candidate sanitization, HTTPS plus loopback HTTP prompt gating, public-profile save confirmation, private-profile suppression, cancellation, profile-scoped account listing, password-manager tab reuse, and Keychain failure handling.
 - Site permission origin sanitization, supported/unsupported defaults, stored allow/deny decisions, manual active-site allow/block/reset management, pending store state, restored public decisions, and private-profile persistence exclusion.
 - Profile metadata for persistent and private browsing.
+- Local WebKit fixture coverage proving persistent-profile separation and retention for cookies, localStorage, IndexedDB, Cache Storage, and service workers; private-profile in-memory lifetime; and space reassignment onto the destination profile store.
 - Browser store relationships for spaces, folders, tabs, tab placement across Essentials/Pinned/Tabs, sidebar tab reordering within the current section or folder, and session snapshots.
-- Session persistence boundary filtering for private profiles, private site permission decisions, dependent browser state, encoded payloads, and all-private fallback.
+- Session persistence boundary filtering and integrity repair for private profiles, duplicate identifiers, shared profile data stores, tab/space profile mismatches, invalid ownership graphs, private site permission decisions, dependent browser state, encoded payloads, and all-private fallback.
 - SQLite session persistence save/load, missing-store fallback, unsupported/corrupt/unreadable store recovery with stale file removal, private session and private permission exclusion from the on-disk payload, and repair-time disk scrubbing.
 - SQLite local history persistence save/load, private history exclusion from the on-disk payload, repair-time normalization/scrubbing, unsupported/corrupt recovery with stale file removal, and generic recovery messaging.
 
 ## Manual QA Targets
+
+Run Google account isolation in both directions: University → Personal and Personal → University. Repeat after relaunch and after reassigning a space. Classify each observation separately as signed-in page state, Google account chooser state, URL `login_hint`/`authuser` hints, cached browser visuals, or macOS Password AutoFill suggestions.
 
 - Google Docs
 - YouTube
@@ -51,12 +54,13 @@ Current coverage:
 - WebRTC test page
 - File upload/download
 
+Profile-isolation release acceptance additionally requires unique persistent website-store IDs, every tab resolving to its parent space's profile, no accepted stale callback after reassignment, no previous-profile snapshot flash, private-session disposal passing, and a clean full test run.
+
 ## Required Future Tests
 
 - UI tests for creating spaces, folders, profiles, opening tabs, switching tabs, restoring sessions, and split view.
 - CI coverage for signed Xcode app builds and UI smoke tests once issue #4 / PR #12 provides a signing-capable app/UI test host and the owner approves CI signing credentials.
-- Local web fixture tests proving cookies/localStorage do not leak between profiles.
-- Private browsing persistence tests proving website data does not survive window/session close.
+- Signed-app lifecycle coverage proving private website data does not survive private-profile/window teardown.
 - Broader history management UI tests once the signed app/UI test host can cover menus and command-bar context actions.
 - UI coverage proving native Back, Forward, Reload, and Stop menu shortcuts reach the active WebKit view once the signed app/UI test host can cover app menus.
 - UI coverage for pointer drag-and-drop sidebar reordering and cross-container tab moves after keyboard/menu reordering coverage is backed by a signed app/UI test host.

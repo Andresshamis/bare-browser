@@ -162,4 +162,130 @@ final class SessionPersistenceBoundaryTests: XCTestCase {
         XCTAssertFalse(persisted.profiles.contains { $0.isEphemeral })
         XCTAssertFalse(persisted.tabs.contains { $0.url?.host(percentEncoded: false) == "private.example" })
     }
+
+    func testRepairSeparatesDuplicateWebsiteStoresAndRepairsTabProfileMetadata() throws {
+        let sharedStoreID = UUID()
+        let olderProfile = BrowserProfile(
+            name: "University",
+            websiteDataStoreID: sharedStoreID,
+            createdAt: Date(timeIntervalSince1970: 1)
+        )
+        let newerProfile = BrowserProfile(
+            name: "Personal",
+            websiteDataStoreID: sharedStoreID,
+            createdAt: Date(timeIntervalSince1970: 2)
+        )
+        var universitySpace = BrowserSpace(name: "University", profileID: olderProfile.id)
+        var personalSpace = BrowserSpace(name: "Personal", profileID: newerProfile.id)
+        let universityTab = BrowserTab(
+            title: "Mail",
+            parentSpaceID: universitySpace.id,
+            profileID: newerProfile.id
+        )
+        let personalTab = BrowserTab(
+            title: "Search",
+            parentSpaceID: personalSpace.id,
+            profileID: olderProfile.id
+        )
+        universitySpace.regularTabIDs = [universityTab.id]
+        universitySpace.selectedTabID = universityTab.id
+        personalSpace.regularTabIDs = [personalTab.id]
+        personalSpace.selectedTabID = personalTab.id
+        let snapshot = BrowserSessionSnapshot(
+            profiles: [newerProfile, olderProfile],
+            spaces: [universitySpace, personalSpace],
+            folders: [],
+            tabs: [universityTab, personalTab],
+            selectedSpaceID: personalSpace.id,
+            selectedTabID: personalTab.id
+        )
+
+        let result = SessionPersistenceBoundary.repairPersistentSnapshot(
+            from: snapshot,
+            fallback: SessionSnapshotFactory.initial()
+        )
+
+        let repairedOlder = try XCTUnwrap(result.snapshot.profiles.first { $0.id == olderProfile.id })
+        let repairedNewer = try XCTUnwrap(result.snapshot.profiles.first { $0.id == newerProfile.id })
+        XCTAssertEqual(repairedOlder.persistentWebsiteDataStoreID, sharedStoreID)
+        XCTAssertNotEqual(repairedNewer.persistentWebsiteDataStoreID, sharedStoreID)
+        XCTAssertNotNil(repairedNewer.persistentWebsiteDataStoreID)
+        XCTAssertEqual(result.report.duplicateWebsiteDataStoresIsolated, 1)
+        XCTAssertEqual(result.report.tabProfileMismatchesRepaired, 2)
+        XCTAssertEqual(
+            result.snapshot.tabs.first { $0.id == universityTab.id }?.profileID,
+            olderProfile.id
+        )
+        XCTAssertEqual(
+            result.snapshot.tabs.first { $0.id == personalTab.id }?.profileID,
+            newerProfile.id
+        )
+        XCTAssertTrue(result.report.userMessage?.contains("signed out") == true)
+    }
+
+    func testRepairRebuildsCorruptGraphCyclesMembershipAndSelections() throws {
+        let personalProfile = BrowserProfile(name: "Personal")
+        let workProfile = BrowserProfile(name: "Work")
+        var personalSpace = BrowserSpace(name: "Personal", profileID: personalProfile.id)
+        var workSpace = BrowserSpace(name: "Work", profileID: workProfile.id)
+        var firstFolder = BrowserFolder(name: "First", parentSpaceID: personalSpace.id)
+        var secondFolder = BrowserFolder(name: "Second", parentSpaceID: personalSpace.id)
+        firstFolder.parentFolderID = secondFolder.id
+        secondFolder.parentFolderID = firstFolder.id
+        firstFolder.childFolderIDs = [secondFolder.id]
+        secondFolder.childFolderIDs = [firstFolder.id]
+        let personalTab = BrowserTab(
+            title: "Personal",
+            parentSpaceID: personalSpace.id,
+            parentFolderID: workSpace.id,
+            profileID: workProfile.id
+        )
+        let workTab = BrowserTab(
+            title: "Work",
+            parentSpaceID: workSpace.id,
+            profileID: workProfile.id
+        )
+        personalSpace.regularTabIDs = [workTab.id, personalTab.id, personalTab.id]
+        personalSpace.folderIDs = [firstFolder.id, secondFolder.id]
+        personalSpace.selectedTabID = workTab.id
+        workSpace.regularTabIDs = [personalTab.id, workTab.id]
+        workSpace.selectedTabID = personalTab.id
+        let duplicateWorkSpace = BrowserSpace(
+            id: workSpace.id,
+            name: "Duplicate",
+            profileID: personalProfile.id
+        )
+        var duplicatePersonalTab = personalTab
+        duplicatePersonalTab.title = "Duplicate"
+        let snapshot = BrowserSessionSnapshot(
+            profiles: [personalProfile, workProfile],
+            spaces: [personalSpace, workSpace, duplicateWorkSpace],
+            folders: [firstFolder, secondFolder],
+            tabs: [personalTab, workTab, duplicatePersonalTab],
+            selectedSpaceID: UUID(),
+            selectedTabID: UUID()
+        )
+
+        let result = SessionPersistenceBoundary.repairPersistentSnapshot(
+            from: snapshot,
+            fallback: SessionSnapshotFactory.initial()
+        )
+
+        XCTAssertEqual(result.report.duplicateSpaceIDsRemoved, 1)
+        XCTAssertEqual(result.report.duplicateTabIDsRemoved, 1)
+        XCTAssertGreaterThanOrEqual(result.report.folderRelationshipsRepaired, 2)
+        XCTAssertGreaterThan(result.report.ownershipListsRebuilt, 0)
+        XCTAssertGreaterThan(result.report.selectionsRepaired, 0)
+        XCTAssertEqual(Set(result.snapshot.spaces.map(\.id)).count, result.snapshot.spaces.count)
+        XCTAssertEqual(Set(result.snapshot.tabs.map(\.id)).count, result.snapshot.tabs.count)
+        XCTAssertTrue(result.snapshot.folders.allSatisfy { $0.parentFolderID == nil })
+        let repairedPersonalSpace = try XCTUnwrap(
+            result.snapshot.spaces.first { $0.id == personalSpace.id }
+        )
+        let repairedWorkSpace = try XCTUnwrap(result.snapshot.spaces.first { $0.id == workSpace.id })
+        XCTAssertFalse(repairedPersonalSpace.regularTabIDs.contains(workTab.id))
+        XCTAssertEqual(repairedWorkSpace.regularTabIDs, [workTab.id])
+        XCTAssertEqual(result.snapshot.selectedSpaceID, personalSpace.id)
+        XCTAssertEqual(result.snapshot.tabs.first { $0.id == personalTab.id }?.profileID, personalProfile.id)
+    }
 }

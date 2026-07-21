@@ -52,8 +52,9 @@ Support. Private browsing profiles and dependent tab metadata are filtered befor
 any session snapshot is written to disk.
 
 Persistent profiles can be created from the sidebar profile menu, native menu,
-or command bar, and switching profiles selects or creates a safe default
-space/tab context for that profile. Private profiles remain session-only.
+or command bar. Creation also creates and selects the profile's first space;
+additional spaces can be reassigned with an explicit confirmation before their
+tabs reload in the destination profile. Private profiles remain session-only.
 
 Local history is stored in a separate SQLite database under Application Support
 and scoped to persistent profiles for command-bar search. Private browsing
