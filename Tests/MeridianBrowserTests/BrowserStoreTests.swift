@@ -1142,16 +1142,97 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertTrue(savedSnapshot.spaces.contains { $0.id == space.id })
     }
 
-    func testCreateProfileCommandCreatesVisibleSelectedSpace() throws {
+    func testCreateProfileCommandDoesNotCreateOrSelectSpace() throws {
         let store = BrowserStore()
+        let selectedSpaceID = try XCTUnwrap(store.selectedSpaceID)
+        let selectedTabID = try XCTUnwrap(store.selectedTabID)
+        let spaceCount = store.spaces.count
 
         store.perform(.createProfile("Work"))
 
-        let selectedSpace = try XCTUnwrap(store.selectedSpace)
-        let profile = try XCTUnwrap(store.profiles.first { $0.id == selectedSpace.profileID })
+        let profile = try XCTUnwrap(store.persistentProfiles.first { $0.name == "Work" })
         XCTAssertEqual(profile.name, "Work")
-        XCTAssertEqual(selectedSpace.name, "Work")
-        XCTAssertTrue(store.sidebarSpaces.contains { $0.id == selectedSpace.id })
+        XCTAssertEqual(store.selectedSpaceID, selectedSpaceID)
+        XCTAssertEqual(store.selectedTabID, selectedTabID)
+        XCTAssertEqual(store.spaces.count, spaceCount)
+        XCTAssertFalse(store.spaces.contains { $0.profileID == profile.id })
+    }
+
+    func testPersistentProfileCanBeRenamedAndRecolored() throws {
+        let spy = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: spy)
+        let profile = store.createPersistentProfile(name: "Work")
+
+        XCTAssertTrue(store.updatePersistentProfile(
+            profile.id,
+            name: "  Studio  ",
+            colorHex: "bf5af2"
+        ))
+
+        let updatedProfile = try XCTUnwrap(store.profiles.first { $0.id == profile.id })
+        XCTAssertEqual(updatedProfile.name, "Studio")
+        XCTAssertEqual(updatedProfile.colorHex, "#BF5AF2")
+        XCTAssertEqual(spy.savedSnapshots.last?.profiles.first { $0.id == profile.id }?.name, "Studio")
+    }
+
+    func testPersistentProfileUpdateRejectsBlankNameInvalidColorAndPrivateProfile() throws {
+        let store = BrowserStore()
+        let profile = store.createPersistentProfile(name: "Work")
+        let privateProfile = store.createProfile(name: "Private", ephemeral: true)
+
+        XCTAssertFalse(store.updatePersistentProfile(profile.id, name: "   ", colorHex: "#0A84FF"))
+        XCTAssertFalse(store.updatePersistentProfile(profile.id, name: "Work", colorHex: "blue"))
+        XCTAssertFalse(store.updatePersistentProfile(
+            privateProfile.id,
+            name: "Secret",
+            colorHex: "#0A84FF"
+        ))
+        XCTAssertEqual(store.profiles.first { $0.id == profile.id }?.name, "Work")
+        XCTAssertEqual(store.profiles.first { $0.id == privateProfile.id }?.name, "Private")
+    }
+
+    func testProfileManagerPresentationSupportsCreateAndEditModes() throws {
+        let store = BrowserStore()
+        let initialProfileID = try XCTUnwrap(store.persistentProfiles.first?.id)
+
+        store.presentProfileManager(creatingNewProfile: true)
+
+        XCTAssertTrue(store.profileManagementRequest?.startsCreatingProfile == true)
+        XCTAssertEqual(store.profileManagementRequest?.initialProfileID, initialProfileID)
+
+        store.dismissProfileManager()
+        XCTAssertNil(store.profileManagementRequest)
+
+        let workProfile = store.createPersistentProfile(name: "Work")
+        store.presentProfileManager(profileID: workProfile.id)
+
+        XCTAssertFalse(store.profileManagementRequest?.startsCreatingProfile ?? true)
+        XCTAssertEqual(store.profileManagementRequest?.initialProfileID, workProfile.id)
+    }
+
+    func testProfileDeletionRequiresAnotherProfileAndNoAssignedSpaces() async throws {
+        let passwordSpy = PasswordCredentialStoreSpy()
+        let websiteDataSpy = ProfileWebsiteDataStoreDeletingSpy()
+        let store = BrowserStore(
+            passwordCredentialStore: passwordSpy,
+            profileWebsiteDataStoreDeleter: websiteDataSpy
+        )
+        let personalProfileID = try XCTUnwrap(store.persistentProfiles.first?.id)
+
+        XCTAssertFalse(store.canDeletePersistentProfile(personalProfileID))
+
+        let workProfile = store.createPersistentProfile(name: "Work")
+        let workSpace = store.createSpace(name: "Work", profileID: workProfile.id)
+        XCTAssertFalse(store.canDeletePersistentProfile(workProfile.id))
+
+        XCTAssertTrue(store.setProfile(personalProfileID, forSpace: workSpace.id))
+        XCTAssertTrue(store.canDeletePersistentProfile(workProfile.id))
+        let didDelete = await store.deletePersistentProfile(workProfile.id)
+        XCTAssertTrue(didDelete)
+
+        XCTAssertFalse(store.profiles.contains { $0.id == workProfile.id })
+        XCTAssertEqual(passwordSpy.deletedProfileIDs, [workProfile.id])
+        XCTAssertEqual(websiteDataSpy.deletedIdentifiers, [try XCTUnwrap(workProfile.persistentWebsiteDataStoreID)])
     }
 
     func testPersistentSnapshotIncludesPersistentProfilesAndExcludesPrivateProfiles() throws {
@@ -2518,6 +2599,7 @@ private final class PasswordCredentialStoreSpy: PasswordCredentialPersisting {
     var saveError: Error?
     var credentialsError: Error?
     var accountsError: Error?
+    var deletedProfileIDs: [ProfileID] = []
 
     func save(_ request: PasswordSaveRequest) throws {
         if let error = saveError ?? error {
@@ -2525,6 +2607,13 @@ private final class PasswordCredentialStoreSpy: PasswordCredentialPersisting {
         }
 
         savedRequests.append(request)
+    }
+
+    func deleteCredentials(for profileID: ProfileID) throws {
+        if let error {
+            throw error
+        }
+        deletedProfileIDs.append(profileID)
     }
 
     func savedCredentials(
@@ -2546,5 +2635,14 @@ private final class PasswordCredentialStoreSpy: PasswordCredentialPersisting {
         }
 
         return accountsByProfile[profileID.uuidString] ?? []
+    }
+}
+
+@MainActor
+private final class ProfileWebsiteDataStoreDeletingSpy: ProfileWebsiteDataStoreDeleting {
+    var deletedIdentifiers: [UUID] = []
+
+    func removeWebsiteDataStore(identifier: UUID) async throws {
+        deletedIdentifiers.append(identifier)
     }
 }

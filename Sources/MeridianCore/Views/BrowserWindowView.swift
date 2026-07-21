@@ -10,6 +10,15 @@ private let browserWindowLogger = Logger(
 
 private let sidebarRevealHotZoneWidth: CGFloat = 8
 
+private struct SidebarStaticGlassBackdrop<ClipShape: Shape>: View {
+    let shape: ClipShape
+
+    var body: some View {
+        SidebarNeutralGlassSystemMaterial(shape: shape)
+            .allowsHitTesting(false)
+    }
+}
+
 private enum BrowserSidebarSizing {
     static let widthStorageKey = "BrowserSidebarWidth"
     static let defaultWidth = 280.0
@@ -34,7 +43,12 @@ public struct BrowserWindowView: View {
     @AppStorage(BrowserSidebarSizing.widthStorageKey) private var storedSidebarWidth = BrowserSidebarSizing.defaultWidth
     @State private var sidebarResizeStartWidth: CGFloat?
     @State private var sidebarResizeLiveWidth: CGFloat?
-    @State private var sidebarChromeTheme: SidebarChromeTheme?
+    // Reference-only state is intentional. Live pager colors terminate at a
+    // small layer-backed tint treatment and never publish through SwiftUI.
+    @State private var sidebarChromeLiveStyleController = SidebarChromeLiveStyleController()
+    // The parent must not observe this publisher: only the two tiny fixed-chrome
+    // wrappers subscribe, keeping display-rate updates away from tabs and pages.
+    @State private var sidebarFixedChromeLiveStyleController = SidebarFixedChromeLiveStyleController()
     @State private var autoPresentedDownloadID: UUID?
     @State private var activityPageIsSelected = false
     @State private var sidebarThemeColorPickerSpaceID: SpaceID?
@@ -164,6 +178,9 @@ public struct BrowserWindowView: View {
             } message: { request in
                 Text(request.confirmationMessage)
             }
+            .sheet(item: profileManagementRequestBinding) { request in
+                ProfileManagementView(store: store, request: request)
+            }
     }
 
     private var browserSurface: some View {
@@ -173,6 +190,17 @@ public struct BrowserWindowView: View {
                 .clipped()
         }
         .focusedSceneValue(\.browserNavigationCommandContext, browserNavigationCommandContext)
+    }
+
+    private var profileManagementRequestBinding: Binding<ProfileManagementRequest?> {
+        Binding(
+            get: { store.profileManagementRequest },
+            set: { request in
+                if request == nil {
+                    store.dismissProfileManager()
+                }
+            }
+        )
     }
 
     private func browserSurfaceContent(availableHeight: CGFloat) -> some View {
@@ -348,34 +376,40 @@ public struct BrowserWindowView: View {
 
     private var sidebar: some View {
         let shape = sidebarShape
+        let cornerRadii = sidebarCornerRadii
         let pinnedOpacity = Double(sidebarPinnedProgress)
         let floatingOpacity = Double(sidebarFloatingProgress)
-        let chromeTheme = sidebarChromeTheme ?? selectedSidebarChromeTheme
-        let appearance = chromeTheme.appearance
-        let tintColor = Color(hex: chromeTheme.tintHex)
-        let floatingSettings = appearance.base
-        let pinnedSettings = appearance.pinnedSettings
-        let contentSettings = store.sidebarIsLockedOpen ? pinnedSettings : floatingSettings
-        let contentForegroundWhiteAmount = sidebarForegroundWhiteAmount(
-            for: chromeTheme,
-            settings: contentSettings
-        )
-        let contentUsesDarkForeground = contentForegroundWhiteAmount < 0.5
-        let contentForegroundColor = Color(
-            .sRGB,
-            red: contentForegroundWhiteAmount,
-            green: contentForegroundWhiteAmount,
-            blue: contentForegroundWhiteAmount,
-            opacity: 1
-        )
+        let contentChromeTheme = selectedSidebarChromeTheme
+        let fallbackStyle = SidebarChromeLiveStyle(theme: contentChromeTheme)
 
         return ZStack {
-            pinnedSidebarChrome(settings: pinnedSettings, tintColor: tintColor, shape: shape)
-                .opacity(pinnedOpacity)
+            SidebarChromeLiveShadowOverlay(
+                controller: sidebarChromeLiveStyleController,
+                fallbackStyle: fallbackStyle,
+                floatingOpacity: floatingOpacity,
+                cornerRadii: cornerRadii
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
 
-            sidebarGlassMaterial(shape: shape, tintColor: tintColor, settings: floatingSettings)
-                .opacity(floatingOpacity)
-                .allowsHitTesting(false)
+            // The native Liquid Glass surface is intentionally static for the
+            // whole gesture. Reconfiguring it at scroll cadence is the expensive
+            // path that previously made tab-heavy spaces miss display frames.
+            SidebarStaticGlassBackdrop(
+                shape: shape
+            )
+
+            // Every non-native chrome channel follows the pager in retained
+            // layers: tint, density, highlights, texture, and the outer edge.
+            SidebarChromeLiveTintOverlay(
+                controller: sidebarChromeLiveStyleController,
+                fallbackStyle: fallbackStyle,
+                pinnedOpacity: pinnedOpacity,
+                floatingOpacity: floatingOpacity,
+                cornerRadii: cornerRadii
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
 
             SidebarView(
                 store: store,
@@ -383,67 +417,26 @@ public struct BrowserWindowView: View {
                 presentationState: contentPresentationState,
                 activityPageIsSelected: $activityPageIsSelected,
                 tabHasLiveSession: { webViewRegistry.containsSession(for: $0) },
-                updateSidebarChromeTheme: { sidebarChromeTheme = $0 }
+                fixedChromeLiveStyleController: sidebarFixedChromeLiveStyleController,
+                updateSidebarChromeLiveStyle: { sidebarChromeLiveStyleController.update($0) }
             )
-            .foregroundStyle(
-                contentForegroundColor,
-                contentForegroundColor.opacity(0.70),
-                contentForegroundColor.opacity(0.46)
-            )
-            .environment(\.sidebarForegroundColor, contentForegroundColor)
-            .environment(\.sidebarUsesDarkForeground, contentUsesDarkForeground)
+            .clipShape(shape)
         }
         .frame(maxHeight: .infinity)
-        .clipShape(shape)
-        .overlay {
-            shape.stroke(.separator.opacity(floatingSettings.edgeOpacity), lineWidth: 0.5)
-                .opacity(floatingOpacity)
-        }
-        .compositingGroup()
-        .shadow(
-            color: tintColor.opacity(SidebarGlassRendering.shadowOpacity(for: floatingSettings) * floatingOpacity),
-            radius: 18,
-            x: 0,
-            y: 8
-        )
         .overlay(alignment: sidebarResizeHandleAlignment) { sidebarResizeHandle }
         .accessibilityIdentifier("BrowserSidebar")
     }
 
-    private func pinnedSidebarChrome(
-        settings: SidebarGlassSettings,
-        tintColor: Color,
-        shape: UnevenRoundedRectangle
-    ) -> some View {
-        sidebarGlassMaterial(shape: shape, tintColor: tintColor, settings: settings)
-            .allowsHitTesting(false)
-    }
-
-    private func sidebarGlassMaterial(
-        shape: UnevenRoundedRectangle,
-        tintColor: Color,
-        settings: SidebarGlassSettings
-    ) -> some View {
-        SidebarGlassMaterial(shape: shape, tintColor: tintColor, settings: settings)
-    }
-
     private var selectedSidebarChromeTheme: SidebarChromeTheme {
+        guard !activityPageIsSelected else {
+            return .standard
+        }
+
         guard let selectedSpace = store.selectedSpace else {
             return .standard
         }
 
         return SidebarChromeTheme.theme(for: selectedSpace)
-    }
-
-    private func sidebarForegroundWhiteAmount(
-        for chromeTheme: SidebarChromeTheme,
-        settings: SidebarGlassSettings
-    ) -> Double {
-        SidebarGlassRendering.foregroundWhiteAmount(
-            for: settings,
-            tintHex: chromeTheme.tintHex,
-            baseWhiteAmount: colorScheme == .dark ? 1 : 0
-        )
     }
 
     private var sidebarOuterInset: CGFloat {

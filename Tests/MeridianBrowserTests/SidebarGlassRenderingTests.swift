@@ -46,6 +46,46 @@ final class SidebarGlassRenderingTests: XCTestCase {
         XCTAssertEqual(recipe.shadowOpacity, 0, accuracy: 0.001)
     }
 
+    func testLiveThemeColorFoldsNativeTintCoverageIntoCompositorLayer() {
+        let settings = SidebarGlassSettings(
+            glassOpacity: 0,
+            tintOpacity: 1,
+            edgeOpacity: 0.3,
+            shadowOpacity: 0.2,
+            highlightOpacity: 0.2
+        )
+
+        XCTAssertEqual(
+            SidebarGlassRendering.liveThemeColorOpacity(for: settings),
+            0.3616,
+            accuracy: 0.0001
+        )
+    }
+
+    func testLiveThemeColorAttenuatesFormerNativeTintBehindNeutralFill() {
+        let settings = SidebarGlassSettings(
+            glassOpacity: 0.8,
+            tintOpacity: 0.35,
+            edgeOpacity: 0.3,
+            shadowOpacity: 0.2,
+            highlightOpacity: 0.2
+        )
+        let recipe = SidebarGlassRendering.recipe(for: settings)
+        let expected = recipe.themeFillOpacity
+            + (1 - recipe.themeFillOpacity)
+            * (1 - recipe.neutralFillOpacity)
+            * recipe.themeGlassTintOpacity
+        let unattenuated = recipe.themeFillOpacity
+            + (1 - recipe.themeFillOpacity) * recipe.themeGlassTintOpacity
+
+        XCTAssertEqual(
+            SidebarGlassRendering.liveThemeColorOpacity(for: recipe),
+            expected,
+            accuracy: 0.0001
+        )
+        XCTAssertLessThan(expected, unattenuated)
+    }
+
     func testColorOnlySplitsFillBetweenNeutralAndTheme() {
         let neutral = SidebarGlassSettings(
             glassOpacity: 0.42,
@@ -122,7 +162,7 @@ final class SidebarGlassRenderingTests: XCTestCase {
         XCTAssertEqual(SidebarGlassRendering.colorNoiseOpacity(for: grain), 0.09, accuracy: 0.001)
     }
 
-    func testColorNoiseCellSizeUsesFixedScale() {
+    func testColorNoiseCellSizeTracksConfiguredScale() {
         let settings = SidebarGlassSettings(
             glassOpacity: 0.60,
             tintOpacity: 0.20,
@@ -134,11 +174,16 @@ final class SidebarGlassRenderingTests: XCTestCase {
         )
 
         XCTAssertEqual(SidebarGlassRendering.colorNoiseCellSize(), 1.2, accuracy: 0.001)
-        XCTAssertEqual(SidebarGlassRendering.colorNoiseCellSize(for: settings), 1.2, accuracy: 0.001)
+        XCTAssertEqual(SidebarGlassRendering.colorNoiseCellSize(for: settings), 11.2, accuracy: 0.001)
     }
 
-    func testColorNoiseTextureCellSizeUsesFixedScaleForCaching() {
+    func testColorNoiseTextureCellSizeQuantizesConfiguredScaleForCaching() {
         XCTAssertEqual(SidebarGlassRendering.colorNoiseTextureCellSize(), 1.25, accuracy: 0.001)
+        XCTAssertEqual(
+            SidebarGlassRendering.colorNoiseTextureCellSize(forScale: 1),
+            11.25,
+            accuracy: 0.001
+        )
     }
 
     func testSelectedSpaceIconUsesDarkForegroundOnlyForLightLowColorLowDensityTint() {
@@ -258,7 +303,7 @@ final class SidebarGlassRenderingTests: XCTestCase {
         XCTAssertEqual(whiteAmount, 1, accuracy: 0.001)
     }
 
-    func testForegroundWhiteAmountBlendsContinuouslyForScrollInterpolatedSettings() {
+    func testForegroundWhiteAmountBlendsForIntermediateGlassSettings() {
         let lowInfluence = SidebarGlassSettings(
             glassOpacity: 0.09,
             tintOpacity: 0.41,
@@ -273,14 +318,14 @@ final class SidebarGlassRenderingTests: XCTestCase {
             shadowOpacity: 0.20,
             highlightOpacity: 0.20
         )
-        let scrollInterpolated = SidebarGlassSettings.interpolated(
+        let intermediate = SidebarGlassSettings.interpolated(
             from: lowInfluence,
             to: highInfluence,
             progress: 0.35
         )
 
         let whiteAmount = SidebarGlassRendering.foregroundWhiteAmount(
-            for: scrollInterpolated,
+            for: intermediate,
             tintHex: "#4F7CAC",
             baseWhiteAmount: 0
         )

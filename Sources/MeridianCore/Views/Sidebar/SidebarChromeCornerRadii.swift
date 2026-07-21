@@ -50,4 +50,13 @@ struct SidebarChromeCornerRadii: Equatable, Sendable {
             topTrailing: topTrailing
         )
     }
+
+    func path(in rect: CGRect) -> CGPath {
+        UnevenRoundedRectangle(
+            cornerRadii: rectangleCornerRadii,
+            style: .continuous
+        )
+        .path(in: rect)
+        .cgPath
+    }
 }
