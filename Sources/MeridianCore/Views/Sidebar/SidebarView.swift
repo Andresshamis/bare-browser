@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -10,6 +11,10 @@ private struct SidebarUsesDarkForegroundEnvironmentKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+private struct SidebarForegroundWhiteAmountEnvironmentKey: EnvironmentKey {
+    static let defaultValue = 1.0
+}
+
 extension EnvironmentValues {
     var sidebarForegroundColor: Color {
         get { self[SidebarForegroundColorEnvironmentKey.self] }
@@ -19,6 +24,105 @@ extension EnvironmentValues {
     var sidebarUsesDarkForeground: Bool {
         get { self[SidebarUsesDarkForegroundEnvironmentKey.self] }
         set { self[SidebarUsesDarkForegroundEnvironmentKey.self] = newValue }
+    }
+
+    var sidebarForegroundWhiteAmount: Double {
+        get { self[SidebarForegroundWhiteAmountEnvironmentKey.self] }
+        set { self[SidebarForegroundWhiteAmountEnvironmentKey.self] = newValue }
+    }
+}
+
+@MainActor
+final class SidebarFixedChromeLiveStyleController: ObservableObject {
+    @Published private(set) var style: SidebarChromeLiveStyle?
+
+    func update(_ style: SidebarChromeLiveStyle?) {
+        guard self.style != style else {
+            return
+        }
+        self.style = style
+    }
+}
+
+struct SidebarForegroundPalette {
+    static func whiteAmount(
+        for style: SidebarChromeLiveStyle,
+        isPinned: Bool,
+        colorScheme: ColorScheme
+    ) -> Double {
+        let treatment = isPinned ? style.pinnedForeground : style.baseForeground
+        return colorScheme == .dark
+            ? treatment.darkModeWhiteAmount
+            : treatment.lightModeWhiteAmount
+    }
+
+    static func color(whiteAmount: Double) -> Color {
+        let amount = min(max(whiteAmount.isFinite ? whiteAmount : 0, 0), 1)
+        return Color(
+            .sRGB,
+            red: amount,
+            green: amount,
+            blue: amount,
+            opacity: 1
+        )
+    }
+}
+
+private struct SidebarFixedChromeForeground<Content: View>: View {
+    @ObservedObject var controller: SidebarFixedChromeLiveStyleController
+    let fallbackStyle: SidebarChromeLiveStyle
+    let isPinned: Bool
+    let content: Content
+    @Environment(\.colorScheme) private var colorScheme
+
+    init(
+        controller: SidebarFixedChromeLiveStyleController,
+        fallbackStyle: SidebarChromeLiveStyle,
+        isPinned: Bool,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.controller = controller
+        self.fallbackStyle = fallbackStyle
+        self.isPinned = isPinned
+        self.content = content()
+    }
+
+    var body: some View {
+        let style = controller.style ?? fallbackStyle
+        let whiteAmount = SidebarForegroundPalette.whiteAmount(
+            for: style,
+            isPinned: isPinned,
+            colorScheme: colorScheme
+        )
+        let foregroundColor = SidebarForegroundPalette.color(whiteAmount: whiteAmount)
+
+        content
+            .foregroundStyle(
+                foregroundColor,
+                foregroundColor.opacity(0.70),
+                foregroundColor.opacity(0.46)
+            )
+            .environment(\.sidebarForegroundColor, foregroundColor)
+            .environment(\.sidebarForegroundWhiteAmount, whiteAmount)
+            .environment(\.sidebarUsesDarkForeground, whiteAmount < 0.5)
+            // The target changes once when the gesture acquires a direction,
+            // not for every pixel of travel. SwiftUI can therefore animate the
+            // small fixed chrome without re-entering its render loop at 120 Hz.
+            .animation(
+                SidebarSpacePagerMetrics.fixedChromeThemeAnimation,
+                value: whiteAmount
+            )
+    }
+}
+
+private struct SidebarThemeSeparator: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.sidebarForegroundWhiteAmount) private var foregroundWhiteAmount
+
+    var body: some View {
+        Divider()
+            .opacity(foregroundWhiteAmount * (colorScheme == .dark ? 0.12 : 1))
+            .accessibilityHidden(true)
     }
 }
 
@@ -162,9 +266,8 @@ public struct SidebarView: View {
     @State private var pagerNavigationRequest: SidebarSpacePagerNavigationRequest?
     @State private var spaceSwitcherDragState = SidebarSpaceSwitcherDragState()
     private let tabHasLiveSession: @MainActor (TabID) -> Bool
-    private let updateSidebarChromeTheme: (SidebarChromeTheme?) -> Void
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.sidebarUsesDarkForeground) private var sidebarUsesDarkForeground
+    private let fixedChromeLiveStyleController: SidebarFixedChromeLiveStyleController
+    private let updateSidebarChromeLiveStyle: (SidebarChromeLiveStyle?) -> Void
 
     public init(
         store: BrowserStore,
@@ -172,25 +275,60 @@ public struct SidebarView: View {
         presentationState: BrowserContentPresentationState,
         activityPageIsSelected: Binding<Bool> = .constant(false),
         tabHasLiveSession: @escaping @MainActor (TabID) -> Bool = { _ in false },
-        updateSidebarChromeTheme: @escaping (SidebarChromeTheme?) -> Void = { _ in }
+        updateSidebarChromeLiveStyle: @escaping (SidebarChromeLiveStyle?) -> Void = { _ in }
     ) {
         self.store = store
         self.webViewState = webViewState
         self.presentationState = presentationState
         self._activityPageIsSelected = activityPageIsSelected
         self.tabHasLiveSession = tabHasLiveSession
-        self.updateSidebarChromeTheme = updateSidebarChromeTheme
+        fixedChromeLiveStyleController = SidebarFixedChromeLiveStyleController()
+        self.updateSidebarChromeLiveStyle = updateSidebarChromeLiveStyle
+    }
+
+    init(
+        store: BrowserStore,
+        webViewState: WebViewState,
+        presentationState: BrowserContentPresentationState,
+        activityPageIsSelected: Binding<Bool>,
+        tabHasLiveSession: @escaping @MainActor (TabID) -> Bool,
+        fixedChromeLiveStyleController: SidebarFixedChromeLiveStyleController,
+        updateSidebarChromeLiveStyle: @escaping (SidebarChromeLiveStyle?) -> Void
+    ) {
+        self.store = store
+        self.webViewState = webViewState
+        self.presentationState = presentationState
+        self._activityPageIsSelected = activityPageIsSelected
+        self.tabHasLiveSession = tabHasLiveSession
+        self.fixedChromeLiveStyleController = fixedChromeLiveStyleController
+        self.updateSidebarChromeLiveStyle = updateSidebarChromeLiveStyle
     }
 
     public var body: some View {
         VStack(spacing: 0) {
-            browserControlsHeader
-            compactAddressButton
-            sidebarSeparator
+            SidebarFixedChromeForeground(
+                controller: fixedChromeLiveStyleController,
+                fallbackStyle: settledChromeLiveStyle,
+                isPinned: store.sidebarIsLockedOpen
+            ) {
+                VStack(spacing: 0) {
+                    browserControlsHeader
+                    compactAddressButton
+                    sidebarSeparator
+                }
+            }
             spacePager
                 .frame(maxHeight: .infinity)
-            sidebarSeparator
-            spaceSwitcher
+            SidebarFixedChromeForeground(
+                controller: fixedChromeLiveStyleController,
+                fallbackStyle: settledChromeLiveStyle,
+                isPinned: store.sidebarIsLockedOpen
+            ) {
+                VStack(spacing: 0) {
+                    sidebarSeparator
+                    spaceSwitcher
+                }
+            }
         }
         .accessibilityLabel("Sidebar")
         .background {
@@ -265,17 +403,7 @@ public struct SidebarView: View {
     }
 
     private var sidebarSeparator: some View {
-        Divider()
-            .opacity(sidebarSeparatorOpacity)
-            .accessibilityHidden(true)
-    }
-
-    private var sidebarSeparatorOpacity: Double {
-        guard !sidebarUsesDarkForeground else {
-            return 0
-        }
-
-        return colorScheme == .dark ? 0.12 : 1
+        SidebarThemeSeparator()
     }
 
     private var commandTargetTabID: TabID? {
@@ -478,8 +606,20 @@ public struct SidebarView: View {
             selectSpace: { selectSpace($0) },
             selectAuxiliaryPage: { selectAuxiliaryPage($0) },
             previewSpace: { setPreviewSpace($0) },
-            updateSidebarChromeTheme: updateSidebarChromeTheme
+            sidebarIsPinned: store.sidebarIsLockedOpen,
+            updateSidebarFixedChromeLiveStyle: {
+                fixedChromeLiveStyleController.update($0)
+            },
+            updateSidebarChromeLiveStyle: updateSidebarChromeLiveStyle
         )
+    }
+
+    private var settledChromeLiveStyle: SidebarChromeLiveStyle {
+        guard !activityPageIsSelected,
+              let selectedSpace = store.selectedSpace else {
+            return SidebarChromeLiveStyle(theme: .standard)
+        }
+        return SidebarChromeLiveStyle(theme: .theme(for: selectedSpace))
     }
 
     private var visualSelectedSpaceID: SpaceID? {
@@ -613,7 +753,7 @@ private struct SidebarAddressControls: View {
     @ObservedObject private var presentationState: BrowserContentPresentationState
     let isActivitySelected: Bool
     @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
-    @Environment(\.sidebarUsesDarkForeground) private var sidebarUsesDarkForeground
+    @Environment(\.sidebarForegroundWhiteAmount) private var sidebarForegroundWhiteAmount
     @State private var didCopyCurrentURL = false
 
     init(
@@ -671,10 +811,11 @@ private struct SidebarAddressControls: View {
             .frame(height: 26)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             .overlay {
-                if !sidebarUsesDarkForeground {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(.separator.opacity(0.35), lineWidth: 0.5)
-                }
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(
+                        .separator.opacity(0.35 * sidebarForegroundWhiteAmount),
+                        lineWidth: 0.5
+                    )
             }
 
             sitePermissionsMenu
@@ -793,10 +934,11 @@ private struct SidebarAddressControls: View {
                 .frame(width: 26, height: 26)
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .overlay {
-                    if !sidebarUsesDarkForeground {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(.separator.opacity(0.35), lineWidth: 0.5)
-                    }
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(
+                            .separator.opacity(0.35 * sidebarForegroundWhiteAmount),
+                            lineWidth: 0.5
+                        )
                 }
         }
         .menuStyle(.borderlessButton)
@@ -2417,6 +2559,7 @@ private struct WindowTrafficLightButton: View {
 private struct SidebarPinButton: View {
     let isLockedOpen: Bool
     let action: () -> Void
+    @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
     @State private var isHovered = false
 
     private var label: String {
@@ -2432,7 +2575,7 @@ private struct SidebarPinButton: View {
             .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .background {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isHovered ? Color.primary.opacity(0.08) : .clear)
+                    .fill(isHovered ? sidebarForegroundColor.opacity(0.08) : .clear)
             }
         }
         .buttonStyle(.plain)
@@ -2654,10 +2797,15 @@ private struct SidebarSpacePagerView: View {
     let selectSpace: (SpaceID) -> Void
     let selectAuxiliaryPage: (SidebarSpacePagerPageID?) -> Void
     let previewSpace: (SpaceID?) -> Void
-    let updateSidebarChromeTheme: (SidebarChromeTheme?) -> Void
+    let sidebarIsPinned: Bool
+    let updateSidebarFixedChromeLiveStyle: (SidebarChromeLiveStyle?) -> Void
+    let updateSidebarChromeLiveStyle: (SidebarChromeLiveStyle?) -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
 
     @State private var scrollPositionPageID: SidebarSpacePagerPageID?
     @State private var scrollIsActive = false
+    @State private var settledStyleAwaitsScrollIdle = false
     // This tracker is deliberately non-observable. The target behavior needs the
     // latest offset, but publishing every offset would rebuild the pager per frame.
     @State private var geometryTracker = SidebarSpacePagerGeometryTracker()
@@ -2665,6 +2813,12 @@ private struct SidebarSpacePagerView: View {
     var body: some View {
         GeometryReader { proxy in
             let pageWidth = max(proxy.size.width, 1)
+            // Resolve the small page palette once per body evaluation. Geometry
+            // samples then blend only two adjacent colors and never walk tabs or
+            // rebuild per-page appearance state at display cadence.
+            let pageChromeLiveStyles = snapshot.pages.map {
+                SidebarChromeLiveStyle(theme: $0.chromeTheme)
+            }
 
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 0) {
@@ -2675,14 +2829,24 @@ private struct SidebarSpacePagerView: View {
                     }
                 }
                 .scrollTargetLayout()
-                .background(EnclosingScrollIndicatorHider())
+                .background {
+                    ZStack {
+                        EnclosingScrollIndicatorHider()
+                        SidebarSpacePagerScrollInputScalingInstaller(
+                            sensitivity: SidebarSpacePagerMetrics.activeScrollSensitivity,
+                            pageWidth: pageWidth,
+                            geometryTracker: geometryTracker
+                        )
+                        .allowsHitTesting(false)
+                    }
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             .scrollIndicators(.hidden)
             .overlay {
                 ScrollIndicatorHiderOverlay(axes: .horizontal)
             }
-            .scrollTargetBehavior(SidebarMagneticPageScrollTargetBehavior(
+            .scrollTargetBehavior(SidebarAdjacentPageScrollTargetBehavior(
                 pageCount: snapshot.pageCount,
                 geometryTracker: geometryTracker
             ))
@@ -2691,23 +2855,39 @@ private struct SidebarSpacePagerView: View {
             .onAppear {
                 syncScrollPositionToSelection(animated: false)
                 previewSpace(nil)
-                updateSidebarChromeTheme(selectedChromeTheme)
+                updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
+                updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
             }
             .onChange(of: selectedPageID) { _, _ in
                 guard !scrollIsActive else {
                     return
                 }
 
+                if pageTravelIsRequired(to: selectedPageID) {
+                    // Sticky until the scroll phase confirms the presentation
+                    // reached rest; later binding callbacks may already expose
+                    // the target ID even while pixels are still in flight.
+                    settledStyleAwaitsScrollIdle = true
+                }
                 syncScrollPositionToSelection(animated: true)
                 previewSpace(nil)
-                updateSidebarChromeTheme(selectedChromeTheme)
+                updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
+                if !settledStyleAwaitsScrollIdle {
+                    updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
+                }
             }
             .onChange(of: snapshot.selectedSpacePageID) { _, _ in
                 selectAuxiliaryPage(nil)
+                if pageTravelIsRequired(to: selectedPageID) {
+                    settledStyleAwaitsScrollIdle = true
+                }
                 syncScrollPositionToSelection(animated: true)
                 if !scrollIsActive {
+                    updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
+                }
+                if !scrollIsActive, !settledStyleAwaitsScrollIdle {
                     previewSpace(nil)
-                    updateSidebarChromeTheme(selectedChromeTheme)
+                    updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
                 }
             }
             .onChange(of: navigationRequest) { _, request in
@@ -2715,11 +2895,22 @@ private struct SidebarSpacePagerView: View {
                     return
                 }
 
+                if pageTravelIsRequired(to: request.pageID) {
+                    settledStyleAwaitsScrollIdle = true
+                }
+                geometryTracker.cancelDirectionalSnap()
                 if case .space = request.pageID {
                     selectAuxiliaryPage(nil)
                 } else {
                     selectAuxiliaryPage(request.pageID)
                 }
+
+                updateSidebarFixedChromeLiveStyle(
+                    SidebarSpacePagerChrome.liveStyle(
+                        for: request.pageID,
+                        in: snapshot.pages
+                    )
+                )
 
                 withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
                     scrollPositionPageID = request.pageID
@@ -2727,23 +2918,39 @@ private struct SidebarSpacePagerView: View {
             }
             .onChange(of: snapshot) { _, _ in
                 if !scrollIsActive {
-                    previewSpace(nil)
-                    updateSidebarChromeTheme(selectedChromeTheme)
+                    if settledStyleAwaitsScrollIdle,
+                       !pageTravelIsRequired(to: selectedPageID) {
+                        settledStyleAwaitsScrollIdle = false
+                    }
+
+                    if !settledStyleAwaitsScrollIdle {
+                        previewSpace(nil)
+                        updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
+                        updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
+                    }
                 }
             }
-            .onScrollPhaseChange { _, newPhase in
+            .onScrollPhaseChange { oldPhase, newPhase in
                 scrollIsActive = newPhase != .idle
+                geometryTracker.transition(from: oldPhase, to: newPhase)
 
                 if newPhase == .idle {
-                    // Keep the expensive Liquid Glass tree fixed while the pager
-                    // is moving, then publish the exact destination theme once.
-                    // Interpolating and publishing here on every geometry sample
-                    // forces a full-height glass rebuild each display frame.
-                    updateSidebarChromeTheme(
-                        SidebarSpacePagerChrome.theme(
+                    settledStyleAwaitsScrollIdle = false
+                    normalizeGeometryTracker(to: scrollPositionPageID ?? selectedPageID)
+                    // End on the exact page color after the scroll-linked samples.
+                    // The exact retained chrome and fixed-control foreground
+                    // settle together before the committed selection handoff.
+                    updateSidebarChromeLiveStyle(
+                        SidebarSpacePagerChrome.liveStyle(
                             for: scrollPositionPageID,
                             in: snapshot.pages
-                        ) ?? selectedChromeTheme
+                        ) ?? selectedChromeLiveStyle
+                    )
+                    updateSidebarFixedChromeLiveStyle(
+                        SidebarSpacePagerChrome.liveStyle(
+                            for: scrollPositionPageID,
+                            in: snapshot.pages
+                        ) ?? selectedChromeLiveStyle
                     )
                     commitPageIfNeeded(scrollPositionPageID)
                     previewSpace(nil)
@@ -2752,12 +2959,54 @@ private struct SidebarSpacePagerView: View {
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
                 geometry.contentOffset.x / pageWidth
             } action: { _, newState in
-                // This reference is deliberately non-observable. Magnetism gets
+                // This reference is deliberately non-observable. Snapping gets
                 // the live offset without invalidating any SwiftUI view.
                 geometryTracker.visibleFractionalPageIndex = newState
+
+                if settledStyleAwaitsScrollIdle,
+                   !scrollIsActive,
+                   !pageTravelIsRequired(to: scrollPositionPageID ?? selectedPageID) {
+                    // Handles an immediate/no-phase programmatic alignment.
+                    settledStyleAwaitsScrollIdle = false
+                    updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
+                    updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
+                    return
+                }
+
+                guard scrollIsActive else {
+                    return
+                }
+
+                // The full scroll-linked style terminates at retained layers.
+                // Fixed controls receive the exact adjacent endpoint instead;
+                // their controller deduplicates the hundreds of later samples.
+                updateSidebarChromeLiveStyle(
+                    SidebarSpacePagerChrome.liveStyle(
+                        at: newState,
+                        styles: pageChromeLiveStyles
+                    )
+                )
+                if geometryTracker.acceptsDirectionalSnap,
+                   let targetPageID = SidebarSpacePagerFixedChromeTarget.pageID(
+                    visibleFractionalPageIndex: newState,
+                    gestureStartFractionalPageIndex: geometryTracker.gestureStartFractionalPageIndex,
+                    gestureSourcePageIndex: geometryTracker.gestureSourcePageIndex,
+                    rawGestureDisplacementX: geometryTracker.rawGestureDisplacementX,
+                    pageWidth: pageWidth,
+                    pages: snapshot.pages
+                ) {
+                    updateSidebarFixedChromeLiveStyle(
+                        SidebarSpacePagerChrome.liveStyle(
+                            for: targetPageID,
+                            in: snapshot.pages
+                        )
+                    )
+                }
             }
             .onDisappear {
-                updateSidebarChromeTheme(nil)
+                geometryTracker.cancelDirectionalSnap()
+                updateSidebarChromeLiveStyle(nil)
+                updateSidebarFixedChromeLiveStyle(nil)
                 previewSpace(nil)
             }
         }
@@ -2765,51 +3014,88 @@ private struct SidebarSpacePagerView: View {
 
     @ViewBuilder
     private func pageView(_ page: SidebarSpacePagerPageSnapshot) -> some View {
-        switch page {
-        case .activity(let snapshot):
-            SidebarActivityPageView(
-                snapshot: snapshot,
-                openHistoryEntry: openHistoryEntry,
-                revealDownload: revealDownload
-            )
-            .equatable()
-        case .space(let snapshot):
-            SidebarSpacePageView(
-                page: snapshot,
-                selectTab: selectTab,
-                closeTab: closeTab,
-                setTabPlacement: setTabPlacement,
-                moveTab: moveTab,
-                moveTabBefore: moveTabBefore,
-                moveTabToPlacement: moveTabToPlacement,
-                moveTabToFolder: moveTabToFolder,
-                createFolder: createFolder,
-                customizeSpace: customizeSpace
-            )
-            .equatable()
+        let style = SidebarChromeLiveStyle(theme: page.chromeTheme)
+        let whiteAmount = SidebarForegroundPalette.whiteAmount(
+            for: style,
+            isPinned: sidebarIsPinned,
+            colorScheme: colorScheme
+        )
+        let foregroundColor = SidebarForegroundPalette.color(whiteAmount: whiteAmount)
+
+        Group {
+            switch page {
+            case .activity(let snapshot):
+                SidebarActivityPageView(
+                    snapshot: snapshot,
+                    openHistoryEntry: openHistoryEntry,
+                    revealDownload: revealDownload
+                )
+                .equatable()
+            case .space(let snapshot):
+                SidebarSpacePageView(
+                    page: snapshot,
+                    selectTab: selectTab,
+                    closeTab: closeTab,
+                    setTabPlacement: setTabPlacement,
+                    moveTab: moveTab,
+                    moveTabBefore: moveTabBefore,
+                    moveTabToPlacement: moveTabToPlacement,
+                    moveTabToFolder: moveTabToFolder,
+                    createFolder: createFolder,
+                    customizeSpace: customizeSpace
+                )
+                .equatable()
+            }
         }
+        .foregroundStyle(
+            foregroundColor,
+            foregroundColor.opacity(0.70),
+            foregroundColor.opacity(0.46)
+        )
+        .environment(\.sidebarForegroundColor, foregroundColor)
+        .environment(\.sidebarForegroundWhiteAmount, whiteAmount)
+        .environment(\.sidebarUsesDarkForeground, whiteAmount < 0.5)
     }
 
-    private var selectedChromeTheme: SidebarChromeTheme? {
+    private var selectedChromeLiveStyle: SidebarChromeLiveStyle? {
         guard let selectedPageID,
               let selectedPage = snapshot.pages.first(where: { $0.id == selectedPageID }) else {
             return nil
         }
 
-        return selectedPage.chromeTheme
+        return SidebarChromeLiveStyle(theme: selectedPage.chromeTheme)
     }
 
     private var selectedPageID: SidebarSpacePagerPageID? {
         snapshot.selectedAuxiliaryPageID ?? snapshot.selectedSpacePageID
     }
 
+    private func pageTravelIsRequired(to pageID: SidebarSpacePagerPageID?) -> Bool {
+        guard let pageID,
+              let targetIndex = snapshot.pages.firstIndex(where: { $0.id == pageID }) else {
+            return false
+        }
+
+        if let visibleIndex = geometryTracker.visibleFractionalPageIndex,
+           visibleIndex.isFinite {
+            return abs(visibleIndex - CGFloat(targetIndex)) > 0.001
+        }
+
+        return SidebarSpacePagerChrome.shouldDeferSettledStyle(
+            from: scrollPositionPageID,
+            to: pageID
+        )
+    }
+
     private func syncScrollPositionToSelection(animated: Bool) {
+        geometryTracker.cancelDirectionalSnap()
         guard let selectedPageID,
               scrollPositionPageID != selectedPageID else {
             return
         }
 
-        if let selectedPageIndex = snapshot.pages.firstIndex(where: { $0.id == selectedPageID }) {
+        if !animated,
+           let selectedPageIndex = snapshot.pages.firstIndex(where: { $0.id == selectedPageID }) {
             geometryTracker.visibleFractionalPageIndex = CGFloat(selectedPageIndex)
         }
 
@@ -2820,6 +3106,15 @@ private struct SidebarSpacePagerView: View {
         } else {
             scrollPositionPageID = selectedPageID
         }
+    }
+
+    private func normalizeGeometryTracker(to pageID: SidebarSpacePagerPageID?) {
+        guard let pageID,
+              let pageIndex = snapshot.pages.firstIndex(where: { $0.id == pageID }) else {
+            return
+        }
+
+        geometryTracker.visibleFractionalPageIndex = CGFloat(pageIndex)
     }
 
     private func commitPageIfNeeded(_ pageID: SidebarSpacePagerPageID?) {
@@ -2841,11 +3136,241 @@ private struct SidebarSpacePagerView: View {
     }
 }
 
-private final class SidebarSpacePagerGeometryTracker {
+final class SidebarSpacePagerGeometryTracker {
     var visibleFractionalPageIndex: CGFloat?
+    var gestureStartFractionalPageIndex: CGFloat?
+    var gestureSourcePageIndex: Int?
+    var rawGestureDisplacementX: CGFloat?
+    var acceptsDirectionalSnap = false
+    private(set) var resolvedTargetPageIndex: Int?
+    private var physicalGestureStartIsPending = false
+
+    func transition(from oldPhase: ScrollPhase, to newPhase: ScrollPhase) {
+        switch newPhase {
+        case .tracking:
+            if !consumePendingPhysicalGestureStart() {
+                beginDirectionalSnap(
+                    sourcePageIndex: interruptedTargetPageIndex(after: oldPhase)
+                )
+            }
+        case .interacting:
+            if oldPhase != .tracking {
+                if !consumePendingPhysicalGestureStart() {
+                    beginDirectionalSnap(
+                        sourcePageIndex: interruptedTargetPageIndex(after: oldPhase)
+                    )
+                }
+            } else {
+                physicalGestureStartIsPending = false
+                acceptsDirectionalSnap = true
+            }
+        case .decelerating:
+            acceptsDirectionalSnap = true
+        case .animating:
+            // A short trackpad swipe can transition directly from interaction
+            // into SwiftUI's page-alignment animation. Keep the captured origin
+            // and direction alive for that animation so a second target pass
+            // cannot reinterpret the damped offset as a non-gesture resize and
+            // snap back to the page we started on. Programmatic animations begin
+            // from idle (and callers also cancel explicitly), so they remain
+            // non-directional.
+            if oldPhase == .idle {
+                cancelDirectionalSnap()
+            }
+        case .idle:
+            cancelDirectionalSnap()
+        }
+    }
+
+    func cancelDirectionalSnap() {
+        acceptsDirectionalSnap = false
+        gestureStartFractionalPageIndex = nil
+        gestureSourcePageIndex = nil
+        rawGestureDisplacementX = nil
+        resolvedTargetPageIndex = nil
+        physicalGestureStartIsPending = false
+    }
+
+    func beginPhysicalGesture() {
+        beginDirectionalSnap(sourcePageIndex: resolvedTargetPageIndex)
+        physicalGestureStartIsPending = true
+    }
+
+    func recordResolvedTargetPageIndex(_ pageIndex: Int) {
+        resolvedTargetPageIndex = pageIndex
+    }
+
+    private func interruptedTargetPageIndex(after phase: ScrollPhase) -> Int? {
+        switch phase {
+        case .animating, .decelerating:
+            return resolvedTargetPageIndex
+        case .idle, .tracking, .interacting:
+            return nil
+        }
+    }
+
+    private func beginDirectionalSnap(sourcePageIndex: Int?) {
+        gestureStartFractionalPageIndex = visibleFractionalPageIndex
+        gestureSourcePageIndex = sourcePageIndex
+        rawGestureDisplacementX = nil
+        acceptsDirectionalSnap = true
+    }
+
+    private func consumePendingPhysicalGestureStart() -> Bool {
+        guard physicalGestureStartIsPending else {
+            return false
+        }
+
+        physicalGestureStartIsPending = false
+        acceptsDirectionalSnap = true
+        return true
+    }
+}
+
+struct SidebarSpacePagerScrollInputScalingState {
+    private var pointDeltaResidualX = 0.0
+    private(set) var cumulativeRawDisplacementX: CGFloat = 0
+
+    mutating func scaledEvent(
+        from event: NSEvent,
+        sensitivity: CGFloat
+    ) -> NSEvent? {
+        guard event.type == .scrollWheel,
+              let copiedCGEvent = event.cgEvent?.copy() else {
+            return nil
+        }
+
+        if event.scrollingDeltaX.isFinite {
+            cumulativeRawDisplacementX += event.scrollingDeltaX
+        }
+
+        let normalizedSensitivity = Self.normalizedSensitivity(sensitivity)
+        let originalFixedPointDeltaX = copiedCGEvent.getDoubleValueField(
+            .scrollWheelEventFixedPtDeltaAxis2
+        )
+        let originalPointDeltaX = copiedCGEvent.getIntegerValueField(
+            .scrollWheelEventPointDeltaAxis2
+        )
+        // For precise input AppKit reads active displacement from the fixed
+        // and point fields. Leave the legacy, raw, and accelerated fields
+        // untouched so the system retains the physical release velocity.
+        if originalFixedPointDeltaX.isFinite {
+            copiedCGEvent.setDoubleValueField(
+                .scrollWheelEventFixedPtDeltaAxis2,
+                value: originalFixedPointDeltaX * normalizedSensitivity
+            )
+        }
+        copiedCGEvent.setIntegerValueField(
+            .scrollWheelEventPointDeltaAxis2,
+            value: Self.scaledIntegralDelta(
+                originalPointDeltaX,
+                sensitivity: normalizedSensitivity,
+                residual: &pointDeltaResidualX
+            )
+        )
+
+        return NSEvent(cgEvent: copiedCGEvent)
+    }
+
+    mutating func reset() {
+        pointDeltaResidualX = 0
+        cumulativeRawDisplacementX = 0
+    }
+
+    static func normalizedSensitivity(_ sensitivity: CGFloat) -> Double {
+        guard sensitivity.isFinite else {
+            return 1
+        }
+
+        return Double(min(max(sensitivity, 0), 1))
+    }
+
+    private static func scaledIntegralDelta(
+        _ delta: Int64,
+        sensitivity: Double,
+        residual: inout Double
+    ) -> Int64 {
+        let exactValue = Double(delta) * sensitivity + residual
+        guard exactValue.isFinite,
+              exactValue > Double(Int64.min),
+              exactValue < Double(Int64.max) else {
+            residual = 0
+            return delta
+        }
+
+        let scaledValue = Int64(exactValue.rounded(.toNearestOrAwayFromZero))
+        residual = exactValue - Double(scaledValue)
+        return scaledValue
+    }
+}
+
+struct SidebarSpacePagerPhysicalGestureGate {
+    private(set) var ignoresChangedEvents = false
+
+    mutating func begin() {
+        ignoresChangedEvents = false
+    }
+
+    mutating func ignoreChangedEventsUntilNextGesture() {
+        ignoresChangedEvents = true
+    }
+
+    mutating func end() {
+        ignoresChangedEvents = false
+    }
+}
+
+struct SidebarSpacePagerFixedChromeTarget {
+    static func pageID(
+        visibleFractionalPageIndex: CGFloat,
+        gestureStartFractionalPageIndex: CGFloat?,
+        gestureSourcePageIndex: Int? = nil,
+        rawGestureDisplacementX: CGFloat?,
+        pageWidth: CGFloat,
+        pages: [SidebarSpacePagerPageSnapshot]
+    ) -> SidebarSpacePagerPageID? {
+        guard !pages.isEmpty,
+              visibleFractionalPageIndex.isFinite,
+              pageWidth.isFinite,
+              pageWidth > 0 else {
+            return nil
+        }
+
+        let gestureOrigin: CGFloat
+        if let gestureStartFractionalPageIndex,
+           gestureStartFractionalPageIndex.isFinite {
+            gestureOrigin = gestureStartFractionalPageIndex
+        } else {
+            gestureOrigin = visibleFractionalPageIndex.rounded()
+        }
+
+        let pageIndex = SidebarSpacePagerSnap.targetPageIndex(
+            originalOffsetX: gestureOrigin * pageWidth,
+            proposedOffsetX: visibleFractionalPageIndex * pageWidth,
+            gestureStartFractionalPageIndex: gestureOrigin,
+            gestureSourcePageIndex: gestureSourcePageIndex,
+            visibleFractionalPageIndex: visibleFractionalPageIndex,
+            rawGestureDisplacementX: rawGestureDisplacementX,
+            velocityX: 0,
+            pageWidth: pageWidth,
+            pageCount: pages.count
+        )
+        return pages[pageIndex].id
+    }
 }
 
 struct SidebarSpacePagerChrome {
+    static func shouldDeferSettledStyle(
+        from currentPageID: SidebarSpacePagerPageID?,
+        to targetPageID: SidebarSpacePagerPageID?
+    ) -> Bool {
+        guard let targetPageID else {
+            return false
+        }
+
+        return currentPageID != targetPageID
+    }
+
     static func theme(
         for pageID: SidebarSpacePagerPageID?,
         in pages: [SidebarSpacePagerPageSnapshot]
@@ -2855,6 +3380,60 @@ struct SidebarSpacePagerChrome {
         }
 
         return pages.first(where: { $0.id == pageID })?.chromeTheme
+    }
+
+    static func color(
+        for pageID: SidebarSpacePagerPageID?,
+        in pages: [SidebarSpacePagerPageSnapshot]
+    ) -> SidebarChromeColor? {
+        theme(for: pageID, in: pages).map(SidebarChromeColor.init(theme:))
+    }
+
+    static func liveStyle(
+        for pageID: SidebarSpacePagerPageID?,
+        in pages: [SidebarSpacePagerPageSnapshot]
+    ) -> SidebarChromeLiveStyle? {
+        theme(for: pageID, in: pages).map(SidebarChromeLiveStyle.init(theme:))
+    }
+
+    static func liveColor(
+        at fractionalPageIndex: CGFloat,
+        in pages: [SidebarSpacePagerPageSnapshot]
+    ) -> SidebarChromeColor? {
+        liveColor(
+            at: fractionalPageIndex,
+            themes: pages.map(\.chromeTheme)
+        )
+    }
+
+    static func liveColor(
+        at fractionalPageIndex: CGFloat,
+        themes: [SidebarChromeTheme]
+    ) -> SidebarChromeColor? {
+        SidebarChromeColor.interpolated(
+            themes: themes,
+            fractionalIndex: Double(fractionalPageIndex)
+        )
+    }
+
+    static func liveStyle(
+        at fractionalPageIndex: CGFloat,
+        themes: [SidebarChromeTheme]
+    ) -> SidebarChromeLiveStyle? {
+        SidebarChromeLiveStyle.interpolated(
+            themes: themes,
+            fractionalIndex: Double(fractionalPageIndex)
+        )
+    }
+
+    static func liveStyle(
+        at fractionalPageIndex: CGFloat,
+        styles: [SidebarChromeLiveStyle]
+    ) -> SidebarChromeLiveStyle? {
+        SidebarChromeLiveStyle.interpolated(
+            styles: styles,
+            fractionalIndex: Double(fractionalPageIndex)
+        )
     }
 }
 
@@ -2874,7 +3453,7 @@ struct SidebarSpacePagerSelection {
     }
 }
 
-private struct SidebarMagneticPageScrollTargetBehavior: ScrollTargetBehavior {
+private struct SidebarAdjacentPageScrollTargetBehavior: ScrollTargetBehavior {
     let pageCount: Int
     let geometryTracker: SidebarSpacePagerGeometryTracker
 
@@ -2885,25 +3464,49 @@ private struct SidebarMagneticPageScrollTargetBehavior: ScrollTargetBehavior {
         }
 
         let pageWidth = context.containerSize.width
-        let targetPageIndex = SidebarSpacePagerMagnetism.targetPageIndex(
-            originalOffsetX: context.originalTarget.rect.minX,
-            proposedOffsetX: target.rect.minX,
-            visibleFractionalPageIndex: geometryTracker.visibleFractionalPageIndex,
-            velocityX: context.velocity.dx,
-            pageWidth: pageWidth,
-            pageCount: pageCount
-        )
+        guard pageWidth.isFinite,
+              pageWidth > 0 else {
+            return
+        }
 
+        let targetPageIndex: Int
+        if geometryTracker.acceptsDirectionalSnap {
+            targetPageIndex = SidebarSpacePagerSnap.targetPageIndex(
+                originalOffsetX: context.originalTarget.rect.minX,
+                proposedOffsetX: target.rect.minX,
+                gestureStartFractionalPageIndex: geometryTracker.gestureStartFractionalPageIndex,
+                gestureSourcePageIndex: geometryTracker.gestureSourcePageIndex,
+                visibleFractionalPageIndex: geometryTracker.visibleFractionalPageIndex,
+                rawGestureDisplacementX: geometryTracker.rawGestureDisplacementX,
+                velocityX: context.velocity.dx,
+                pageWidth: pageWidth,
+                pageCount: pageCount
+            )
+        } else {
+            // SwiftUI also asks target behaviors to resolve container-size
+            // changes. Keep those updates page-aligned without interpreting a
+            // resize or programmatic animation as a directional gesture.
+            targetPageIndex = SidebarSpacePagerSnap.nearestPageIndex(
+                offsetX: target.rect.minX,
+                pageWidth: pageWidth,
+                pageCount: pageCount
+            )
+        }
+
+        geometryTracker.recordResolvedTargetPageIndex(targetPageIndex)
         target.rect.origin.x = CGFloat(targetPageIndex) * pageWidth
         target.anchor = .topLeading
     }
 }
 
-struct SidebarSpacePagerMagnetism {
+struct SidebarSpacePagerSnap {
     static func targetPageIndex(
         originalOffsetX: CGFloat,
         proposedOffsetX: CGFloat,
+        gestureStartFractionalPageIndex: CGFloat? = nil,
+        gestureSourcePageIndex: Int? = nil,
         visibleFractionalPageIndex: CGFloat?,
+        rawGestureDisplacementX: CGFloat? = nil,
         velocityX: CGFloat,
         pageWidth: CGFloat,
         pageCount: Int
@@ -2914,87 +3517,96 @@ struct SidebarSpacePagerMagnetism {
             return 0
         }
 
+        let originalPagePosition = finiteOffset(originalOffsetX) / pageWidth
+        let gestureStartPagePosition = finiteValue(gestureStartFractionalPageIndex)
+            ?? originalPagePosition
         let currentPageIndex = clampedPageIndex(
-            Int((finiteOffset(originalOffsetX) / pageWidth).rounded()),
+            gestureSourcePageIndex ?? Int(gestureStartPagePosition.rounded()),
             pageCount: pageCount
         )
-        let currentPagePosition = CGFloat(currentPageIndex)
-        let proposedPagePosition = finiteOffset(proposedOffsetX) / pageWidth
-        let proposedDeltaInPages = proposedPagePosition - currentPagePosition
-        let proposedDistance = abs(proposedDeltaInPages)
-
-        guard proposedDistance > 0 else {
-            return currentPageIndex
+        let proposedDirection: Int?
+        if originalOffsetX.isFinite, proposedOffsetX.isFinite {
+            let proposedPagePosition = proposedOffsetX / pageWidth
+            proposedDirection = pageDirection(from: proposedPagePosition - gestureStartPagePosition)
+        } else {
+            proposedDirection = nil
         }
 
-        let direction = proposedDeltaInPages > 0 ? 1 : -1
-        let actualScrolledDistance = actualScrolledDistance(
-            from: currentPagePosition,
-            toward: direction,
-            visibleFractionalPageIndex: visibleFractionalPageIndex,
-            proposedDistance: proposedDistance
+        let visibleDirection: Int?
+        if let visibleFractionalPageIndex,
+           visibleFractionalPageIndex.isFinite {
+            visibleDirection = pageDirection(
+                from: visibleFractionalPageIndex - gestureStartPagePosition
+            )
+        } else {
+            visibleDirection = nil
+        }
+
+        let rawGestureDirection: Int?
+        if let rawGestureDisplacementX,
+           rawGestureDisplacementX.isFinite {
+            rawGestureDirection = pageDirection(from: rawGestureDisplacementX / pageWidth)
+        } else {
+            rawGestureDirection = nil
+        }
+
+        // A short release can be quantized back to its origin before this hook
+        // runs. Prefer SwiftUI's proposed direction, then a meaningful release
+        // reversal, and finally recover a slow drag from its unscaled intent.
+        let pageStep = proposedDirection
+            ?? velocityDirection(from: velocityX)
+            ?? rawGestureDirection
+            ?? visibleDirection
+            ?? 0
+        return clampedPageIndex(currentPageIndex + pageStep, pageCount: pageCount)
+    }
+
+    static func nearestPageIndex(
+        offsetX: CGFloat,
+        pageWidth: CGFloat,
+        pageCount: Int
+    ) -> Int {
+        guard pageCount > 0,
+              pageWidth.isFinite,
+              pageWidth > 0 else {
+            return 0
+        }
+
+        return clampedPageIndex(
+            Int((finiteOffset(offsetX) / pageWidth).rounded()),
+            pageCount: pageCount
         )
-        let velocityBonusPages = velocityBonusPages(
-            velocityX: velocityX,
-            actualScrolledDistance: actualScrolledDistance
-        )
-        let effectiveDistance = min(proposedDistance, actualScrolledDistance + velocityBonusPages)
-        let pageStepCount = magneticPageStepCount(effectiveDistance: effectiveDistance)
-        return clampedPageIndex(currentPageIndex + direction * pageStepCount, pageCount: pageCount)
     }
 
     private static func finiteOffset(_ offset: CGFloat) -> CGFloat {
         offset.isFinite ? offset : 0
     }
 
-    private static func actualScrolledDistance(
-        from currentPagePosition: CGFloat,
-        toward direction: Int,
-        visibleFractionalPageIndex: CGFloat?,
-        proposedDistance: CGFloat
-    ) -> CGFloat {
-        guard let visibleFractionalPageIndex,
-              visibleFractionalPageIndex.isFinite else {
-            return proposedDistance
+    private static func finiteValue(_ value: CGFloat?) -> CGFloat? {
+        guard let value,
+              value.isFinite else {
+            return nil
         }
 
-        let actualDelta = direction > 0
-            ? visibleFractionalPageIndex - currentPagePosition
-            : currentPagePosition - visibleFractionalPageIndex
-        return min(max(actualDelta, 0), proposedDistance)
+        return value
     }
 
-    private static func velocityBonusPages(
-        velocityX: CGFloat,
-        actualScrolledDistance: CGFloat
-    ) -> CGFloat {
-        guard actualScrolledDistance >= SidebarSpacePagerMetrics.magneticFastFlickDistanceThreshold else {
-            return 0
+    private static func pageDirection(from delta: CGFloat) -> Int? {
+        guard delta.isFinite,
+              abs(delta) >= SidebarSpacePagerMetrics.directionalDistanceThresholdInPages else {
+            return nil
         }
 
-        let speed = abs(velocityX)
-        guard speed >= SidebarSpacePagerMetrics.magneticFlickVelocityThreshold else {
-            return 0
-        }
-
-        let velocityRange = max(
-            SidebarSpacePagerMetrics.magneticMaxVelocityBonusVelocity
-                - SidebarSpacePagerMetrics.magneticFlickVelocityThreshold,
-            1
-        )
-        let normalizedVelocity = min(
-            max((speed - SidebarSpacePagerMetrics.magneticFlickVelocityThreshold) / velocityRange, 0),
-            1
-        )
-        return normalizedVelocity * SidebarSpacePagerMetrics.magneticMaxVelocityBonusPages
+        return delta > 0 ? 1 : -1
     }
 
-    private static func magneticPageStepCount(effectiveDistance: CGFloat) -> Int {
-        guard effectiveDistance >= SidebarSpacePagerMetrics.magneticPageDistanceThreshold else {
-            return 0
+    private static func velocityDirection(from velocityX: CGFloat) -> Int? {
+        guard velocityX.isFinite,
+              abs(velocityX) >= SidebarSpacePagerMetrics.directionalVelocityThreshold else {
+            return nil
         }
 
-        return Int((effectiveDistance - SidebarSpacePagerMetrics.magneticPageDistanceThreshold).rounded(.down)) + 1
+        return velocityX > 0 ? 1 : -1
     }
 
     private static func clampedPageIndex(_ pageIndex: Int, pageCount: Int) -> Int {
@@ -3175,6 +3787,7 @@ private struct SidebarActivityPageView: View, Equatable {
     let revealDownload: (BrowserDownload) -> Void
 
     @Environment(\.sidebarUsesDarkForeground) private var sidebarUsesDarkForeground
+    @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
     @State private var selectedProfileID: ProfileID?
     @State private var selectedMode: SidebarActivityMode = .history
     @State private var profileFilterIsPresented = false
@@ -3257,12 +3870,15 @@ private struct SidebarActivityPageView: View, Equatable {
             .padding(.vertical, 7)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? Color.primary.opacity(0.10) : Color.clear)
+                    .fill(isSelected ? sidebarForegroundColor.opacity(0.10) : Color.clear)
             }
             .overlay {
                 if !sidebarUsesDarkForeground {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.primary.opacity(isSelected ? 0.16 : 0.08), lineWidth: 1)
+                        .stroke(
+                            sidebarForegroundColor.opacity(isSelected ? 0.16 : 0.08),
+                            lineWidth: 1
+                        )
                 }
             }
             .overlay(alignment: .topTrailing) {
@@ -3273,7 +3889,9 @@ private struct SidebarActivityPageView: View, Equatable {
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
-        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+        .foregroundStyle(
+            isSelected ? sidebarForegroundColor : sidebarForegroundColor.opacity(0.70)
+        )
         .accessibilityLabel("\(mode.title), \(count)")
         .help(mode.title)
     }
@@ -3289,7 +3907,7 @@ private struct SidebarActivityPageView: View, Equatable {
             .frame(height: 16)
             .background {
                 Capsule()
-                    .fill(Color.primary.opacity(isSelected ? 0.14 : 0.08))
+                    .fill(sidebarForegroundColor.opacity(isSelected ? 0.14 : 0.08))
             }
             .accessibilityHidden(true)
     }
@@ -3300,11 +3918,17 @@ private struct SidebarActivityPageView: View, Equatable {
         } label: {
             Image(systemName: selectedProfileID == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(selectedProfileID == nil ? Color.secondary : Color.primary)
+                .foregroundStyle(
+                    selectedProfileID == nil
+                        ? sidebarForegroundColor.opacity(0.70)
+                        : sidebarForegroundColor
+                )
                 .frame(width: 28, height: 28)
                 .background {
                     Circle()
-                        .fill(Color.primary.opacity(selectedProfileID == nil ? 0.06 : 0.12))
+                        .fill(
+                            sidebarForegroundColor.opacity(selectedProfileID == nil ? 0.06 : 0.12)
+                        )
                 }
                 .contentShape(Circle())
         }
@@ -3837,6 +4461,299 @@ private struct SidebarSpacePageView: View, Equatable {
     }
 }
 
+private struct SidebarSpacePagerScrollInputScalingInstaller: NSViewRepresentable {
+    let sensitivity: CGFloat
+    let pageWidth: CGFloat
+    let geometryTracker: SidebarSpacePagerGeometryTracker
+
+    func makeNSView(context: Context) -> SidebarSpacePagerScrollInputScalingView {
+        let view = SidebarSpacePagerScrollInputScalingView()
+        view.geometryTracker = geometryTracker
+        view.sensitivity = sensitivity
+        view.pageWidth = pageWidth
+        return view
+    }
+
+    func updateNSView(_ nsView: SidebarSpacePagerScrollInputScalingView, context: Context) {
+        nsView.geometryTracker = geometryTracker
+        nsView.sensitivity = sensitivity
+        nsView.pageWidth = pageWidth
+        nsView.installIfNeeded()
+    }
+
+    static func dismantleNSView(
+        _ nsView: SidebarSpacePagerScrollInputScalingView,
+        coordinator: ()
+    ) {
+        nsView.tearDown()
+    }
+}
+
+private final class SidebarSpacePagerScrollInputScalingView: NSView {
+    weak var geometryTracker: SidebarSpacePagerGeometryTracker?
+    var sensitivity: CGFloat = 1
+    var pageWidth: CGFloat = 0 {
+        didSet {
+            guard oldValue > 0,
+                  abs(oldValue - pageWidth) > 0.5 else {
+                return
+            }
+
+            ignoreRemainderOfPhysicalGesture()
+            geometryTracker?.cancelDirectionalSnap()
+        }
+    }
+
+    private weak var configuredScrollView: NSScrollView?
+    private var eventMonitor: Any?
+    private var deferredInstallationIsScheduled = false
+    private var ownsPhysicalGesture = false
+    private var gestureGate = SidebarSpacePagerPhysicalGestureGate()
+    private var inputScalingState = SidebarSpacePagerScrollInputScalingState()
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installIfNeeded()
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        installIfNeeded()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            tearDown()
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        installIfNeeded()
+    }
+
+    deinit {
+        MainActor.assumeIsolated {
+            tearDown()
+        }
+    }
+
+    func installIfNeeded() {
+        guard window != nil else {
+            return
+        }
+
+        let candidateScrollView = nearestScrollView
+        if let configuredScrollView,
+           configuredScrollView === candidateScrollView {
+            installEventMonitorIfNeeded()
+            return
+        }
+
+        let replacedConfiguredScrollView = configuredScrollView != nil
+        stopObservingConfiguredScrollView()
+        if replacedConfiguredScrollView {
+            ignoreRemainderOfPhysicalGesture()
+            geometryTracker?.cancelDirectionalSnap()
+        } else {
+            resetLocalGestureState()
+        }
+
+        guard let candidateScrollView else {
+            scheduleDeferredInstallation()
+            return
+        }
+
+        configuredScrollView = candidateScrollView
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollViewDidEndLiveScroll(_:)),
+            name: NSScrollView.didEndLiveScrollNotification,
+            object: candidateScrollView
+        )
+        installEventMonitorIfNeeded()
+    }
+
+    func tearDown() {
+        stopObservingConfiguredScrollView()
+        removeEventMonitor()
+        resetLocalGestureState()
+        deferredInstallationIsScheduled = false
+    }
+
+    private var nearestScrollView: NSScrollView? {
+        var candidate: NSView? = self
+        while let current = candidate {
+            if let scrollView = current as? NSScrollView {
+                return scrollView
+            }
+            candidate = current.superview
+        }
+
+        return enclosingScrollView
+    }
+
+    private func scheduleDeferredInstallation() {
+        guard !deferredInstallationIsScheduled else {
+            return
+        }
+
+        deferredInstallationIsScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            self.deferredInstallationIsScheduled = false
+            self.installIfNeeded()
+        }
+    }
+
+    private func installEventMonitorIfNeeded() {
+        guard eventMonitor == nil else {
+            return
+        }
+
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            self?.eventForPagerInput(from: event) ?? event
+        }
+    }
+
+    private func removeEventMonitor() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+    }
+
+    private func stopObservingConfiguredScrollView() {
+        if let configuredScrollView {
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSScrollView.didEndLiveScrollNotification,
+                object: configuredScrollView
+            )
+        }
+        configuredScrollView = nil
+    }
+
+    private func eventForPagerInput(from event: NSEvent) -> NSEvent {
+        guard let scrollView = configuredScrollView,
+              event.window === scrollView.window else {
+            return event
+        }
+
+        if !event.momentumPhase.isEmpty {
+            resetLocalGestureState()
+            return event
+        }
+
+        let phase = event.phase
+        guard !phase.isEmpty else {
+            resetLocalGestureState()
+            return event
+        }
+        guard event.hasPreciseScrollingDeltas else {
+            resetLocalGestureState()
+            return event
+        }
+
+        if phase.contains(.mayBegin) || phase.contains(.began) {
+            beginGestureIfInsidePager(event, scrollView: scrollView)
+        }
+
+        if phase.contains(.ended) || phase.contains(.cancelled) {
+            resetLocalGestureState()
+            return event
+        }
+
+        guard !gestureGate.ignoresChangedEvents else {
+            return event
+        }
+
+        guard phase.contains(.began) || phase.contains(.changed) else {
+            return event
+        }
+
+        if !ownsPhysicalGesture {
+            guard phase.contains(.changed),
+                  eventIsInsidePager(event, scrollView: scrollView) else {
+                return event
+            }
+
+            beginGesture()
+        }
+
+        guard ownsPhysicalGesture,
+              let scaledEvent = inputScalingState.scaledEvent(
+                from: event,
+                sensitivity: sensitivity
+              ) else {
+            return event
+        }
+
+        geometryTracker?.rawGestureDisplacementX =
+            inputScalingState.cumulativeRawDisplacementX
+
+        // Scale before NSScrollView sees the event. The previous implementation
+        // let AppKit scroll at full strength and then corrected the clip view,
+        // forcing two pager layout/compositing passes per trackpad sample.
+        // Momentum and phase-ended events return above unchanged, preserving the
+        // native release velocity and adjacent-page spring.
+        return scaledEvent
+    }
+
+    private func beginGestureIfInsidePager(_ event: NSEvent, scrollView: NSScrollView) {
+        guard eventIsInsidePager(event, scrollView: scrollView) else {
+            resetLocalGestureState()
+            return
+        }
+
+        beginGesture()
+    }
+
+    private func beginGesture() {
+        gestureGate.begin()
+        ownsPhysicalGesture = true
+        inputScalingState.reset()
+        // AppKit exposes a new physical trackpad gesture even when SwiftUI keeps
+        // the scroll phase in `decelerating`. Capture that boundary directly so
+        // a rapid follow-up swipe gets its own origin and advances from the
+        // previous gesture's resolved destination.
+        geometryTracker?.beginPhysicalGesture()
+    }
+
+    private func eventIsInsidePager(_ event: NSEvent, scrollView: NSScrollView) -> Bool {
+        let localPoint = scrollView.convert(event.locationInWindow, from: nil)
+        return scrollView.bounds.contains(localPoint)
+    }
+
+    @objc
+    private func scrollViewDidEndLiveScroll(_ notification: Notification) {
+        guard notification.object as? NSScrollView === configuredScrollView else {
+            return
+        }
+
+        resetLocalGestureState()
+    }
+
+    private func resetLocalGestureState() {
+        gestureGate.end()
+        clearLocalGestureState()
+    }
+
+    private func ignoreRemainderOfPhysicalGesture() {
+        gestureGate.ignoreChangedEventsUntilNextGesture()
+        clearLocalGestureState()
+    }
+
+    private func clearLocalGestureState() {
+        ownsPhysicalGesture = false
+        inputScalingState.reset()
+    }
+}
+
 private struct ScrollIndicatorHiderOverlay: View {
     var axes: ScrollIndicatorHiderAxes = .all
 
@@ -4224,11 +5141,8 @@ private struct SidebarFolderNodeView: View {
 
 enum SidebarSpacePagerMetrics {
     static let selectionAnimation: Animation = .smooth(duration: 0.18, extraBounce: 0)
-    static let magneticPageDistanceThreshold: CGFloat = 0.55
-    static let magneticFlickDistanceThreshold: CGFloat = 0.16
-    static let magneticFlickVelocityThreshold: CGFloat = 600
-    static let magneticFastFlickDistanceThreshold: CGFloat = 0.03
-    static let magneticFastFlickVelocityThreshold: CGFloat = 900
-    static let magneticMaxVelocityBonusPages: CGFloat = 0.9
-    static let magneticMaxVelocityBonusVelocity: CGFloat = 900
+    static let fixedChromeThemeAnimation: Animation = .smooth(duration: 0.18, extraBounce: 0)
+    static let activeScrollSensitivity: CGFloat = 0.35
+    static let directionalDistanceThresholdInPages: CGFloat = 0.0025
+    static let directionalVelocityThreshold: CGFloat = 20
 }

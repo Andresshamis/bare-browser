@@ -270,7 +270,7 @@ private struct SidebarFavoriteTabTile: View {
             return AnyShapeStyle(sidebarForegroundColor.opacity(selectionBackgroundOpacity))
         }
         if isHovered {
-            return AnyShapeStyle(Color.primary.opacity(hoverBackgroundOpacity))
+            return AnyShapeStyle(sidebarForegroundColor.opacity(hoverBackgroundOpacity))
         }
         return AnyShapeStyle(.clear)
     }
@@ -282,7 +282,7 @@ private struct SidebarFavoriteTabTile: View {
         if item.isSelected {
             return sidebarForegroundColor.opacity(colorScheme == .dark ? 0.24 : 0.18)
         }
-        return Color.primary.opacity(isHovered ? 0.14 : 0.06)
+        return sidebarForegroundColor.opacity(isHovered ? 0.14 : 0.06)
     }
 
     private var selectionBackgroundOpacity: Double {

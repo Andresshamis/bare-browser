@@ -3,11 +3,12 @@ import SwiftUI
 
 struct SidebarColorNoiseOverlay<ClipShape: Shape>: View {
     let level: Double
+    var scale: Double = 0
     let shape: ClipShape
 
     var body: some View {
         let opacity = SidebarGlassRendering.colorNoiseOpacity(forLevel: level)
-        let cellSize = SidebarGlassRendering.colorNoiseTextureCellSize()
+        let cellSize = SidebarGlassRendering.colorNoiseTextureCellSize(forScale: scale)
 
         if opacity > 0,
            let texture = SidebarColorNoiseTextureCache.image(cellSize: cellSize) {
@@ -26,7 +27,7 @@ struct SidebarColorNoiseOverlay<ClipShape: Shape>: View {
 }
 
 @MainActor
-private enum SidebarColorNoiseTextureCache {
+enum SidebarColorNoiseTextureCache {
     private static let cache = NSCache<NSString, NSImage>()
     private static let tilePointSize: CGFloat = 256
 
@@ -43,6 +44,19 @@ private enum SidebarColorNoiseTextureCache {
 
         cache.setObject(image, forKey: key)
         return image
+    }
+
+    static func cgImage(cellSize: CGFloat) -> CGImage? {
+        guard let image = image(cellSize: cellSize) else {
+            return nil
+        }
+
+        var proposedRect = CGRect(origin: .zero, size: image.size)
+        return image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil)
+    }
+
+    static var tilePointSizeForLayer: CGFloat {
+        tilePointSize
     }
 
     private static func makeImage(cellSize: CGFloat) -> NSImage? {
