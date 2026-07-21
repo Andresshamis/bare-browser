@@ -60,7 +60,7 @@ public struct BrowserTab: Identifiable, Hashable, Codable, Sendable {
     public var parentFolderID: FolderID?
     public var isPinned: Bool
     public var isFavorite: Bool
-    public var profileID: ProfileID
+    public internal(set) var profileID: ProfileID
     public var lastActiveDate: Date
     public var isLoading: Bool
     public var isMuted: Bool

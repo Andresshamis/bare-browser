@@ -1812,31 +1812,54 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
     func testPresentationStateStoresAndPrunesSnapshots() {
         let keptTabID = UUID()
         let prunedTabID = UUID()
+        let keptIdentity = presentationIdentity(for: keptTabID)
+        let prunedIdentity = presentationIdentity(for: prunedTabID)
         let state = BrowserContentPresentationState()
         let image = NSImage(size: NSSize(width: 320, height: 200))
 
-        state.storeSnapshot(image, for: keptTabID)
-        state.storeSnapshot(NSImage(size: NSSize(width: 120, height: 80)), for: prunedTabID)
+        state.storeSnapshot(image, for: keptIdentity)
+        state.storeSnapshot(NSImage(size: NSSize(width: 120, height: 80)), for: prunedIdentity)
 
-        XCTAssertEqual(state.snapshot(for: keptTabID)?.size, image.size)
+        XCTAssertEqual(state.snapshot(for: keptIdentity)?.size, image.size)
 
-        state.removeSnapshots(keeping: [keptTabID])
+        state.removeSnapshots(keeping: [keptIdentity])
 
-        XCTAssertNotNil(state.snapshot(for: keptTabID))
-        XCTAssertNil(state.snapshot(for: prunedTabID))
+        XCTAssertNotNil(state.snapshot(for: keptIdentity))
+        XCTAssertNil(state.snapshot(for: prunedIdentity))
+    }
+
+    @MainActor
+    func testPresentationStateNeverReturnsSnapshotForPreviousProfileIdentity() {
+        let tabID = UUID()
+        let oldIdentity = presentationIdentity(for: tabID)
+        let newIdentity = WebContentSessionIdentity(
+            tabID: tabID,
+            spaceID: oldIdentity.spaceID,
+            profileID: UUID(),
+            websiteDataStoreID: UUID()
+        )
+        let state = BrowserContentPresentationState()
+        state.storeSnapshot(NSImage(size: NSSize(width: 320, height: 200)), for: oldIdentity)
+
+        XCTAssertNil(state.snapshot(for: newIdentity))
+        state.storeSnapshot(NSImage(size: NSSize(width: 640, height: 400)), for: newIdentity)
+        XCTAssertNil(state.snapshot(for: oldIdentity))
+        XCTAssertEqual(state.snapshot(for: newIdentity)?.size, NSSize(width: 640, height: 400))
     }
 
     @MainActor
     func testPresentationStateStartsSnapshotHandoffOnlyForCachedTabs() {
         let cachedTabID = UUID()
         let uncachedTabID = UUID()
+        let cachedIdentity = presentationIdentity(for: cachedTabID)
+        let uncachedIdentity = presentationIdentity(for: uncachedTabID)
         let state = BrowserContentPresentationState()
 
-        XCTAssertNil(state.beginSnapshotHandoff(to: uncachedTabID))
+        XCTAssertNil(state.beginSnapshotHandoff(to: uncachedIdentity))
         XCTAssertNil(state.snapshotHandoffTabID)
 
-        state.storeSnapshot(NSImage(size: NSSize(width: 320, height: 200)), for: cachedTabID)
-        XCTAssertNotNil(state.beginSnapshotHandoff(to: cachedTabID))
+        state.storeSnapshot(NSImage(size: NSSize(width: 320, height: 200)), for: cachedIdentity)
+        XCTAssertNotNil(state.beginSnapshotHandoff(to: cachedIdentity))
         XCTAssertEqual(state.snapshotHandoffTabID, cachedTabID)
     }
 
@@ -1844,14 +1867,16 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
     func testPresentationStateIgnoresStaleSnapshotHandoffCompletion() throws {
         let firstTabID = UUID()
         let secondTabID = UUID()
+        let firstIdentity = presentationIdentity(for: firstTabID)
+        let secondIdentity = presentationIdentity(for: secondTabID)
         let state = BrowserContentPresentationState()
-        state.storeSnapshot(NSImage(size: NSSize(width: 320, height: 200)), for: firstTabID)
-        state.storeSnapshot(NSImage(size: NSSize(width: 320, height: 200)), for: secondTabID)
+        state.storeSnapshot(NSImage(size: NSSize(width: 320, height: 200)), for: firstIdentity)
+        state.storeSnapshot(NSImage(size: NSSize(width: 320, height: 200)), for: secondIdentity)
 
-        let staleHandoffID = try XCTUnwrap(state.beginSnapshotHandoff(to: firstTabID))
-        _ = state.beginSnapshotHandoff(to: secondTabID)
+        let staleHandoffID = try XCTUnwrap(state.beginSnapshotHandoff(to: firstIdentity))
+        _ = state.beginSnapshotHandoff(to: secondIdentity)
 
-        state.completeSnapshotHandoff(staleHandoffID, for: firstTabID)
+        state.completeSnapshotHandoff(staleHandoffID, for: firstIdentity)
 
         XCTAssertEqual(state.snapshotHandoffTabID, secondTabID)
     }
@@ -1859,9 +1884,10 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
     @MainActor
     func testPresentationStateClearsSnapshotHandoffWhenSnapshotIsPruned() {
         let prunedTabID = UUID()
+        let prunedIdentity = presentationIdentity(for: prunedTabID)
         let state = BrowserContentPresentationState()
-        state.storeSnapshot(NSImage(size: NSSize(width: 320, height: 200)), for: prunedTabID)
-        state.beginSnapshotHandoff(to: prunedTabID)
+        state.storeSnapshot(NSImage(size: NSSize(width: 320, height: 200)), for: prunedIdentity)
+        state.beginSnapshotHandoff(to: prunedIdentity)
 
         state.removeSnapshots(keeping: [])
 
@@ -1871,15 +1897,25 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
     @MainActor
     func testPresentationStateExpiresUncompletedSnapshotHandoff() async throws {
         let tabID = UUID()
+        let identity = presentationIdentity(for: tabID)
         let state = BrowserContentPresentationState(snapshotHandoffExpirationNanoseconds: 1_000_000)
-        state.storeSnapshot(NSImage(size: NSSize(width: 320, height: 200)), for: tabID)
+        state.storeSnapshot(NSImage(size: NSSize(width: 320, height: 200)), for: identity)
 
-        XCTAssertNotNil(state.beginSnapshotHandoff(to: tabID))
+        XCTAssertNotNil(state.beginSnapshotHandoff(to: identity))
         XCTAssertEqual(state.snapshotHandoffTabID, tabID)
 
         try await Task.sleep(nanoseconds: 20_000_000)
 
         XCTAssertNil(state.snapshotHandoffTabID)
+    }
+
+    private func presentationIdentity(for tabID: TabID) -> WebContentSessionIdentity {
+        WebContentSessionIdentity(
+            tabID: tabID,
+            spaceID: tabID,
+            profileID: tabID,
+            websiteDataStoreID: tabID
+        )
     }
 
     private func sidebarPage(

@@ -68,7 +68,7 @@ struct ProfileManagementView: View {
             Divider()
 
             HStack {
-                Text("Profiles keep cookies, history, passwords, and permissions separate.")
+                Text("Profiles keep website sessions, history, Bare Browser-managed passwords, and supported site permissions separate. macOS AutoFill suggestions are device-wide.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -342,7 +342,7 @@ struct ProfileManagementView: View {
 
     private var newProfileExplanation: some View {
         ProfileManagementPanel(title: "What Happens Next", systemName: "checkmark.shield") {
-            Text("Creating this profile saves only the profile. It will not create a space or open the space customizer. You can explicitly create or assign a space later.")
+            Text("Creating this profile also creates and selects its first space. Website sessions in that space stay separate from your other profiles.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -490,10 +490,13 @@ struct ProfileManagementView: View {
         guard draftIsValid else {
             return
         }
-        let profile = store.createPersistentProfile(name: draftName, colorHex: draftColorHex)
-        store.publishStatusMessage("Profile “\(profile.name)” created. No space was created.")
-        lastExistingProfileID = profile.id
-        selection = .profile(profile.id)
+        let result = store.createPersistentProfileWithInitialSpace(
+            name: draftName,
+            colorHex: draftColorHex
+        )
+        store.publishStatusMessage("Profile “\(result.profile.name)” and its first space were created.")
+        lastExistingProfileID = result.profile.id
+        selection = .profile(result.profile.id)
         loadDraft(for: selection)
     }
 
