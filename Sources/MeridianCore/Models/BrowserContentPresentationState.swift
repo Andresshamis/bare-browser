@@ -5,11 +5,15 @@ public final class BrowserContentPresentationState: ObservableObject {
     @Published public private(set) var previewTabID: TabID?
     @Published public private(set) var previewStartPageSpaceID: SpaceID?
     @Published public private(set) var activeContentTabID: TabID?
-    @Published public private(set) var snapshotHandoffTabID: TabID?
+    @Published public private(set) var snapshotHandoffIdentity: WebContentSessionIdentity?
     private var snapshotHandoffID: UUID?
     private let snapshotHandoffExpirationNanoseconds: UInt64
     private var snapshotHandoffExpirationTask: Task<Void, Never>?
-    private var tabSnapshots: [TabID: NSImage] = [:]
+    private var tabSnapshots: [WebContentSessionIdentity: NSImage] = [:]
+
+    public var snapshotHandoffTabID: TabID? {
+        snapshotHandoffIdentity?.tabID
+    }
 
     public init(snapshotHandoffExpirationNanoseconds: UInt64 = 1_200_000_000) {
         self.snapshotHandoffExpirationNanoseconds = snapshotHandoffExpirationNanoseconds
@@ -44,31 +48,34 @@ public final class BrowserContentPresentationState: ObservableObject {
     }
 
     @discardableResult
-    public func beginSnapshotHandoff(to tabID: TabID?) -> UUID? {
-        guard let tabID,
-              tabSnapshots[tabID] != nil else {
+    public func beginSnapshotHandoff(to identity: WebContentSessionIdentity?) -> UUID? {
+        guard let identity,
+              tabSnapshots[identity] != nil else {
             clearSnapshotHandoff()
             return nil
         }
 
         let handoffID = UUID()
         snapshotHandoffID = handoffID
-        snapshotHandoffTabID = tabID
-        scheduleSnapshotHandoffExpiration(handoffID, tabID: tabID)
+        snapshotHandoffIdentity = identity
+        scheduleSnapshotHandoffExpiration(handoffID, identity: identity)
         return handoffID
     }
 
-    public func snapshotHandoffToken(for tabID: TabID) -> UUID? {
-        guard snapshotHandoffTabID == tabID else {
+    public func snapshotHandoffToken(for identity: WebContentSessionIdentity) -> UUID? {
+        guard snapshotHandoffIdentity == identity else {
             return nil
         }
 
         return snapshotHandoffID
     }
 
-    public func completeSnapshotHandoff(_ handoffID: UUID?, for tabID: TabID) {
+    public func completeSnapshotHandoff(
+        _ handoffID: UUID?,
+        for identity: WebContentSessionIdentity
+    ) {
         guard snapshotHandoffID == handoffID,
-              snapshotHandoffTabID == tabID else {
+              snapshotHandoffIdentity == identity else {
             return
         }
 
@@ -79,39 +86,50 @@ public final class BrowserContentPresentationState: ObservableObject {
         snapshotHandoffExpirationTask?.cancel()
         snapshotHandoffExpirationTask = nil
         snapshotHandoffID = nil
-        snapshotHandoffTabID = nil
+        snapshotHandoffIdentity = nil
     }
 
-    public func storeSnapshot(_ image: NSImage, for tabID: TabID) {
+    public func storeSnapshot(_ image: NSImage, for identity: WebContentSessionIdentity) {
         guard image.isValid,
               image.size.width > 0,
               image.size.height > 0 else {
             return
         }
 
-        if previewTabID == tabID && activeContentTabID != tabID {
+        if previewTabID == identity.tabID && activeContentTabID != identity.tabID {
             objectWillChange.send()
         }
-        tabSnapshots[tabID] = image
+        tabSnapshots = tabSnapshots.filter { $0.key.tabID != identity.tabID }
+        tabSnapshots[identity] = image
     }
 
-    public func snapshot(for tabID: TabID?) -> NSImage? {
-        guard let tabID else {
+    public func snapshot(for identity: WebContentSessionIdentity?) -> NSImage? {
+        guard let identity else {
             return nil
         }
 
-        return tabSnapshots[tabID]
+        return tabSnapshots[identity]
     }
 
-    public func removeSnapshots(keeping tabIDs: Set<TabID>) {
-        tabSnapshots = tabSnapshots.filter { tabIDs.contains($0.key) }
-        if let snapshotHandoffTabID,
-           !tabIDs.contains(snapshotHandoffTabID) {
+    public func removeSnapshots(keeping identities: Set<WebContentSessionIdentity>) {
+        tabSnapshots = tabSnapshots.filter { identities.contains($0.key) }
+        if let snapshotHandoffIdentity,
+           !identities.contains(snapshotHandoffIdentity) {
             clearSnapshotHandoff()
         }
     }
 
-    private func scheduleSnapshotHandoffExpiration(_ handoffID: UUID, tabID: TabID) {
+    public func removeSnapshot(for tabID: TabID) {
+        tabSnapshots = tabSnapshots.filter { $0.key.tabID != tabID }
+        if snapshotHandoffIdentity?.tabID == tabID {
+            clearSnapshotHandoff()
+        }
+    }
+
+    private func scheduleSnapshotHandoffExpiration(
+        _ handoffID: UUID,
+        identity: WebContentSessionIdentity
+    ) {
         snapshotHandoffExpirationTask?.cancel()
         snapshotHandoffExpirationTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: self?.snapshotHandoffExpirationNanoseconds ?? 0)
@@ -119,7 +137,7 @@ public final class BrowserContentPresentationState: ObservableObject {
                 return
             }
 
-            self?.completeSnapshotHandoff(handoffID, for: tabID)
+            self?.completeSnapshotHandoff(handoffID, for: identity)
         }
     }
 }
@@ -142,7 +160,7 @@ struct BrowserSpaceFocusedTabResolver {
                 return false
             }
 
-            return tab.parentSpaceID == space.id && tab.profileID == space.profileID
+            return tab.parentSpaceID == space.id
         }
     }
 }

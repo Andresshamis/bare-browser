@@ -7,12 +7,19 @@ public protocol ProfileWebsiteDataStoreDeleting: AnyObject {
 }
 
 @MainActor
-public final class ProfileWebsiteDataStoreProvider: ProfileWebsiteDataStoreDeleting {
+public final class ProfileWebsiteDataStoreProvider: ObservableObject, ProfileWebsiteDataStoreDeleting {
+    private var ephemeralStores: [ProfileID: WKWebsiteDataStore] = [:]
+
     public init() {}
 
     public func websiteDataStore(for profile: BrowserProfile) -> WKWebsiteDataStore {
         if profile.isEphemeral {
-            return .nonPersistent()
+            if let existing = ephemeralStores[profile.id] {
+                return existing
+            }
+            let store = WKWebsiteDataStore.nonPersistent()
+            ephemeralStores[profile.id] = store
+            return store
         }
 
         guard let identifier = profile.persistentWebsiteDataStoreID else {
@@ -21,6 +28,14 @@ public final class ProfileWebsiteDataStoreProvider: ProfileWebsiteDataStoreDelet
         }
 
         return WKWebsiteDataStore(forIdentifier: identifier)
+    }
+
+    public func releaseEphemeralWebsiteDataStore(for profileID: ProfileID) {
+        ephemeralStores.removeValue(forKey: profileID)
+    }
+
+    public func releaseEphemeralWebsiteDataStores(keeping profileIDs: Set<ProfileID>) {
+        ephemeralStores = ephemeralStores.filter { profileIDs.contains($0.key) }
     }
 
     public func removeWebsiteDataStore(identifier: UUID) async throws {

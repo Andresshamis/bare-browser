@@ -61,6 +61,8 @@ public final class BrowserStore: ObservableObject {
     @Published public private(set) var historyEntries: [BrowserHistoryEntry]
     @Published public private(set) var downloads: [BrowserDownload]
     @Published public private(set) var profileManagementRequest: ProfileManagementRequest?
+    @Published public private(set) var profileIsolationRepairReport: SessionIntegrityRepairReport
+    public let profileIsolationRepairOccurredThisLaunch: Bool
 
     public let commandRouter: CommandRouter
     public let urlSecurityPolicy: URLSecurityPolicy
@@ -86,6 +88,8 @@ public final class BrowserStore: ObservableObject {
         localHistoryStore: LocalHistoryStore = LocalHistoryStore(),
         sidebarRevealEdge: SidebarRevealEdge = .left,
         lastUserMessage: String? = nil,
+        profileIsolationRepairReport: SessionIntegrityRepairReport = SessionIntegrityRepairReport(),
+        profileIsolationRepairOccurredThisLaunch: Bool? = nil,
         sessionPersistence: SessionSnapshotPersisting? = nil,
         localHistoryPersistence: LocalHistoryPersisting? = nil,
         profileWebsiteDataStoreDeleter: ProfileWebsiteDataStoreDeleting = ProfileWebsiteDataStoreProvider()
@@ -108,12 +112,18 @@ public final class BrowserStore: ObservableObject {
         self.pendingPasswordSaveRequest = nil
         self.passwordCredentialAutofillRevision = 0
         self.isChoosingDownloadDestination = false
-        self.lastUserMessage = lastUserMessage
+        let repairOccurredThisLaunch = profileIsolationRepairOccurredThisLaunch
+            ?? profileIsolationRepairReport.didRepairIsolationState
+        self.lastUserMessage = repairOccurredThisLaunch
+            ? profileIsolationRepairReport.userMessage ?? lastUserMessage
+            : lastUserMessage
         self.pendingSitePermissionRequest = nil
         self.sitePermissionSettings = sitePermissionSettings ?? snapshot.sitePermissionSettings
         self.historyEntries = localHistoryStore.entries
         self.downloads = snapshot.downloads
         self.profileManagementRequest = nil
+        self.profileIsolationRepairReport = profileIsolationRepairReport
+        self.profileIsolationRepairOccurredThisLaunch = repairOccurredThisLaunch
         self.commandRouter = commandRouter
         self.urlSecurityPolicy = urlSecurityPolicy
         self.downloadSafetyPolicy = downloadSafetyPolicy
@@ -149,10 +159,95 @@ public final class BrowserStore: ObservableObject {
     }
 
     public var activeProfile: BrowserProfile? {
-        guard let profileID = activeTab?.profileID ?? selectedSpace?.profileID else {
+        if let selectedTabID,
+           let context = profileContext(for: selectedTabID) {
+            return profiles.first { $0.id == context.profileID }
+        }
+        guard let profileID = selectedSpace?.profileID else {
             return profiles.first
         }
         return profiles.first { $0.id == profileID }
+    }
+
+    public func profileContext(for tabID: TabID) -> WebContentSessionIdentity? {
+        guard let tab = tabs.first(where: { $0.id == tabID }),
+              let space = spaces.first(where: { $0.id == tab.parentSpaceID }),
+              let profile = profiles.first(where: { $0.id == space.profileID }) else {
+            return nil
+        }
+        return WebContentSessionIdentity(
+            tabID: tab.id,
+            spaceID: space.id,
+            profileID: profile.id,
+            websiteDataStoreID: profile.persistentWebsiteDataStoreID
+        )
+    }
+
+    public func profileIsolationDiagnostics(date: Date = Date()) -> ProfileIsolationDiagnostics {
+        ProfileIsolationDiagnostics(
+            generatedAt: date,
+            report: profileIsolationRepairReport,
+            profileCount: profiles.count,
+            spaceCount: spaces.count,
+            tabCount: tabs.count,
+            selectedIdentity: selectedTabID.flatMap(profileContext(for:)),
+            invariantFailures: profileIsolationInvariantFailures()
+        )
+    }
+
+    public func isCurrentWebContentSession(_ identity: WebContentSessionIdentity) -> Bool {
+        profileContext(for: identity.tabID) == identity
+    }
+
+    private func profileIsolationInvariantFailures() -> [String] {
+        var failures: [String] = []
+        if Set(profiles.map(\.id)).count != profiles.count {
+            failures.append("duplicate-profile-id")
+        }
+        if Set(spaces.map(\.id)).count != spaces.count {
+            failures.append("duplicate-space-id")
+        }
+        if Set(folders.map(\.id)).count != folders.count {
+            failures.append("duplicate-folder-id")
+        }
+        if Set(tabs.map(\.id)).count != tabs.count {
+            failures.append("duplicate-tab-id")
+        }
+        let persistentStoreIDs = persistentProfiles.compactMap(\.persistentWebsiteDataStoreID)
+        if Set(persistentStoreIDs).count != persistentStoreIDs.count {
+            failures.append("duplicate-website-store-id")
+        }
+        let profileIDs = Set(profiles.map(\.id))
+        if spaces.contains(where: { !profileIDs.contains($0.profileID) }) {
+            failures.append("orphan-space")
+        }
+        var spacesByID: [SpaceID: BrowserSpace] = [:]
+        for space in spaces where spacesByID[space.id] == nil {
+            spacesByID[space.id] = space
+        }
+        if tabs.contains(where: { tab in
+            guard let space = spacesByID[tab.parentSpaceID] else {
+                return true
+            }
+            return tab.profileID != space.profileID
+        }) {
+            failures.append("tab-space-profile-mismatch")
+        }
+        let spaceIDs = Set(spaces.map(\.id))
+        if folders.contains(where: { !spaceIDs.contains($0.parentSpaceID) }) {
+            failures.append("orphan-folder")
+        }
+        if tabs.contains(where: { !spaceIDs.contains($0.parentSpaceID) }) {
+            failures.append("orphan-tab")
+        }
+        if let selectedSpaceID, !spaceIDs.contains(selectedSpaceID) {
+            failures.append("invalid-selected-space")
+        }
+        if let selectedTabID,
+           !tabs.contains(where: { $0.id == selectedTabID && $0.parentSpaceID == selectedSpaceID }) {
+            failures.append("invalid-selected-tab")
+        }
+        return failures
     }
 
     public var persistentProfiles: [BrowserProfile] {
@@ -186,11 +281,24 @@ public final class BrowserStore: ObservableObject {
     }
 
     public func snapshot(date: Date = Date()) -> BrowserSessionSnapshot {
-        BrowserSessionSnapshot(
+        var profileIDsBySpace: [SpaceID: ProfileID] = [:]
+        for space in spaces where profileIDsBySpace[space.id] == nil {
+            profileIDsBySpace[space.id] = space.profileID
+        }
+        let normalizedTabs = tabs.map { tab in
+            guard let profileID = profileIDsBySpace[tab.parentSpaceID],
+                  tab.profileID != profileID else {
+                return tab
+            }
+            var normalized = tab
+            normalized.profileID = profileID
+            return normalized
+        }
+        return BrowserSessionSnapshot(
             profiles: profiles,
             spaces: spaces,
             folders: folders,
-            tabs: tabs,
+            tabs: normalizedTabs,
             splitViews: splitViews,
             selectedSpaceID: selectedSpaceID,
             selectedTabID: selectedTabID,
@@ -225,15 +333,10 @@ public final class BrowserStore: ObservableObject {
         name: String,
         symbolName: String,
         colorHex: String,
-        profileID: ProfileID? = nil,
         sidebarAppearance: SidebarAppearance? = nil,
         persistImmediately: Bool = true
     ) -> Bool {
         guard spaces.contains(where: { $0.id == id }) else {
-            return false
-        }
-        if let profileID,
-           !persistentProfiles.contains(where: { $0.id == profileID }) {
             return false
         }
 
@@ -250,13 +353,6 @@ public final class BrowserStore: ObservableObject {
             if let sidebarAppearance {
                 space.sidebarAppearance = sidebarAppearance
             }
-            if let profileID {
-                space.profileID = profileID
-            }
-        }
-        if let profileID {
-            updateTabs(inSpace: id, profileID: profileID)
-            refreshActivePageSecurityStatus()
         }
         if persistImmediately {
             persistSession()
@@ -269,8 +365,12 @@ public final class BrowserStore: ObservableObject {
     @discardableResult
     public func setProfile(_ profileID: ProfileID, forSpace spaceID: SpaceID) -> Bool {
         guard persistentProfiles.contains(where: { $0.id == profileID }),
-              spaces.contains(where: { $0.id == spaceID }) else {
+              let currentProfileID = spaces.first(where: { $0.id == spaceID })?.profileID else {
             return false
+        }
+
+        guard currentProfileID != profileID else {
+            return true
         }
 
         updateSpace(spaceID) { space in
@@ -294,7 +394,7 @@ public final class BrowserStore: ObservableObject {
 
     @discardableResult
     public func deleteSpace(_ id: SpaceID, date: Date = Date()) -> Bool {
-        guard spaces.contains(where: { $0.id == id }),
+        guard let deletedSpace = spaces.first(where: { $0.id == id }),
               canDeleteSpace(id) else {
             return false
         }
@@ -327,9 +427,39 @@ public final class BrowserStore: ObservableObject {
             self.selectedTabID = selectedSpace.flatMap { self.selectedTabID(in: $0) }
         }
 
+        if profiles.first(where: { $0.id == deletedSpace.profileID })?.isEphemeral == true,
+           !spaces.contains(where: { $0.profileID == deletedSpace.profileID }) {
+            endEphemeralProfile(deletedSpace.profileID)
+        }
+
         refreshActivePageSecurityStatus()
         persistSession(date: date)
         return true
+    }
+
+    private func endEphemeralProfile(_ profileID: ProfileID) {
+        let downloadIDs = Set(downloads.filter { $0.profileID == profileID }.map(\.id))
+        for downloadID in downloadIDs {
+            downloadCancellationHandlers.removeValue(forKey: downloadID)?()
+        }
+        if let pendingDownloadID = pendingDownloadConfirmation?.id,
+           downloadIDs.contains(pendingDownloadID) {
+            let completion = pendingDownloadCompletion
+            pendingDownloadConfirmation = nil
+            pendingDownloadCompletion = nil
+            isChoosingDownloadDestination = false
+            completion?(nil)
+        }
+
+        profiles.removeAll { $0.id == profileID }
+        sitePermissionSettings.removeAll { $0.profileID == profileID }
+        downloads.removeAll { $0.profileID == profileID }
+        if pendingSitePermissionRequest?.profileID == profileID {
+            pendingSitePermissionRequest = nil
+        }
+        if pendingPasswordSaveRequest?.profileID == profileID {
+            pendingPasswordSaveRequest = nil
+        }
     }
 
     @discardableResult
@@ -421,9 +551,15 @@ public final class BrowserStore: ObservableObject {
 
     public func canDeletePersistentProfile(_ id: ProfileID) -> Bool {
         guard persistentProfiles.count > 1,
-              persistentProfiles.contains(where: { $0.id == id }),
+              let profile = persistentProfiles.first(where: { $0.id == id }),
               !spaces.contains(where: { $0.profileID == id }),
               !downloads.contains(where: { $0.profileID == id && $0.state.isActive }) else {
+            return false
+        }
+        if let storeID = profile.persistentWebsiteDataStoreID,
+           persistentProfiles.contains(where: {
+               $0.id != id && $0.persistentWebsiteDataStoreID == storeID
+           }) {
             return false
         }
         return true
@@ -437,10 +573,12 @@ public final class BrowserStore: ObservableObject {
         }
 
         do {
+            // Keychain deletion is idempotent. Performing it first makes a
+            // partial cleanup safe to retry if WebKit store removal fails.
+            try passwordCredentialStore.deleteCredentials(for: id)
             if let websiteDataStoreID = profile.persistentWebsiteDataStoreID {
                 try await profileWebsiteDataStoreDeleter.removeWebsiteDataStore(identifier: websiteDataStoreID)
             }
-            try passwordCredentialStore.deleteCredentials(for: id)
         } catch {
             lastUserMessage = "Some of the profile’s browsing data could not be removed. Try again."
             return false
@@ -464,16 +602,24 @@ public final class BrowserStore: ObservableObject {
     }
 
     @discardableResult
-    public func createPersistentProfileWithInitialSpace(name: String) -> BrowserSpace {
+    public func createPersistentProfileWithInitialSpace(
+        name: String,
+        colorHex: String = "#6B8F71"
+    ) -> PersistentProfileCreationResult {
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedName = cleanedName.isEmpty ? suggestedPersistentProfileName : cleanedName
-        let profile = BrowserProfile(name: resolvedName)
-        let space = BrowserSpace(name: resolvedName, profileID: profile.id)
+        let resolvedColorHex = Self.normalizedProfileColorHex(colorHex) ?? "#6B8F71"
+        let profile = BrowserProfile(name: resolvedName, colorHex: resolvedColorHex)
+        let space = BrowserSpace(
+            name: resolvedName,
+            colorHex: resolvedColorHex,
+            profileID: profile.id
+        )
         profiles.append(profile)
         spaces.append(space)
         selectSpace(space.id)
         persistSession()
-        return space
+        return PersistentProfileCreationResult(profile: profile, space: space)
     }
 
     @discardableResult
@@ -1061,7 +1207,7 @@ public final class BrowserStore: ObservableObject {
         case .createFolder(let name):
             _ = createFolder(name: name)
         case .createProfile(let name):
-            _ = createPersistentProfile(name: name)
+            _ = createPersistentProfileWithInitialSpace(name: name)
         case .switchSpace(let id):
             selectSpace(id)
         case .browserAction(let action):
@@ -1735,11 +1881,11 @@ public final class BrowserStore: ObservableObject {
 
     @discardableResult
     public func cancelDownload(_ id: UUID) -> Bool {
-        guard let cancel = downloadCancellationHandlers[id] else {
+        guard downloads.contains(where: { $0.id == id && $0.state.isActive }) else {
             return false
         }
 
-        cancel()
+        downloadCancellationHandlers[id]?()
         markDownloadCanceled(id)
         return true
     }
@@ -1848,7 +1994,9 @@ public final class BrowserStore: ObservableObject {
         let completedNavigation = !isLoading
             && (currentTab.isLoading || (url != nil && url != currentTab.url))
         if completedNavigation {
-            recordHistoryVisit(title: updatedTab.title, url: updatedTab.url, profileID: updatedTab.profileID)
+            if let profileID = profileContext(for: tabID)?.profileID {
+                recordHistoryVisit(title: updatedTab.title, url: updatedTab.url, profileID: profileID)
+            }
         }
 
         if tabID == selectedTabID {
@@ -1906,7 +2054,6 @@ public final class BrowserStore: ObservableObject {
             tabs.contains { tab in
                 tab.id == candidateID
                     && tab.parentSpaceID == space.id
-                    && tab.profileID == space.profileID
             }
         }
     }
@@ -2255,7 +2402,10 @@ public final class BrowserStore: ObservableObject {
         guard limit > 0 else {
             return []
         }
-        let visibleSpaceIDs = Set(sidebarSpaces.map(\.id))
+        guard let activeProfileID = activeProfile?.id else {
+            return []
+        }
+        let visibleSpaceIDs = Set(sidebarSpaces.lazy.filter { $0.profileID == activeProfileID }.map(\.id))
         return Array(
             tabs
                 .filter { tab in
