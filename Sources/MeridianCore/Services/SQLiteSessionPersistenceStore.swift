@@ -12,7 +12,9 @@ public enum SessionPersistenceRecoveryReason: Equatable, Sendable {
         switch self {
         case .noSavedSession:
             return nil
-        case .unreadableStore, .corruptPayload, .unsupportedSchema, .repairedSnapshot:
+        case .repairedSnapshot:
+            return nil
+        case .unreadableStore, .corruptPayload, .unsupportedSchema:
             return "Bare Browser restored a clean browser session because saved session state was unavailable."
         }
     }
@@ -21,13 +23,16 @@ public enum SessionPersistenceRecoveryReason: Equatable, Sendable {
 public struct SessionPersistenceLoadResult: Equatable, Sendable {
     public var snapshot: BrowserSessionSnapshot
     public var recoveryReason: SessionPersistenceRecoveryReason?
+    public var integrityRepairReport: SessionIntegrityRepairReport
 
     public init(
         snapshot: BrowserSessionSnapshot,
-        recoveryReason: SessionPersistenceRecoveryReason? = nil
+        recoveryReason: SessionPersistenceRecoveryReason? = nil,
+        integrityRepairReport: SessionIntegrityRepairReport = SessionIntegrityRepairReport()
     ) {
         self.snapshot = snapshot
         self.recoveryReason = recoveryReason
+        self.integrityRepairReport = integrityRepairReport
     }
 }
 
@@ -111,10 +116,11 @@ public final class SQLiteSessionPersistenceStore: SessionSnapshotPersisting {
             }
 
             let decoded = try JSONDecoder().decode(BrowserSessionSnapshot.self, from: record.payload)
-            let repaired = SessionPersistenceBoundary.persistentSnapshot(
+            let repairResult = SessionPersistenceBoundary.repairPersistentSnapshot(
                 from: decoded,
                 fallback: fallback
             )
+            let repaired = repairResult.snapshot
             let wasRepaired = repaired != decoded
             if wasRepaired {
                 do {
@@ -130,7 +136,8 @@ public final class SQLiteSessionPersistenceStore: SessionSnapshotPersisting {
 
             return SessionPersistenceLoadResult(
                 snapshot: repaired,
-                recoveryReason: wasRepaired ? .repairedSnapshot : nil
+                recoveryReason: wasRepaired ? .repairedSnapshot : nil,
+                integrityRepairReport: repairResult.report
             )
         } catch let error as LoadError {
             if error.removesStoreForPrivacy {

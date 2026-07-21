@@ -68,4 +68,18 @@ final class ProfileMetadataTests: XCTestCase {
         XCTAssertNil(profile.websiteDataStoreID)
         XCTAssertNil(profile.persistentWebsiteDataStoreID)
     }
+
+    func testPrivacySafeRepairReportCanBeRetainedForSupport() throws {
+        let suiteName = "ProfileIsolationDiagnosticArchiveTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let report = SessionIntegrityRepairReport(
+            duplicateWebsiteDataStoresIsolated: 1,
+            tabProfileMismatchesRepaired: 2
+        )
+
+        ProfileIsolationDiagnosticArchive.save(report, defaults: defaults)
+
+        XCTAssertEqual(ProfileIsolationDiagnosticArchive.load(defaults: defaults), report)
+    }
 }

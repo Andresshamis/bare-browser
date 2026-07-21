@@ -274,7 +274,9 @@ private struct CommandBarTextField: NSViewRepresentable {
                 return
             }
 
-            window.makeKeyAndOrderFront(nil)
+            guard window.isKeyWindow else {
+                return
+            }
             guard window.makeFirstResponder(textField) else {
                 retryFocusIfNeeded(textField, selectAll: selectAll, remainingAttempts: remainingAttempts)
                 return

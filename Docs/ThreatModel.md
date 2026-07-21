@@ -30,7 +30,8 @@
 - Download source metadata published to UI/store state is reduced to a display host plus optional quarantine origin; full source URLs are not retained after WebKit callbacks.
 - Completed downloads attempt to apply macOS quarantine metadata with only a privacy-safe source origin; failure is surfaced as a browser security message.
 - Persistent profile metadata stores a WebKit data store UUID; private profiles intentionally do not.
-- SQLite-backed session persistence saves only snapshots that pass through the private-state filtering boundary. Missing, unreadable, unsupported, or privacy-invalid saved state falls back to a seeded public session without logging saved URLs or private metadata.
+- Web views, callbacks, and cached page snapshots are bound to a tab/space/profile/data-store identity and rejected after that identity changes.
+- SQLite-backed session persistence saves only snapshots that pass through the private-state filtering and integrity-repair boundary. Duplicate identifiers, shared profile data stores, mismatched tab metadata, invalid ownership relationships, and stale selections are repaired before use. Missing, unreadable, unsupported, or privacy-invalid saved state falls back to a seeded public session without logging saved URLs or private metadata.
 - SQLite-backed local history records only HTTP(S) visits for non-ephemeral profiles. Private browsing profile visits are ignored before entering history state and filtered again before disk writes. Retained and restored history URLs strip userinfo, fragments, and known sensitive query parameters while preserving ordinary query items for page fidelity. Corrupt, unsupported, or privacy-invalid history stores recover with generic non-URL-bearing messages.
 - Site permission decisions now pass through `SitePermissionPolicy`, which models camera, microphone, geolocation, notifications, autoplay, and pop-up/new-window behavior with conservative defaults.
 - Public-profile allow/deny site permission decisions are included in session snapshots only after the persistence boundary verifies they are marked safe beyond the current session. Private-profile permission decisions remain session-only and are filtered from SQLite session payloads and repair-time scrubs.
@@ -38,6 +39,8 @@
 - Pop-up/new-window requests and WebKit media-capture permission callbacks are routed through store state before any grant; unsupported permission kinds are denied with an explicit message.
 - Autoplay is configured to require a user gesture by default.
 - Password form submissions can create a native save prompt for HTTPS origins and loopback HTTP development origins. Accepted credentials are scoped to the current persistent profile and stored in the local macOS Keychain with this-device-only accessibility; private profiles do not prompt or persist passwords.
+- Profile isolation covers website sessions and Bare Browser-managed Keychain credentials. macOS/WebKit Password AutoFill suggestions are device-wide system behavior and are not claimed as profile-isolated; Bare Browser does not use fragile webpage-specific suppression to hide them.
+- The command bar returns open-tab matches only from the active profile. The intentional all-profile Activity view labels profile ownership and selects a matching space before navigation.
 - App Sandbox entitlement file includes only sandbox and outbound network client entitlement.
 - A small `WKContentRuleList` blocks common tracker/ad endpoints without request interception hacks.
 - Bare Browser does not collect product analytics, browsing telemetry, page contents, URLs, cookies, tokens, or private browsing data; website passwords are stored only after explicit local confirmation, and developer log modes stream only local OS logs.
@@ -48,6 +51,5 @@
 - Add WebKit/UI fixture coverage for camera, microphone, and pop-up permission prompts once the signed UI test host exists.
 - Expand history management UI beyond active-profile clearing and command-bar result deletion without weakening private-profile filtering.
 - Revisit geolocation and notification permissions if future macOS WebKit SDKs expose safe delegate callbacks.
-- Add automated profile isolation tests using local web fixtures.
-- Verify private browsing data removal with WebKit data store APIs.
+- Add signed-app UI coverage for profile creation, reassignment confirmation, and active-profile indicators.
 - Add a future in-app privacy/settings surface for the no-telemetry policy when settings UI exists.
