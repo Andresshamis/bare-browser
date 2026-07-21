@@ -19,7 +19,6 @@ enum SidebarSelectedIconContrast: Equatable {
 }
 
 enum SidebarGlassRendering {
-    private static let fixedColorNoiseScale = 0.0
     private static let maximumColorNoiseOpacity = 0.09
     private static let minimumTintInfluenceForFixedForeground = 0.28
     private static let fullTintInfluenceForFixedForeground = 0.60
@@ -28,14 +27,37 @@ enum SidebarGlassRendering {
     private static let minimumLuminanceForDarkForeground = 0.82
 
     static func recipe(for settings: SidebarGlassSettings) -> SidebarGlassRecipe {
-        let density = clamped(settings.glassOpacity)
-        let colorMix = clamped(settings.tintOpacity)
+        recipe(
+            glassOpacity: settings.glassOpacity,
+            tintOpacity: settings.tintOpacity,
+            highlightOpacity: settings.highlightOpacity,
+            shadowOpacity: settings.shadowOpacity
+        )
+    }
+
+    static func recipe(for treatment: SidebarChromeColorTreatment) -> SidebarGlassRecipe {
+        recipe(
+            glassOpacity: treatment.glassOpacity,
+            tintOpacity: treatment.tintOpacity,
+            highlightOpacity: treatment.highlightOpacity,
+            shadowOpacity: treatment.shadowOpacity
+        )
+    }
+
+    private static func recipe(
+        glassOpacity: Double,
+        tintOpacity: Double,
+        highlightOpacity: Double,
+        shadowOpacity: Double
+    ) -> SidebarGlassRecipe {
+        let density = clamped(glassOpacity)
+        let colorMix = clamped(tintOpacity)
         let densityResponse = pow(density, 1.2)
         let clearThemeResponse = pow(1 - densityResponse, 1.15)
         let neutralFillOpacity = clamped(densityResponse * (1 - colorMix))
         let themeFillOpacity = clamped((densityResponse + clearThemeResponse * 0.24) * colorMix)
         let totalFillOpacity = clamped(neutralFillOpacity + themeFillOpacity)
-        let totalHighlightOpacity = clamped(settings.highlightOpacity * densityResponse * 0.45)
+        let totalHighlightOpacity = clamped(highlightOpacity * densityResponse * 0.45)
 
         return SidebarGlassRecipe(
             density: density,
@@ -46,12 +68,25 @@ enum SidebarGlassRendering {
             themeGlassTintOpacity: clamped((0.16 * clearThemeResponse + 0.34 * densityResponse) * colorMix),
             neutralHighlightOpacity: totalHighlightOpacity * (1 - colorMix),
             themeHighlightOpacity: totalHighlightOpacity * colorMix,
-            shadowOpacity: clamped(settings.shadowOpacity * densityResponse)
+            shadowOpacity: clamped(shadowOpacity * densityResponse)
         )
     }
 
     static func glassTintOpacity(for settings: SidebarGlassSettings) -> Double {
         recipe(for: settings).themeGlassTintOpacity
+    }
+
+    static func liveThemeColorOpacity(for recipe: SidebarGlassRecipe) -> Double {
+        clamped(
+            recipe.themeFillOpacity
+                + (1 - recipe.themeFillOpacity)
+                * (1 - recipe.neutralFillOpacity)
+                * recipe.themeGlassTintOpacity
+        )
+    }
+
+    static func liveThemeColorOpacity(for settings: SidebarGlassSettings) -> Double {
+        liveThemeColorOpacity(for: recipe(for: settings))
     }
 
     static func neutralMaterialOpacity(for settings: SidebarGlassSettings) -> Double {
@@ -83,11 +118,11 @@ enum SidebarGlassRendering {
     }
 
     static func colorNoiseCellSize(for settings: SidebarGlassSettings) -> CGFloat {
-        colorNoiseCellSize()
+        colorNoiseCellSize(forScale: settings.colorNoiseScale)
     }
 
     static func colorNoiseCellSize() -> CGFloat {
-        colorNoiseCellSize(forScale: fixedColorNoiseScale)
+        colorNoiseCellSize(forScale: 0)
     }
 
     static func colorNoiseCellSize(forScale scale: Double) -> CGFloat {
@@ -95,7 +130,7 @@ enum SidebarGlassRendering {
     }
 
     static func colorNoiseTextureCellSize() -> CGFloat {
-        colorNoiseTextureCellSize(forScale: fixedColorNoiseScale)
+        colorNoiseTextureCellSize(forScale: 0)
     }
 
     static func colorNoiseTextureCellSize(forScale scale: Double) -> CGFloat {

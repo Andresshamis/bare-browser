@@ -61,7 +61,7 @@ struct MeridianBrowserApp: App {
                 .keyboardShortcut("n", modifiers: [.command, .shift])
 
                 Button("New Profile") {
-                    _ = store.createPersistentProfileWithInitialSpace(name: store.suggestedPersistentProfileName)
+                    store.presentProfileManager(creatingNewProfile: true)
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
 
@@ -131,7 +131,13 @@ struct MeridianBrowserApp: App {
 
             CommandMenu("Profiles") {
                 Button("New Profile") {
-                    _ = store.createPersistentProfileWithInitialSpace(name: store.suggestedPersistentProfileName)
+                    store.presentProfileManager(creatingNewProfile: true)
+                }
+
+                Divider()
+
+                Button("Manage Profiles…") {
+                    store.presentProfileManager(profileID: store.activeProfile?.id)
                 }
             }
 
