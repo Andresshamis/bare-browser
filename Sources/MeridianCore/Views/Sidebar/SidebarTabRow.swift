@@ -7,6 +7,7 @@ public struct SidebarTabRow: View {
     private let close: () -> Void
     private let setPlacement: (BrowserTabPlacement) -> Void
     private let move: (BrowserTabReorderDirection) -> Void
+    private let showsLoadingIndicator: Bool
     private let canClose: Bool
     private let canMoveUp: Bool
     private let canMoveDown: Bool
@@ -22,6 +23,7 @@ public struct SidebarTabRow: View {
         close: @escaping () -> Void,
         setPlacement: @escaping (BrowserTabPlacement) -> Void,
         move: @escaping (BrowserTabReorderDirection) -> Void = { _ in },
+        showsLoadingIndicator: Bool = true,
         canClose: Bool = true,
         canMoveUp: Bool = false,
         canMoveDown: Bool = false,
@@ -33,6 +35,7 @@ public struct SidebarTabRow: View {
         self.close = close
         self.setPlacement = setPlacement
         self.move = move
+        self.showsLoadingIndicator = showsLoadingIndicator
         self.canClose = canClose
         self.canMoveUp = canMoveUp
         self.canMoveDown = canMoveDown
@@ -51,7 +54,7 @@ public struct SidebarTabRow: View {
 
             Spacer(minLength: 4)
 
-            if tab.isLoading {
+            if showsLoadingIndicator && tab.isLoading {
                 ProgressView()
                     .controlSize(.small)
                     .frame(width: 14, height: 14)

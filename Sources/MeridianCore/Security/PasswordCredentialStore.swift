@@ -237,6 +237,7 @@ public struct PasswordCredentialReadOptions: Equatable, Sendable {
 
 public protocol PasswordCredentialPersisting: AnyObject {
     func save(_ request: PasswordSaveRequest) throws
+    func deleteCredentials(for profileID: ProfileID) throws
     func savedCredentials(
         for origin: URL,
         profileID: ProfileID,
@@ -407,6 +408,20 @@ public final class KeychainPasswordCredentialStore: PasswordCredentialPersisting
             }
 
             return lhs.username.localizedCaseInsensitiveCompare(rhs.username) == .orderedAscending
+        }
+    }
+
+    public func deleteCredentials(for profileID: ProfileID) throws {
+        for serviceName in serviceNames(for: profileID) {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: serviceName,
+                kSecAttrSynchronizable as String: kCFBooleanFalse as Any
+            ]
+            let status = SecItemDelete(query as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw PasswordCredentialStoreError.keychainStatus(status)
+            }
         }
     }
 

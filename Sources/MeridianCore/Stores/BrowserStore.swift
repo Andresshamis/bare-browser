@@ -60,6 +60,7 @@ public final class BrowserStore: ObservableObject {
     @Published public private(set) var sitePermissionSettings: [SitePermissionSetting]
     @Published public private(set) var historyEntries: [BrowserHistoryEntry]
     @Published public private(set) var downloads: [BrowserDownload]
+    @Published public private(set) var profileManagementRequest: ProfileManagementRequest?
 
     public let commandRouter: CommandRouter
     public let urlSecurityPolicy: URLSecurityPolicy
@@ -68,6 +69,7 @@ public final class BrowserStore: ObservableObject {
     private let passwordCredentialStore: PasswordCredentialPersisting
     private let sessionPersistence: SessionSnapshotPersisting?
     private let localHistoryPersistence: LocalHistoryPersisting?
+    private let profileWebsiteDataStoreDeleter: ProfileWebsiteDataStoreDeleting
     private var localHistoryStore: LocalHistoryStore
     private var pendingDownloadCompletion: (@MainActor (URL?) -> Void)?
     private var downloadCancellationHandlers: [UUID: @MainActor () -> Void]
@@ -85,7 +87,8 @@ public final class BrowserStore: ObservableObject {
         sidebarRevealEdge: SidebarRevealEdge = .left,
         lastUserMessage: String? = nil,
         sessionPersistence: SessionSnapshotPersisting? = nil,
-        localHistoryPersistence: LocalHistoryPersisting? = nil
+        localHistoryPersistence: LocalHistoryPersisting? = nil,
+        profileWebsiteDataStoreDeleter: ProfileWebsiteDataStoreDeleting = ProfileWebsiteDataStoreProvider()
     ) {
         self.profiles = snapshot.profiles
         self.spaces = snapshot.spaces
@@ -110,6 +113,7 @@ public final class BrowserStore: ObservableObject {
         self.sitePermissionSettings = sitePermissionSettings ?? snapshot.sitePermissionSettings
         self.historyEntries = localHistoryStore.entries
         self.downloads = snapshot.downloads
+        self.profileManagementRequest = nil
         self.commandRouter = commandRouter
         self.urlSecurityPolicy = urlSecurityPolicy
         self.downloadSafetyPolicy = downloadSafetyPolicy
@@ -117,6 +121,7 @@ public final class BrowserStore: ObservableObject {
         self.passwordCredentialStore = passwordCredentialStore
         self.sessionPersistence = sessionPersistence
         self.localHistoryPersistence = localHistoryPersistence
+        self.profileWebsiteDataStoreDeleter = profileWebsiteDataStoreDeleter
         self.localHistoryStore = localHistoryStore
         self.pendingDownloadCompletion = nil
         self.downloadCancellationHandlers = [:]
@@ -161,6 +166,23 @@ public final class BrowserStore: ObservableObject {
 
     public var suggestedPersistentProfileName: String {
         "Profile \(persistentProfiles.count + 1)"
+    }
+
+    public func presentProfileManager(
+        profileID: ProfileID? = nil,
+        creatingNewProfile: Bool = false
+    ) {
+        let requestedProfileID = profileID.flatMap { candidateID in
+            persistentProfiles.contains { $0.id == candidateID } ? candidateID : nil
+        }
+        profileManagementRequest = ProfileManagementRequest(
+            initialProfileID: requestedProfileID ?? persistentProfiles.first?.id,
+            startsCreatingProfile: creatingNewProfile
+        )
+    }
+
+    public func dismissProfileManager() {
+        profileManagementRequest = nil
     }
 
     public func snapshot(date: Date = Date()) -> BrowserSessionSnapshot {
@@ -360,12 +382,85 @@ public final class BrowserStore: ObservableObject {
     }
 
     @discardableResult
-    public func createPersistentProfile(name: String) -> BrowserProfile {
+    public func createPersistentProfile(
+        name: String,
+        colorHex: String = "#6B8F71"
+    ) -> BrowserProfile {
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let profile = BrowserProfile(name: cleanedName.isEmpty ? suggestedPersistentProfileName : cleanedName)
+        let resolvedColorHex = Self.normalizedProfileColorHex(colorHex) ?? "#6B8F71"
+        let profile = BrowserProfile(
+            name: cleanedName.isEmpty ? suggestedPersistentProfileName : cleanedName,
+            colorHex: resolvedColorHex
+        )
         profiles.append(profile)
         persistSession()
         return profile
+    }
+
+    @discardableResult
+    public func updatePersistentProfile(
+        _ id: ProfileID,
+        name: String,
+        colorHex: String
+    ) -> Bool {
+        guard let index = profiles.firstIndex(where: { $0.id == id && !$0.isEphemeral }),
+              let normalizedColorHex = Self.normalizedProfileColorHex(colorHex) else {
+            return false
+        }
+
+        let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedName.isEmpty else {
+            return false
+        }
+
+        profiles[index].name = cleanedName
+        profiles[index].colorHex = normalizedColorHex
+        persistSession()
+        return true
+    }
+
+    public func canDeletePersistentProfile(_ id: ProfileID) -> Bool {
+        guard persistentProfiles.count > 1,
+              persistentProfiles.contains(where: { $0.id == id }),
+              !spaces.contains(where: { $0.profileID == id }),
+              !downloads.contains(where: { $0.profileID == id && $0.state.isActive }) else {
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
+    public func deletePersistentProfile(_ id: ProfileID) async -> Bool {
+        guard canDeletePersistentProfile(id),
+              let profile = persistentProfiles.first(where: { $0.id == id }) else {
+            return false
+        }
+
+        do {
+            if let websiteDataStoreID = profile.persistentWebsiteDataStoreID {
+                try await profileWebsiteDataStoreDeleter.removeWebsiteDataStore(identifier: websiteDataStoreID)
+            }
+            try passwordCredentialStore.deleteCredentials(for: id)
+        } catch {
+            lastUserMessage = "Some of the profile’s browsing data could not be removed. Try again."
+            return false
+        }
+
+        profiles.removeAll { $0.id == id }
+        sitePermissionSettings.removeAll { $0.profileID == id }
+        downloads.removeAll { $0.profileID == id }
+        if pendingSitePermissionRequest?.profileID == id {
+            pendingSitePermissionRequest = nil
+        }
+        if pendingPasswordSaveRequest?.profileID == id {
+            pendingPasswordSaveRequest = nil
+        }
+        _ = localHistoryStore.clearEntries(profileID: id)
+        historyEntries = localHistoryStore.entries
+        persistHistory()
+        persistSession()
+        lastUserMessage = "Profile “\(profile.name)” removed."
+        return true
     }
 
     @discardableResult
@@ -966,7 +1061,7 @@ public final class BrowserStore: ObservableObject {
         case .createFolder(let name):
             _ = createFolder(name: name)
         case .createProfile(let name):
-            _ = createPersistentProfileWithInitialSpace(name: name)
+            _ = createPersistentProfile(name: name)
         case .switchSpace(let id):
             selectSpace(id)
         case .browserAction(let action):
@@ -2374,6 +2469,17 @@ public final class BrowserStore: ObservableObject {
             return nil
         }
         return url
+    }
+
+    private static func normalizedProfileColorHex(_ colorHex: String) -> String? {
+        let cleaned = colorHex
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard cleaned.count == 6,
+              UInt64(cleaned, radix: 16) != nil else {
+            return nil
+        }
+        return "#\(cleaned.uppercased())"
     }
 
     private static func isStaleEmptyTab(_ tab: BrowserTab) -> Bool {
