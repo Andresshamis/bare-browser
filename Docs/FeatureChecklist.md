@@ -12,7 +12,8 @@
 - SQLite-backed profile-scoped local history model, service, command-bar history results, active-profile clear, and command-bar result deletion.
 - Minimal `WKWebView` host boundary.
 - Persistent and private profile website data store selection.
-- Persistent profile creation and switching controls through the sidebar, native menu, and command bar.
+- Persistent profile creation with an automatically selected first space, confirmed space reassignment, active-profile indicators, and switching controls through spaces, the native menu, and the command bar.
+- Profile-isolated web-view identities, stale callback/snapshot rejection, startup integrity repair, redacted diagnostics, and local WebKit storage-isolation fixtures.
 - Default content rule list wiring.
 - URL and download safety helpers.
 - HTTPS-first upgrade attempts for non-local HTTP main-frame navigations, with controlled HTTP fallback warnings.

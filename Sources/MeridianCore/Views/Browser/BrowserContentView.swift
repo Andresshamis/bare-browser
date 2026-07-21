@@ -54,6 +54,29 @@ public struct BrowserContentView: View {
                     .padding(.trailing, 16)
                     .padding(.bottom, 16)
             }
+            .overlay(alignment: .topTrailing) {
+                if let profile = activeWebProfile,
+                   activeWebTab != nil,
+                   !activityPageIsSelected {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(Color(hex: profile.colorHex))
+                            .frame(width: 7, height: 7)
+                        Text(profile.name)
+                            .font(.caption2.weight(.semibold))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 9)
+                    .frame(height: 24)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay {
+                        Capsule().stroke(.separator.opacity(0.35), lineWidth: 0.5)
+                    }
+                    .padding(12)
+                    .help("Website data profile: \(profile.name)")
+                    .accessibilityLabel("Website data profile \(profile.name)")
+                }
+            }
             .animation(.snappy(duration: 0.18), value: store.lastUserMessage)
             .animation(.snappy(duration: 0.18), value: store.primaryActiveDownload?.id)
             .animation(.snappy(duration: 0.18), value: store.activeDownloads.count)
@@ -119,11 +142,19 @@ public struct BrowserContentView: View {
             .onChange(of: store.tabs.map(\.id)) { _, _ in
                 pruneWebViewRegistry()
             }
-            .onChange(of: tabProfileIDsByID) { oldValue, newValue in
+            .onChange(of: tabSessionIdentitiesByID) { oldValue, newValue in
                 let changedTabIDs = Set(newValue.keys.filter { tabID in
                     oldValue[tabID] != nil && oldValue[tabID] != newValue[tabID]
                 })
                 webViewRegistry.invalidate(tabIDs: changedTabIDs)
+                for tabID in changedTabIDs {
+                    presentationState.removeSnapshot(for: tabID)
+                }
+            }
+            .onChange(of: store.profiles.map(\.id)) { _, profileIDs in
+                dataStoreProvider.releaseEphemeralWebsiteDataStores(
+                    keeping: Set(profileIDs)
+                )
             }
             .task(id: store.lastUserMessage) {
                 await autoDismissStatusMessageIfNeeded()
@@ -149,32 +180,33 @@ public struct BrowserContentView: View {
                 downloadSafetyPolicy: store.downloadSafetyPolicy,
                 sitePermissionPolicy: store.sitePermissionPolicy,
                 mouseExclusionRegion: webContentMouseExclusionRegion
-            ) { tabID, title, url, isLoading, securityMessage in
-                guard isSelected(tabID: tabID) else {
+            ) { identity, title, url, isLoading, securityMessage in
+                guard isCurrent(identity: identity) else {
                     return
                 }
 
                 store.updateTabFromWebView(
-                    tabID: tabID,
+                    tabID: identity.tabID,
                     title: title,
                     url: url,
                     isLoading: isLoading,
                     securityMessage: securityMessage
                 )
-            } onFaviconChange: { tabID, faviconURL in
-                store.updateTabFavicon(faviconURL, for: tabID)
-            } onSecurityMessage: { tabID, message in
-                guard isSelected(tabID: tabID) else {
+            } onFaviconChange: { identity, faviconURL in
+                guard isCurrent(identity: identity) else { return }
+                store.updateTabFavicon(faviconURL, for: identity.tabID)
+            } onSecurityMessage: { identity, message in
+                guard isSelected(identity: identity) else {
                     return
                 }
                 store.publishStatusMessage(message)
-            } onURLConfirmationRequired: { tabID, kind, url, sourceContext in
-                guard isSelected(tabID: tabID) else {
+            } onURLConfirmationRequired: { identity, kind, url, sourceContext in
+                guard isSelected(identity: identity) else {
                     return
                 }
                 store.requestURLConfirmation(kind: kind, url: url, sourceContext: sourceContext)
-            } onDownloadConfirmationRequired: { tabID, request, completion in
-                guard isSelected(tabID: tabID) else {
+            } onDownloadConfirmationRequired: { identity, request, completion in
+                guard isSelected(identity: identity) else {
                     browserContentLogger.info("download confirmation dropped inactive tab")
                     completion(nil)
                     return
@@ -182,53 +214,75 @@ public struct BrowserContentView: View {
                 browserContentLogger.info(
                     "download confirmation forwarding filenameEmpty=\(request.sanitizedFilename.isEmpty, privacy: .public)"
                 )
-                let profileID = store.tabs.first { $0.id == tabID }?.profileID
-                store.requestDownloadConfirmation(request, profileID: profileID, completion: completion)
-            } onDownloadStarted: { tabID, request, destinationURL, cancel in
-                guard isSelected(tabID: tabID) else {
-                    browserContentLogger.info("download started dropped inactive tab")
+                store.requestDownloadConfirmation(
+                    request,
+                    profileID: identity.profileID,
+                    completion: completion
+                )
+            } onDownloadStarted: { identity, request, destinationURL, cancel in
+                guard isCurrent(identity: identity) else {
+                    browserContentLogger.info("download started canceled stale identity")
+                    cancel()
+                    _ = store.cancelDownload(request.id)
                     return
                 }
                 browserContentLogger.info("download started forwarded")
                 store.registerDownloadCancellation(request.id, cancel: cancel)
                 store.updateDownloadProgress(request.id, progress: 0)
-            } onDownloadProgress: { _, downloadID, progress in
+            } onDownloadProgress: { identity, downloadID, progress in
+                guard isCurrent(identity: identity) else {
+                    _ = store.cancelDownload(downloadID)
+                    return
+                }
                 store.updateDownloadProgress(downloadID, progress: progress)
-            } onDownloadFinished: { _, downloadID, destinationURL, quarantineApplied in
+            } onDownloadFinished: { identity, downloadID, destinationURL, quarantineApplied in
+                guard isCurrent(identity: identity) else {
+                    _ = store.cancelDownload(downloadID)
+                    return
+                }
                 store.finishDownload(
                     downloadID,
                     destinationURL: destinationURL,
                     quarantineApplied: quarantineApplied
                 )
-            } onDownloadFailed: { _, downloadID, message in
-                store.failDownload(downloadID, message: message)
-            } onSitePermissionRequest: { tabID, profileID, kind, origin in
-                guard isSelected(tabID: tabID) else {
-                    return .deny(reason: "Site permission request was blocked because the tab is not active.")
-                }
-                return store.requestSitePermission(kind: kind, origin: origin, profileID: profileID)
-            } onPasswordCredentialCaptured: { tabID, profileID, candidate in
-                guard isSelected(tabID: tabID) else {
+            } onDownloadFailed: { identity, downloadID, message in
+                guard isCurrent(identity: identity) else {
+                    _ = store.cancelDownload(downloadID)
                     return
                 }
-                store.requestPasswordSave(candidate, profileID: profileID)
-            } onPasswordCredentialsRequested: { tabID, profileID, origin in
-                guard isSelected(tabID: tabID) else {
+                store.failDownload(downloadID, message: message)
+            } onSitePermissionRequest: { identity, kind, origin in
+                guard isSelected(identity: identity) else {
+                    return .deny(reason: "Site permission request was blocked because its profile session is no longer active.")
+                }
+                return store.requestSitePermission(
+                    kind: kind,
+                    origin: origin,
+                    profileID: identity.profileID
+                )
+            } onPasswordCredentialCaptured: { identity, candidate in
+                guard isSelected(identity: identity) else {
+                    return
+                }
+                store.requestPasswordSave(candidate, profileID: identity.profileID)
+            } onPasswordCredentialsRequested: { identity, origin in
+                guard isSelected(identity: identity) else {
                     return []
                 }
                 return store.savedPasswordCredentials(
                     for: origin,
-                    profileID: profileID,
+                    profileID: identity.profileID,
                     allowsKeychainPrompt: false
                 )
-            } onSnapshotCaptured: { tabID, image in
-                presentationState.storeSnapshot(image, for: tabID)
-            } onWebViewActivated: { tabID in
-                guard isSelected(tabID: tabID) else {
+            } onSnapshotCaptured: { identity, image in
+                guard isCurrent(identity: identity) else { return }
+                presentationState.storeSnapshot(image, for: identity)
+            } onWebViewActivated: { identity in
+                guard isSelected(identity: identity) else {
                     return
                 }
 
-                completeSnapshotHandoffSoon(for: tabID)
+                completeSnapshotHandoffSoon(for: identity)
             }
             .opacity(activeWebTab == nil ? 0 : 1)
             .allowsHitTesting(activeWebTab != nil && !activityPageIsSelected)
@@ -250,6 +304,7 @@ public struct BrowserContentView: View {
             pages: spaceOverviewPagesForDisplay,
             isLoading: spaceOverviewIsLoading,
             usesPinnedSidebarAppearance: store.sidebarIsLockedOpen,
+            profileNamesByID: Dictionary(uniqueKeysWithValues: store.profiles.map { ($0.id, $0.name) }),
             selectSpace: { selectOverviewSpace($0) },
             selectTab: { selectOverviewTab($0) },
             customizeSpace: { customizeOverviewSpace($0) }
@@ -337,7 +392,10 @@ public struct BrowserContentView: View {
             return nil
         }
 
-        return store.profiles.first { $0.id == tab.profileID }
+        guard let identity = store.profileContext(for: tab.id) else {
+            return nil
+        }
+        return store.profiles.first { $0.id == identity.profileID }
     }
 
     @ViewBuilder
@@ -369,7 +427,7 @@ public struct BrowserContentView: View {
             return nil
         }
 
-        return presentationState.snapshot(for: previewTabID)
+        return presentationState.snapshot(for: store.profileContext(for: previewTabID))
     }
 
     private var activeTabSnapshotHandoffImage: NSImage? {
@@ -380,7 +438,7 @@ public struct BrowserContentView: View {
             return nil
         }
 
-        return presentationState.snapshot(for: snapshotHandoffTabID)
+        return presentationState.snapshot(for: store.profileContext(for: snapshotHandoffTabID))
     }
 
     private var mountedStartPageSurfaceSnapshot: StartPageSurfaceSnapshot? {
@@ -489,7 +547,9 @@ public struct BrowserContentView: View {
     }
 
     private func selectOverviewSpace(_ id: SpaceID) {
-        presentationState.beginSnapshotHandoff(to: overviewPreviewTabID(for: id))
+        presentationState.beginSnapshotHandoff(
+            to: overviewPreviewTabID(for: id).flatMap(store.profileContext(for:))
+        )
         withTransaction(Transaction(animation: nil)) {
             store.selectSpace(id)
         }
@@ -497,7 +557,7 @@ public struct BrowserContentView: View {
     }
 
     private func selectOverviewTab(_ id: TabID) {
-        presentationState.beginSnapshotHandoff(to: id)
+        presentationState.beginSnapshotHandoff(to: store.profileContext(for: id))
         withTransaction(Transaction(animation: nil)) {
             store.selectTab(id)
         }
@@ -740,21 +800,21 @@ public struct BrowserContentView: View {
             return
         }
 
-        presentationState.beginSnapshotHandoff(to: tabID)
+        presentationState.beginSnapshotHandoff(to: store.profileContext(for: tabID))
     }
 
-    private func completeSnapshotHandoffSoon(for tabID: TabID) {
-        guard let handoffID = presentationState.snapshotHandoffToken(for: tabID) else {
+    private func completeSnapshotHandoffSoon(for identity: WebContentSessionIdentity) {
+        guard let handoffID = presentationState.snapshotHandoffToken(for: identity) else {
             return
         }
 
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: activeTabSnapshotHandoffDelayNanoseconds)
-            guard store.selectedTabID == tabID else {
+            guard isSelected(identity: identity) else {
                 return
             }
 
-            presentationState.completeSnapshotHandoff(handoffID, for: tabID)
+            presentationState.completeSnapshotHandoff(handoffID, for: identity)
         }
     }
 
@@ -798,15 +858,23 @@ public struct BrowserContentView: View {
             keeping: Set(store.tabs.map(\.id)),
             activeTabID: store.selectedTabID
         )
-        presentationState.removeSnapshots(keeping: Set(store.tabs.map(\.id)))
+        presentationState.removeSnapshots(keeping: Set(tabSessionIdentitiesByID.values))
     }
 
-    private func isSelected(tabID: TabID) -> Bool {
-        !activityPageIsSelected && tabID == store.selectedTabID
+    private func isCurrent(identity: WebContentSessionIdentity) -> Bool {
+        store.isCurrentWebContentSession(identity)
     }
 
-    private var tabProfileIDsByID: [TabID: ProfileID] {
-        Dictionary(uniqueKeysWithValues: store.tabs.map { ($0.id, $0.profileID) })
+    private func isSelected(identity: WebContentSessionIdentity) -> Bool {
+        !activityPageIsSelected
+            && identity.tabID == store.selectedTabID
+            && isCurrent(identity: identity)
+    }
+
+    private var tabSessionIdentitiesByID: [TabID: WebContentSessionIdentity] {
+        Dictionary(uniqueKeysWithValues: store.tabs.compactMap { tab in
+            store.profileContext(for: tab.id).map { (tab.id, $0) }
+        })
     }
 }
 
@@ -819,6 +887,7 @@ private struct BrowserAllSpacesContentOverviewView: View {
     let pages: [SidebarSpacePageSnapshot]
     let isLoading: Bool
     let usesPinnedSidebarAppearance: Bool
+    let profileNamesByID: [ProfileID: String]
     let selectSpace: (SpaceID) -> Void
     let selectTab: (TabID) -> Void
     let customizeSpace: (SpaceID) -> Void
@@ -841,6 +910,7 @@ private struct BrowserAllSpacesContentOverviewView: View {
                                 BrowserSpaceContentPreviewColumn(
                                     page: page,
                                     usesPinnedSidebarAppearance: usesPinnedSidebarAppearance,
+                                    profileName: profileNamesByID[page.space.profileID] ?? "Unknown Profile",
                                     selectSpace: selectSpace,
                                     selectTab: selectTab,
                                     customizeSpace: customizeSpace
@@ -890,6 +960,7 @@ private struct BrowserSpaceContentPreviewColumn: View {
 
     let page: SidebarSpacePageSnapshot
     let usesPinnedSidebarAppearance: Bool
+    let profileName: String
     let selectSpace: (SpaceID) -> Void
     let selectTab: (TabID) -> Void
     let customizeSpace: (SpaceID) -> Void
@@ -914,7 +985,7 @@ private struct BrowserSpaceContentPreviewColumn: View {
                                 .font(.headline.weight(.semibold))
                                 .lineLimit(1)
 
-                            Text("\(tabCount) tabs")
+                            Text("\(profileName) • \(tabCount) tabs")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)

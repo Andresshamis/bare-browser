@@ -7,7 +7,8 @@ Bare Browser uses `WKWebView`, not Safari's full browser process or Chromium. Kn
 - Some Safari browser features are not public `WKWebView` APIs.
 - Chrome extension compatibility is not available and should not be claimed.
 - Safari Web Extensions require a dedicated extension architecture and are not part of this scaffold.
-- Per-profile isolation depends on WebKit support for identified website data stores. Persistent profiles use `WKWebsiteDataStore.dataStore(forIdentifier:)`; private profiles use `.nonPersistent()`.
+- Per-profile isolation depends on WebKit support for identified website data stores. Persistent profiles use `WKWebsiteDataStore(forIdentifier:)`; each private profile reuses one `.nonPersistent()` store until that private profile closes.
+- macOS Password AutoFill suggestions can be surfaced by WebKit independently of Bare Browser's profile-scoped Keychain credential store. These device-wide suggestions are outside the profile-isolation guarantee; webpage-specific suppression would be incomplete and fragile, so the UI distinguishes the two instead.
 - Fine-grained permission APIs vary by macOS/WebKit version. In the macOS 26.2 SDK used for this slice, `WKUIDelegate` exposes media-capture permission callbacks for camera/microphone; Bare Browser routes those through `SitePermissionPolicy`.
 - Public-profile allow/deny decisions for supported site permissions can persist in Bare Browser's session store. Private-profile permission decisions are session-only and filtered before disk writes.
 - Bare Browser's active-site permission menu can manage only WebKit delegate-backed permissions. Unsupported or configuration-only permissions are shown as limited instead of writing ineffective per-site settings.

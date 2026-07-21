@@ -177,6 +177,7 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
         let result = persistence.loadSnapshot(fallback: fallback)
 
         XCTAssertEqual(result.recoveryReason, .repairedSnapshot)
+        XCTAssertTrue(result.integrityRepairReport.didRepairIsolationState)
         XCTAssertTrue(result.snapshot.tabs.contains { $0.id == publicTab.id })
         XCTAssertFalse(result.snapshot.profiles.contains { $0.id == privateProfile.id })
         XCTAssertFalse(result.snapshot.spaces.contains { $0.id == privateSpace.id })
@@ -195,6 +196,10 @@ final class SQLiteSessionPersistenceStoreTests: XCTestCase {
         XCTAssertFalse(repairedDatabase.contains("token"))
         XCTAssertFalse(repairedDatabase.contains("fixture"))
         XCTAssertFalse(repairedDatabase.contains(privateProfile.id.uuidString))
+
+        let cleanReload = persistence.loadSnapshot(fallback: fallback)
+        XCTAssertNil(cleanReload.recoveryReason)
+        XCTAssertFalse(cleanReload.integrityRepairReport.didRepairIsolationState)
     }
 
     func testLoadFallsBackAndDeletesStoreWhenRepairScrubCannotComplete() throws {

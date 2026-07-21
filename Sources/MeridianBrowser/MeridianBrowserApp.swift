@@ -1,3 +1,4 @@
+import AppKit
 import MeridianCore
 import SwiftUI
 
@@ -16,6 +17,12 @@ struct MeridianBrowserApp: App {
         let sessionPersistence = SQLiteSessionPersistenceStore()
         let historyPersistence = SQLiteLocalHistoryPersistenceStore()
         let loadResult = sessionPersistence.loadSnapshot()
+        if loadResult.integrityRepairReport.didRepairIsolationState {
+            ProfileIsolationDiagnosticArchive.save(loadResult.integrityRepairReport)
+        }
+        let retainedIsolationReport = loadResult.integrityRepairReport.didRepairIsolationState
+            ? loadResult.integrityRepairReport
+            : ProfileIsolationDiagnosticArchive.load() ?? SessionIntegrityRepairReport()
         let historyResult = historyPersistence.loadHistory(profiles: loadResult.snapshot.profiles)
         let sidebarRevealEdge = Self.savedSidebarRevealEdge()
         self.sessionPersistence = sessionPersistence
@@ -27,6 +34,8 @@ struct MeridianBrowserApp: App {
                 sidebarRevealEdge: sidebarRevealEdge,
                 lastUserMessage: loadResult.recoveryReason?.userMessage
                     ?? historyResult.recoveryReason?.userMessage,
+                profileIsolationRepairReport: retainedIsolationReport,
+                profileIsolationRepairOccurredThisLaunch: loadResult.integrityRepairReport.didRepairIsolationState,
                 sessionPersistence: sessionPersistence,
                 localHistoryPersistence: historyPersistence
             )
@@ -138,6 +147,18 @@ struct MeridianBrowserApp: App {
 
                 Button("Manage Profiles…") {
                     store.presentProfileManager(profileID: store.activeProfile?.id)
+                }
+
+                Divider()
+
+                Button("Copy Profile Isolation Diagnostics") {
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.setString(
+                        store.profileIsolationDiagnostics().redactedText,
+                        forType: .string
+                    )
+                    store.publishStatusMessage("Profile isolation diagnostics copied.")
                 }
             }
 

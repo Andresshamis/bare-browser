@@ -288,6 +288,53 @@ final class BrowserWebViewRegistryTests: XCTestCase {
         XCTAssertEqual(registry.liveSessionCount, 1)
     }
 
+    func testRegistryRecreatesSessionWhenParentSpaceChanges() {
+        let fixture = RegistryFixture()
+        let registry = BrowserWebViewRegistry(capacity: 8)
+        let tab = fixture.tab(title: "Example")
+        var movedTab = tab
+        movedTab.parentSpaceID = UUID()
+        let state = WebViewState()
+
+        let firstSession = registry.session(
+            for: tab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+        let secondSession = registry.session(
+            for: movedTab,
+            profile: fixture.profile,
+            state: state,
+            dataStoreProvider: fixture.dataStoreProvider,
+            securityPolicy: URLSecurityPolicy(),
+            downloadSafetyPolicy: DownloadSafetyPolicy(),
+            sitePermissionPolicy: SitePermissionPolicy(),
+            callbacks: fixture.callbacks()
+        )
+
+        XCTAssertFalse(firstSession === secondSession)
+        XCTAssertNotEqual(firstSession.identity, secondSession.identity)
+        XCTAssertEqual(secondSession.identity.spaceID, movedTab.parentSpaceID)
+    }
+
+    func testPrivateProfileTabsShareOneStoreUntilProfileIsReleased() {
+        let provider = ProfileWebsiteDataStoreProvider()
+        let profile = BrowserProfile.privateBrowsing()
+
+        let first = provider.websiteDataStore(for: profile)
+        let second = provider.websiteDataStore(for: profile)
+        XCTAssertTrue(first === second)
+
+        provider.releaseEphemeralWebsiteDataStore(for: profile.id)
+        let replacement = provider.websiteDataStore(for: profile)
+        XCTAssertFalse(first === replacement)
+    }
+
 }
 
 private func XCTAssertBlack(

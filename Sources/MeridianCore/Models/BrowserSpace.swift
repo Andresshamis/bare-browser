@@ -113,7 +113,7 @@ public struct BrowserSpace: Identifiable, Hashable, Codable, Sendable {
     public var symbolName: String
     public var colorHex: String
     public var sidebarAppearance: SidebarAppearance
-    public var profileID: ProfileID
+    public internal(set) var profileID: ProfileID
     public var favoriteTabIDs: [TabID]
     public var pinnedTabIDs: [TabID]
     public var folderIDs: [FolderID]
