@@ -203,6 +203,41 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         ))
     }
 
+    func testAddressMorphTracksLiveFractionBetweenAdjacentPages() throws {
+        let state = try XCTUnwrap(SidebarAddressScrollMorph.state(
+            at: 1.35,
+            pageTexts: ["Activity", "https://one.example", "https://two.example"]
+        ))
+
+        XCTAssertEqual(state.sourceText, "https://one.example")
+        XCTAssertEqual(state.destinationText, "https://two.example")
+        XCTAssertEqual(state.progress, 0.35, accuracy: 0.0001)
+    }
+
+    func testAddressMorphReversesWithTheSameScrollFraction() throws {
+        let forward = try XCTUnwrap(SidebarAddressScrollMorph.state(
+            at: 1.2,
+            pageTexts: ["Activity", "https://one.example", "https://two.example"]
+        ))
+        let backward = try XCTUnwrap(SidebarAddressScrollMorph.state(
+            at: 1.8,
+            pageTexts: ["Activity", "https://one.example", "https://two.example"]
+        ))
+
+        XCTAssertEqual(forward.progress, 0.2, accuracy: 0.0001)
+        XCTAssertEqual(backward.progress, 0.8, accuracy: 0.0001)
+        XCTAssertEqual(forward.sourceText, backward.sourceText)
+        XCTAssertEqual(forward.destinationText, backward.destinationText)
+    }
+
+    func testAddressMorphRejectsMissingOrInvalidScrollGeometry() {
+        XCTAssertNil(SidebarAddressScrollMorph.state(at: 0.5, pageTexts: []))
+        XCTAssertNil(SidebarAddressScrollMorph.state(
+            at: .nan,
+            pageTexts: ["Activity", "https://example.com"]
+        ))
+    }
+
     func testChromeHandoffDefersExactStyleOnlyWhenPageTravelIsRequired() {
         let first = SidebarSpacePagerPageID.space(UUID())
         let second = SidebarSpacePagerPageID.space(UUID())
