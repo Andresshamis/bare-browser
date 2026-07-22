@@ -177,6 +177,32 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         )
     }
 
+    func testPreviewsDestinationSpaceBeforePagerSettles() {
+        let selectedID = UUID()
+        let destinationID = UUID()
+
+        XCTAssertEqual(
+            SidebarSpacePagerPreview.spaceID(
+                for: .space(destinationID),
+                selectedPageID: .space(selectedID)
+            ),
+            destinationID
+        )
+    }
+
+    func testDoesNotPreviewCurrentSpaceOrActivityPage() {
+        let selectedID = UUID()
+
+        XCTAssertNil(SidebarSpacePagerPreview.spaceID(
+            for: .space(selectedID),
+            selectedPageID: .space(selectedID)
+        ))
+        XCTAssertNil(SidebarSpacePagerPreview.spaceID(
+            for: .activity,
+            selectedPageID: .space(selectedID)
+        ))
+    }
+
     func testChromeHandoffDefersExactStyleOnlyWhenPageTravelIsRequired() {
         let first = SidebarSpacePagerPageID.space(UUID())
         let second = SidebarSpacePagerPageID.space(UUID())

@@ -822,16 +822,6 @@ private struct SidebarAddressControls: View {
             }
 
             sitePermissionsMenu
-
-            Text(presentedProfileName)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(sidebarForegroundColor)
-                .lineLimit(1)
-                .padding(.horizontal, 7)
-                .frame(height: 26)
-                .background(.thinMaterial, in: Capsule())
-                .help("Website data profile: \(presentedProfileName)")
-                .accessibilityLabel("Website data profile \(presentedProfileName)")
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
@@ -849,15 +839,6 @@ private struct SidebarAddressControls: View {
         }
 
         return store.activeTab
-    }
-
-    private var presentedProfileName: String {
-        guard !isActivitySelected,
-              let tab = presentedTab,
-              let profileID = store.profileContext(for: tab.id)?.profileID else {
-            return "All Profiles"
-        }
-        return store.profiles.first { $0.id == profileID }?.name ?? "Unknown Profile"
     }
 
     private var currentURLForCopy: URL? {
@@ -3051,6 +3032,12 @@ private struct SidebarSpacePagerView: View {
                             in: snapshot.pages
                         )
                     )
+                    previewSpace(
+                        SidebarSpacePagerPreview.spaceID(
+                            for: targetPageID,
+                            selectedPageID: selectedPageID
+                        )
+                    )
                 }
             }
             .onDisappear {
@@ -3500,6 +3487,20 @@ struct SidebarSpacePagerSelection {
         }
 
         return scrollPositionPageID
+    }
+}
+
+struct SidebarSpacePagerPreview {
+    static func spaceID(
+        for targetPageID: SidebarSpacePagerPageID,
+        selectedPageID: SidebarSpacePagerPageID?
+    ) -> SpaceID? {
+        guard targetPageID != selectedPageID,
+              case .space(let spaceID) = targetPageID else {
+            return nil
+        }
+
+        return spaceID
     }
 }
 
