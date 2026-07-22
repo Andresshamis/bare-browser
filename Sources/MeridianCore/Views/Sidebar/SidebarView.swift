@@ -44,6 +44,18 @@ final class SidebarFixedChromeLiveStyleController: ObservableObject {
     }
 }
 
+@MainActor
+final class SidebarAddressMorphController: ObservableObject {
+    @Published private(set) var state: SidebarAddressMorphState?
+
+    func update(_ state: SidebarAddressMorphState?) {
+        guard self.state != state else {
+            return
+        }
+        self.state = state
+    }
+}
+
 struct SidebarForegroundPalette {
     static func whiteAmount(
         for style: SidebarChromeLiveStyle,
@@ -267,6 +279,7 @@ public struct SidebarView: View {
     @State private var spaceSwitcherDragState = SidebarSpaceSwitcherDragState()
     private let tabHasLiveSession: @MainActor (TabID) -> Bool
     private let fixedChromeLiveStyleController: SidebarFixedChromeLiveStyleController
+    private let addressMorphController: SidebarAddressMorphController
     private let updateSidebarChromeLiveStyle: (SidebarChromeLiveStyle?) -> Void
 
     public init(
@@ -283,6 +296,7 @@ public struct SidebarView: View {
         self._activityPageIsSelected = activityPageIsSelected
         self.tabHasLiveSession = tabHasLiveSession
         fixedChromeLiveStyleController = SidebarFixedChromeLiveStyleController()
+        addressMorphController = SidebarAddressMorphController()
         self.updateSidebarChromeLiveStyle = updateSidebarChromeLiveStyle
     }
 
@@ -301,6 +315,7 @@ public struct SidebarView: View {
         self._activityPageIsSelected = activityPageIsSelected
         self.tabHasLiveSession = tabHasLiveSession
         self.fixedChromeLiveStyleController = fixedChromeLiveStyleController
+        addressMorphController = SidebarAddressMorphController()
         self.updateSidebarChromeLiveStyle = updateSidebarChromeLiveStyle
     }
 
@@ -398,6 +413,7 @@ public struct SidebarView: View {
         SidebarAddressControls(
             store: store,
             presentationState: presentationState,
+            addressMorphController: addressMorphController,
             isActivitySelected: activityPageIsSelected
         )
     }
@@ -611,6 +627,7 @@ public struct SidebarView: View {
             updateSidebarFixedChromeLiveStyle: {
                 fixedChromeLiveStyleController.update($0)
             },
+            updateAddressMorph: { addressMorphController.update($0) },
             updateSidebarChromeLiveStyle: updateSidebarChromeLiveStyle
         )
     }
@@ -751,9 +768,171 @@ private struct ActiveSitePermissionContext {
     var profileID: ProfileID
 }
 
+struct SidebarAddressMorphState: Equatable, Sendable {
+    let sourceText: String
+    let destinationText: String
+    let progress: Double
+}
+
+enum SidebarAddressScrollMorph {
+    static func state(
+        at fractionalPageIndex: CGFloat,
+        pageTexts: [String]
+    ) -> SidebarAddressMorphState? {
+        guard !pageTexts.isEmpty,
+              fractionalPageIndex.isFinite else {
+            return nil
+        }
+
+        let lastIndex = pageTexts.count - 1
+        let clampedIndex = min(max(fractionalPageIndex, 0), CGFloat(lastIndex))
+        let sourceIndex = min(Int(floor(clampedIndex)), lastIndex)
+        let destinationIndex = min(sourceIndex + 1, lastIndex)
+        let progress = destinationIndex == sourceIndex
+            ? 0
+            : Double(clampedIndex - CGFloat(sourceIndex))
+
+        return SidebarAddressMorphState(
+            sourceText: pageTexts[sourceIndex],
+            destinationText: pageTexts[destinationIndex],
+            progress: progress
+        )
+    }
+}
+
+enum SidebarAddressDisplay {
+    static func text(
+        for tab: BrowserTab?,
+        isActivitySelected: Bool = false
+    ) -> String {
+        if isActivitySelected {
+            return "Activity"
+        }
+        if let tab,
+           !tab.content.isWeb {
+            return tab.title
+        }
+        if let url = tab?.url {
+            return url.absoluteString
+        }
+        return "Search or enter address"
+    }
+
+    static func text(for page: SidebarSpacePagerPageSnapshot) -> String {
+        switch page {
+        case .activity:
+            return "Activity"
+        case .space(let page):
+            return text(for: focusedTab(in: page))
+        }
+    }
+
+    private static func focusedTab(in page: SidebarSpacePageSnapshot) -> BrowserTab? {
+        if let tab = (page.favoriteTabs + page.pinnedTabs + page.regularTabs)
+            .first(where: \.isSelected)?.tab {
+            return tab
+        }
+        return focusedTab(in: page.folders)
+    }
+
+    private static func focusedTab(in folders: [SidebarFolderItemSnapshot]) -> BrowserTab? {
+        for folder in folders {
+            if let tab = folder.tabs.first(where: \.isSelected)?.tab {
+                return tab
+            }
+            if let tab = focusedTab(in: folder.childFolders) {
+                return tab
+            }
+        }
+        return nil
+    }
+}
+
+private struct SidebarAddressMorphingText: View {
+    let settledText: String
+    @ObservedObject private var controller: SidebarAddressMorphController
+
+    init(
+        settledText: String,
+        controller: SidebarAddressMorphController
+    ) {
+        self.settledText = settledText
+        self.controller = controller
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            if let state = controller.state {
+                Text(state.sourceText)
+                    .textRenderer(SidebarAddressGlyphRenderer(
+                        progress: state.progress,
+                        role: .source
+                    ))
+
+                Text(state.destinationText)
+                    .textRenderer(SidebarAddressGlyphRenderer(
+                        progress: state.progress,
+                        role: .destination
+                    ))
+            } else {
+                Text(settledText)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct SidebarAddressGlyphRenderer: TextRenderer {
+    enum Role {
+        case source
+        case destination
+    }
+
+    let progress: Double
+    let role: Role
+
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        let slices = layout.sidebarFlattenedRunSlices
+        let lastSliceIndex = max(slices.count - 1, 1)
+
+        for (index, slice) in slices.enumerated() {
+            let sequencePosition = Double(index) / Double(lastSliceIndex)
+            let delay = sequencePosition * 0.22
+            let localProgress = min(max((progress - delay) / (1 - 0.22), 0), 1)
+            let easedProgress = localProgress * localProgress * (3 - 2 * localProgress)
+            let visibility = role == .source ? 1 - easedProgress : easedProgress
+            let blurProgress = role == .source ? easedProgress : 1 - easedProgress
+            let verticalDirection = role == .source ? -1.0 : 1.0
+
+            var copy = context
+            copy.opacity = visibility
+            copy.translateBy(
+                x: 0,
+                y: verticalDirection * blurProgress * 1.5
+            )
+            copy.addFilter(.blur(
+                radius: slice.typographicBounds.rect.height / 14 * blurProgress
+            ))
+            copy.draw(slice, options: .disablesSubpixelQuantization)
+        }
+    }
+}
+
+private extension Text.Layout {
+    var sidebarFlattenedRunSlices: [Text.Layout.RunSlice] {
+        flatMap { line in
+            line.flatMap { run in
+                run.map { $0 }
+            }
+        }
+    }
+}
+
 private struct SidebarAddressControls: View {
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var presentationState: BrowserContentPresentationState
+    private let addressMorphController: SidebarAddressMorphController
     let isActivitySelected: Bool
     @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
     @Environment(\.sidebarForegroundWhiteAmount) private var sidebarForegroundWhiteAmount
@@ -762,10 +941,12 @@ private struct SidebarAddressControls: View {
     init(
         store: BrowserStore,
         presentationState: BrowserContentPresentationState,
+        addressMorphController: SidebarAddressMorphController,
         isActivitySelected: Bool
     ) {
         self.store = store
         self.presentationState = presentationState
+        self.addressMorphController = addressMorphController
         self.isActivitySelected = isActivitySelected
     }
 
@@ -781,7 +962,10 @@ private struct SidebarAddressControls: View {
                             .foregroundStyle(.secondary)
                             .frame(width: 12)
 
-                        Text(addressText)
+                        SidebarAddressMorphingText(
+                            settledText: addressText,
+                            controller: addressMorphController
+                        )
                             .font(.caption)
                             .foregroundStyle(sidebarForegroundColor)
                             .lineLimit(1)
@@ -865,18 +1049,10 @@ private struct SidebarAddressControls: View {
     }
 
     private var addressText: String {
-        if isActivitySelected {
-            return "Activity"
-        }
-
-        if let tab = presentedTab,
-           !tab.content.isWeb {
-            return tab.title
-        }
-        if let url = presentedTab?.url {
-            return url.absoluteString
-        }
-        return "Search or enter address"
+        SidebarAddressDisplay.text(
+            for: presentedTab,
+            isActivitySelected: isActivitySelected
+        )
     }
 
     private var siteSymbolName: String {
@@ -2830,6 +3006,7 @@ private struct SidebarSpacePagerView: View {
     let previewSpace: (SpaceID?) -> Void
     let sidebarIsPinned: Bool
     let updateSidebarFixedChromeLiveStyle: (SidebarChromeLiveStyle?) -> Void
+    let updateAddressMorph: (SidebarAddressMorphState?) -> Void
     let updateSidebarChromeLiveStyle: (SidebarChromeLiveStyle?) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -2886,6 +3063,7 @@ private struct SidebarSpacePagerView: View {
             .onAppear {
                 syncScrollPositionToSelection(animated: false)
                 previewSpace(nil)
+                updateAddressMorph(nil)
                 updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
                 updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
             }
@@ -2985,6 +3163,7 @@ private struct SidebarSpacePagerView: View {
                     )
                     commitPageIfNeeded(scrollPositionPageID)
                     previewSpace(nil)
+                    updateAddressMorph(nil)
                 }
             }
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
@@ -3007,6 +3186,13 @@ private struct SidebarSpacePagerView: View {
                 guard scrollIsActive else {
                     return
                 }
+
+                updateAddressMorph(
+                    SidebarAddressScrollMorph.state(
+                        at: newState,
+                        pageTexts: snapshot.pages.map(SidebarAddressDisplay.text(for:))
+                    )
+                )
 
                 // The full scroll-linked style terminates at retained layers.
                 // Fixed controls receive the exact adjacent endpoint instead;
@@ -3044,6 +3230,7 @@ private struct SidebarSpacePagerView: View {
                 geometryTracker.cancelDirectionalSnap()
                 updateSidebarChromeLiveStyle(nil)
                 updateSidebarFixedChromeLiveStyle(nil)
+                updateAddressMorph(nil)
                 previewSpace(nil)
             }
         }
