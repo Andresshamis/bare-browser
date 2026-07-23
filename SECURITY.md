@@ -1,6 +1,6 @@
 # Security Policy
 
-Bare Browser is an early-stage macOS browser project. Security reports are welcome and should be handled privately before public disclosure.
+Lumen Browser is an early-stage macOS browser project. Security reports are welcome and should be handled privately before public disclosure.
 
 ## Supported Versions
 
@@ -37,7 +37,7 @@ In scope:
 Out of scope:
 
 - Vulnerabilities solely in websites loaded by the browser.
-- Issues requiring malicious local code execution outside Bare Browser.
+- Issues requiring malicious local code execution outside Lumen Browser.
 - Denial-of-service reports without a security or privacy impact.
 
 ## Disclosure

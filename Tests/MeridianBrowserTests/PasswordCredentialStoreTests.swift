@@ -3,9 +3,15 @@ import MeridianCore
 import XCTest
 
 final class PasswordCredentialStoreTests: XCTestCase {
-    func testKeychainStoreUsesBareBrowserServicePrefixAndKeepsLegacyMeridianLookup() {
-        XCTAssertEqual(KeychainPasswordCredentialStore.defaultServicePrefix, "BareBrowser.WebsitePasswords")
-        XCTAssertEqual(KeychainPasswordCredentialStore.legacyServicePrefixes, ["MeridianBrowser.WebsitePasswords"])
+    func testKeychainStoreUsesLumenBrowserServicePrefixAndKeepsLegacyLookups() {
+        XCTAssertEqual(KeychainPasswordCredentialStore.defaultServicePrefix, "LumenBrowser.WebsitePasswords")
+        XCTAssertEqual(
+            KeychainPasswordCredentialStore.legacyServicePrefixes,
+            [
+                "BareBrowser.WebsitePasswords",
+                "MeridianBrowser.WebsitePasswords"
+            ]
+        )
     }
 
     func testCandidateNormalizesHTTPSOriginAndKeepsSecretOutOfPromptText() throws {

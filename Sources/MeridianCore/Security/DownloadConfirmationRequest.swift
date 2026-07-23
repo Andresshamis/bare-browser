@@ -76,7 +76,7 @@ public struct DownloadConfirmationRequest: Identifiable, Equatable, Sendable {
 
     public var confirmationMessage: String {
         var lines = [
-            "Bare Browser will only save this download after you choose a destination.",
+            "Lumen Browser will only save this download after you choose a destination.",
             "",
             "File: \(sanitizedFilename)",
             "Source: \(sourceDescription)"
