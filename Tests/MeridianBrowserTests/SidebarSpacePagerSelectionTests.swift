@@ -2188,6 +2188,60 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         XCTAssertNil(state.previewStartPageSpaceID)
     }
 
+    func testUnloadedWebPreviewUsesPlaceholderUntilSnapshotExists() throws {
+        let selectedTabID = UUID()
+        let previewTab = BrowserTab(
+            title: "Target",
+            url: try XCTUnwrap(URL(string: "https://example.com")),
+            parentSpaceID: UUID(),
+            profileID: UUID()
+        )
+
+        XCTAssertTrue(
+            BrowserContentPreviewPlaceholder.shouldShow(
+                for: previewTab,
+                selectedTabID: selectedTabID,
+                snapshotIsAvailable: false
+            )
+        )
+        XCTAssertFalse(
+            BrowserContentPreviewPlaceholder.shouldShow(
+                for: previewTab,
+                selectedTabID: selectedTabID,
+                snapshotIsAvailable: true
+            )
+        )
+    }
+
+    func testPreviewPlaceholderIgnoresCurrentAndStartPageTabs() throws {
+        let currentTab = BrowserTab(
+            title: "Current",
+            url: try XCTUnwrap(URL(string: "https://example.com")),
+            parentSpaceID: UUID(),
+            profileID: UUID()
+        )
+        let startPageTab = BrowserTab(
+            title: "New Tab",
+            parentSpaceID: UUID(),
+            profileID: UUID()
+        )
+
+        XCTAssertFalse(
+            BrowserContentPreviewPlaceholder.shouldShow(
+                for: currentTab,
+                selectedTabID: currentTab.id,
+                snapshotIsAvailable: false
+            )
+        )
+        XCTAssertFalse(
+            BrowserContentPreviewPlaceholder.shouldShow(
+                for: startPageTab,
+                selectedTabID: currentTab.id,
+                snapshotIsAvailable: false
+            )
+        )
+    }
+
     @MainActor
     func testPresentationStateStoresAndPrunesSnapshots() {
         let keptTabID = UUID()

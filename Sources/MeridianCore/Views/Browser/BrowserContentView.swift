@@ -10,6 +10,7 @@ private let browserContentLogger = Logger(
 private let activeTabSnapshotHandoffDelayNanoseconds: UInt64 = 90_000_000
 
 public struct BrowserContentView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var webViewState: WebViewState
     @ObservedObject private var presentationState: BrowserContentPresentationState
@@ -296,6 +297,8 @@ public struct BrowserContentView: View {
 
             customizationPreviewSurface
 
+            unloadedPreviewSurface
+
             snapshotOverlay
         }
     }
@@ -397,6 +400,32 @@ public struct BrowserContentView: View {
             return nil
         }
         return store.profiles.first { $0.id == identity.profileID }
+    }
+
+    @ViewBuilder
+    private var unloadedPreviewSurface: some View {
+        if unloadedPreviewSurfaceIsVisible {
+            Color(nsColor: BrowserWebContentAppearance.underPageBackgroundColor(for: colorScheme))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var unloadedPreviewSurfaceIsVisible: Bool {
+        let previewTab = presentationState.previewTabID.flatMap { previewTabID in
+            store.tabs.first(where: { $0.id == previewTabID })
+        }
+        let snapshotIsAvailable = previewTab.flatMap { tab in
+            presentationState.snapshot(for: store.profileContext(for: tab.id))
+        } != nil
+
+        return !activityPageIsSelected
+            && previewCustomizationContext == nil
+            && BrowserContentPreviewPlaceholder.shouldShow(
+                for: previewTab,
+                selectedTabID: store.selectedTabID,
+                snapshotIsAvailable: snapshotIsAvailable
+            )
     }
 
     @ViewBuilder

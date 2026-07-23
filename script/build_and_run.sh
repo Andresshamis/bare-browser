@@ -326,7 +326,6 @@ sign_with_local_identity() {
     --keychain "$DEV_SIGNING_KEYCHAIN" \
     --sign "$identity" \
     --identifier "$BUNDLE_ID" \
-    --options runtime \
     --entitlements "$LOCAL_ENTITLEMENTS" \
     "$APP_BUNDLE"
   status=$?
@@ -350,7 +349,6 @@ sign_app() {
     codesign --force \
       --sign "$identity" \
       --identifier "$BUNDLE_ID" \
-      --options runtime \
       --entitlements "$LOCAL_ENTITLEMENTS" \
       "$APP_BUNDLE"
     return
@@ -365,7 +363,6 @@ sign_app() {
   codesign --force \
     --sign - \
     --identifier "$BUNDLE_ID" \
-    --options runtime \
     --entitlements "$LOCAL_ENTITLEMENTS" \
     "$APP_BUNDLE"
   echo "warning: no valid code-signing identity found and local signing identity creation failed; using ad-hoc signing. Keychain Always Allow may not persist across rebuilt app binaries." >&2
