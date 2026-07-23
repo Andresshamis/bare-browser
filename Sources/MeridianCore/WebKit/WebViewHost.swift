@@ -971,7 +971,11 @@ struct BrowserWebViewCallbacks {
     var onDownloadProgress: @MainActor (UUID, Double?) -> Void
     var onDownloadFinished: @MainActor (UUID, URL?, Bool) -> Void
     var onDownloadFailed: @MainActor (UUID, String) -> Void
-    var onSitePermissionRequest: @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
+    var onSitePermissionRequest: @MainActor (
+        SitePermissionKind,
+        SitePermissionOrigin?,
+        (@MainActor (SitePermissionPolicy.Evaluation) -> Void)?
+    ) -> SitePermissionPolicy.Evaluation
     var onPasswordCredentialCaptured: @MainActor (PasswordCredentialCandidate) -> Void
     var onPasswordCredentialsRequested: @MainActor (URL) -> [SavedPasswordCredential]
     var onSnapshot: @MainActor (NSImage) -> Void
@@ -986,7 +990,11 @@ struct BrowserWebViewCallbacks {
         onDownloadProgress: @escaping @MainActor (UUID, Double?) -> Void = { _, _ in },
         onDownloadFinished: @escaping @MainActor (UUID, URL?, Bool) -> Void = { _, _, _ in },
         onDownloadFailed: @escaping @MainActor (UUID, String) -> Void = { _, _ in },
-        onSitePermissionRequest: @escaping @MainActor (SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation,
+        onSitePermissionRequest: @escaping @MainActor (
+            SitePermissionKind,
+            SitePermissionOrigin?,
+            (@MainActor (SitePermissionPolicy.Evaluation) -> Void)?
+        ) -> SitePermissionPolicy.Evaluation,
         onPasswordCredentialCaptured: @escaping @MainActor (PasswordCredentialCandidate) -> Void = { _ in },
         onPasswordCredentialsRequested: @escaping @MainActor (URL) -> [SavedPasswordCredential] = { _ in [] },
         onSnapshot: @escaping @MainActor (NSImage) -> Void = { _ in }
@@ -1775,7 +1783,12 @@ public struct WebViewHost: NSViewRepresentable {
     private let onDownloadProgress: @MainActor (WebContentSessionIdentity, UUID, Double?) -> Void
     private let onDownloadFinished: @MainActor (WebContentSessionIdentity, UUID, URL?, Bool) -> Void
     private let onDownloadFailed: @MainActor (WebContentSessionIdentity, UUID, String) -> Void
-    private let onSitePermissionRequest: @MainActor (WebContentSessionIdentity, SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation
+    private let onSitePermissionRequest: @MainActor (
+        WebContentSessionIdentity,
+        SitePermissionKind,
+        SitePermissionOrigin?,
+        (@MainActor (SitePermissionPolicy.Evaluation) -> Void)?
+    ) -> SitePermissionPolicy.Evaluation
     private let onPasswordCredentialCaptured: @MainActor (WebContentSessionIdentity, PasswordCredentialCandidate) -> Void
     private let onPasswordCredentialsRequested: @MainActor (WebContentSessionIdentity, URL) -> [SavedPasswordCredential]
     private let onSnapshotCaptured: @MainActor (WebContentSessionIdentity, NSImage) -> Void
@@ -1802,7 +1815,12 @@ public struct WebViewHost: NSViewRepresentable {
         onDownloadProgress: @escaping @MainActor (WebContentSessionIdentity, UUID, Double?) -> Void = { _, _, _ in },
         onDownloadFinished: @escaping @MainActor (WebContentSessionIdentity, UUID, URL?, Bool) -> Void = { _, _, _, _ in },
         onDownloadFailed: @escaping @MainActor (WebContentSessionIdentity, UUID, String) -> Void = { _, _, _ in },
-        onSitePermissionRequest: @escaping @MainActor (WebContentSessionIdentity, SitePermissionKind, SitePermissionOrigin?) -> SitePermissionPolicy.Evaluation = { _, _, _ in
+        onSitePermissionRequest: @escaping @MainActor (
+            WebContentSessionIdentity,
+            SitePermissionKind,
+            SitePermissionOrigin?,
+            (@MainActor (SitePermissionPolicy.Evaluation) -> Void)?
+        ) -> SitePermissionPolicy.Evaluation = { _, _, _, _ in
             .deny(reason: "Site permission request was blocked because no permission handler is installed.")
         },
         onPasswordCredentialCaptured: @escaping @MainActor (WebContentSessionIdentity, PasswordCredentialCandidate) -> Void = { _, _ in },
@@ -1857,7 +1875,7 @@ public struct WebViewHost: NSViewRepresentable {
                 onDownloadProgress: { _, _ in },
                 onDownloadFinished: { _, _, _ in },
                 onDownloadFailed: { _, _ in },
-                onSitePermissionRequest: { _, _ in
+                onSitePermissionRequest: { _, _, _ in
                     .deny(reason: "Site permission request was blocked because no active tab is attached.")
                 },
                 onPasswordCredentialCaptured: { _ in },
@@ -1922,8 +1940,8 @@ public struct WebViewHost: NSViewRepresentable {
             onDownloadFailed: { downloadID, message in
                 onDownloadFailed(identity, downloadID, message)
             },
-            onSitePermissionRequest: { kind, origin in
-                onSitePermissionRequest(identity, kind, origin)
+            onSitePermissionRequest: { kind, origin, resolutionHandler in
+                onSitePermissionRequest(identity, kind, origin, resolutionHandler)
             },
             onPasswordCredentialCaptured: { candidate in
                 onPasswordCredentialCaptured(identity, candidate)
@@ -2325,13 +2343,27 @@ public struct WebViewHost: NSViewRepresentable {
                 } else {
                     let origin = SitePermissionOrigin(securityOrigin: navigationAction.sourceFrame.securityOrigin)
                         ?? SitePermissionOrigin(url: webView.url ?? url)
-                    switch callbacks.onSitePermissionRequest(.popupWindow, origin) {
-                    case .allow:
-                        routeWebContentNavigation(to: url, in: webView)
-                    case .ask:
-                        publishSecurityMessage("Pop-up windows require permission for this site.")
-                    case .deny(let reason):
-                        publishSecurityMessage(reason)
+                    let applyDecision: @MainActor (SitePermissionPolicy.Evaluation) -> Void = {
+                        [weak self, weak webView] evaluation in
+                        guard let self, let webView, self.isActive else {
+                            return
+                        }
+                        switch evaluation {
+                        case .allow:
+                            self.routeWebContentNavigation(to: url, in: webView)
+                        case .ask:
+                            self.publishSecurityMessage("Pop-up windows require permission for this site.")
+                        case .deny(let reason):
+                            self.publishSecurityMessage(reason)
+                        }
+                    }
+                    let evaluation = callbacks.onSitePermissionRequest(
+                        .popupWindow,
+                        origin,
+                        applyDecision
+                    )
+                    if evaluation != .ask {
+                        applyDecision(evaluation)
                     }
                 }
             }
@@ -2352,8 +2384,22 @@ public struct WebViewHost: NSViewRepresentable {
 
             let permissionOrigin = SitePermissionOrigin(securityOrigin: origin)
                 ?? frame.request.url.flatMap(SitePermissionOrigin.init(url:))
-            let evaluation = callbacks.onSitePermissionRequest(Self.permissionKind(for: type), permissionOrigin)
-            decisionHandler(Self.webKitPermissionDecision(for: evaluation))
+            let applyDecision: @MainActor (SitePermissionPolicy.Evaluation) -> Void = {
+                [weak self] evaluation in
+                guard let self, self.isActive else {
+                    decisionHandler(.deny)
+                    return
+                }
+                decisionHandler(Self.webKitPermissionDecision(for: evaluation))
+            }
+            let evaluation = callbacks.onSitePermissionRequest(
+                Self.permissionKind(for: type),
+                permissionOrigin,
+                applyDecision
+            )
+            if evaluation != .ask {
+                applyDecision(evaluation)
+            }
         }
 
         public func userContentController(

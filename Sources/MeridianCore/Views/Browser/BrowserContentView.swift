@@ -251,14 +251,15 @@ public struct BrowserContentView: View {
                     return
                 }
                 store.failDownload(downloadID, message: message)
-            } onSitePermissionRequest: { identity, kind, origin in
+            } onSitePermissionRequest: { identity, kind, origin, resolutionHandler in
                 guard isSelected(identity: identity) else {
                     return .deny(reason: "Site permission request was blocked because its profile session is no longer active.")
                 }
                 return store.requestSitePermission(
                     kind: kind,
                     origin: origin,
-                    profileID: identity.profileID
+                    profileID: identity.profileID,
+                    resolutionHandler: resolutionHandler
                 )
             } onPasswordCredentialCaptured: { identity, candidate in
                 guard isSelected(identity: identity) else {

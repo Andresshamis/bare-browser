@@ -74,6 +74,7 @@ public final class BrowserStore: ObservableObject {
     private let profileWebsiteDataStoreDeleter: ProfileWebsiteDataStoreDeleting
     private var localHistoryStore: LocalHistoryStore
     private var pendingDownloadCompletion: (@MainActor (URL?) -> Void)?
+    private var pendingSitePermissionResolution: (@MainActor (SitePermissionPolicy.Evaluation) -> Void)?
     private var downloadCancellationHandlers: [UUID: @MainActor () -> Void]
     private var scheduledSessionPersistenceTask: Task<Void, Never>?
 
@@ -134,6 +135,7 @@ public final class BrowserStore: ObservableObject {
         self.profileWebsiteDataStoreDeleter = profileWebsiteDataStoreDeleter
         self.localHistoryStore = localHistoryStore
         self.pendingDownloadCompletion = nil
+        self.pendingSitePermissionResolution = nil
         self.downloadCancellationHandlers = [:]
         sortDownloads()
 
@@ -455,7 +457,7 @@ public final class BrowserStore: ObservableObject {
         sitePermissionSettings.removeAll { $0.profileID == profileID }
         downloads.removeAll { $0.profileID == profileID }
         if pendingSitePermissionRequest?.profileID == profileID {
-            pendingSitePermissionRequest = nil
+            cancelPendingSitePermissionRequest()
         }
         if pendingPasswordSaveRequest?.profileID == profileID {
             pendingPasswordSaveRequest = nil
@@ -588,7 +590,7 @@ public final class BrowserStore: ObservableObject {
         sitePermissionSettings.removeAll { $0.profileID == id }
         downloads.removeAll { $0.profileID == id }
         if pendingSitePermissionRequest?.profileID == id {
-            pendingSitePermissionRequest = nil
+            cancelPendingSitePermissionRequest()
         }
         if pendingPasswordSaveRequest?.profileID == id {
             pendingPasswordSaveRequest = nil
@@ -1337,11 +1339,13 @@ public final class BrowserStore: ObservableObject {
         kind: SitePermissionKind,
         origin: SitePermissionOrigin?,
         profileID: ProfileID? = nil,
-        date: Date = Date()
+        date: Date = Date(),
+        resolutionHandler: (@MainActor (SitePermissionPolicy.Evaluation) -> Void)? = nil
     ) -> SitePermissionPolicy.Evaluation {
+        cancelPendingSitePermissionRequest()
+
         guard let origin else {
             let reason = "Site permission request was blocked because its origin is unavailable."
-            pendingSitePermissionRequest = nil
             lastUserMessage = reason
             return .deny(reason: reason)
         }
@@ -1349,7 +1353,6 @@ public final class BrowserStore: ObservableObject {
         let resolvedProfileID = profileID ?? activeProfile?.id
         guard let profile = profiles.first(where: { $0.id == resolvedProfileID }) else {
             let reason = "Site permission request was blocked because its profile is unavailable."
-            pendingSitePermissionRequest = nil
             lastUserMessage = reason
             return .deny(reason: reason)
         }
@@ -1365,13 +1368,12 @@ public final class BrowserStore: ObservableObject {
 
         switch evaluation {
         case .allow:
-            pendingSitePermissionRequest = nil
             lastUserMessage = nil
         case .ask:
             pendingSitePermissionRequest = request
+            pendingSitePermissionResolution = resolutionHandler
             lastUserMessage = request.promptMessage
         case .deny(let reason):
-            pendingSitePermissionRequest = nil
             lastUserMessage = reason
         }
 
@@ -1397,8 +1399,10 @@ public final class BrowserStore: ObservableObject {
             shouldPersist = false
         }
 
-        pendingSitePermissionRequest = nil
         let evaluation = sitePermissionPolicy.evaluation(for: decision, kind: request.kind)
+        let resolutionHandler = pendingSitePermissionResolution
+        pendingSitePermissionRequest = nil
+        pendingSitePermissionResolution = nil
         switch evaluation {
         case .allow:
             lastUserMessage = "\(request.kind.displayName.capitalized) allowed for \(request.origin.displayString)."
@@ -1410,11 +1414,21 @@ public final class BrowserStore: ObservableObject {
         if shouldPersist {
             persistSession(date: date)
         }
+        resolutionHandler?(evaluation)
         return evaluation
     }
 
     public func cancelPendingSitePermissionRequest() {
+        guard let request = pendingSitePermissionRequest else {
+            pendingSitePermissionResolution = nil
+            return
+        }
+
+        let resolutionHandler = pendingSitePermissionResolution
         pendingSitePermissionRequest = nil
+        pendingSitePermissionResolution = nil
+        lastUserMessage = nil
+        resolutionHandler?(sitePermissionPolicy.evaluation(for: .deny, kind: request.kind))
     }
 
     public func sitePermissionDecision(

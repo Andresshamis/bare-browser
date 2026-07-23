@@ -27,7 +27,7 @@ final class WebViewHostHTTPFallbackTests: XCTestCase {
                 onSecurityMessage: { _ in },
                 onURLConfirmationRequired: { _, _, _ in },
                 onDownloadConfirmationRequired: { _, completion in completion(nil) },
-                onSitePermissionRequest: { _, _ in .deny(reason: "Test denies site permission requests.") }
+                onSitePermissionRequest: { _, _, _ in .deny(reason: "Test denies site permission requests.") }
             ),
             requestedURL: httpsURL,
             pendingHTTPFallbackURL: httpURL,
@@ -63,7 +63,7 @@ final class WebViewHostHTTPFallbackTests: XCTestCase {
                 onSecurityMessage: { _ in },
                 onURLConfirmationRequired: { _, _, _ in },
                 onDownloadConfirmationRequired: { _, completion in completion(nil) },
-                onSitePermissionRequest: { _, _ in .deny(reason: "Test denies site permission requests.") }
+                onSitePermissionRequest: { _, _, _ in .deny(reason: "Test denies site permission requests.") }
             ),
             requestedURL: nil,
             pendingHTTPFallbackURL: nil,

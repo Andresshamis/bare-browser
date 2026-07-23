@@ -1770,6 +1770,48 @@ final class BrowserStoreTests: XCTestCase {
         )
     }
 
+    func testResolvingSitePermissionContinuesThePendingWebKitRequest() throws {
+        let store = BrowserStore()
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let origin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://microphone.example")!))
+        var resolutions: [SitePermissionPolicy.Evaluation] = []
+
+        let result = store.requestSitePermission(
+            kind: .microphone,
+            origin: origin,
+            profileID: profileID,
+            resolutionHandler: { resolutions.append($0) }
+        )
+
+        XCTAssertEqual(result, .ask)
+        XCTAssertTrue(resolutions.isEmpty)
+
+        _ = store.resolvePendingSitePermission(
+            .allow,
+            requestID: try XCTUnwrap(store.pendingSitePermissionRequest?.id)
+        )
+
+        XCTAssertEqual(resolutions, [.allow])
+    }
+
+    func testDismissingSitePermissionDeniesThePendingWebKitRequest() throws {
+        let store = BrowserStore()
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let origin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://microphone.example")!))
+        var resolutions: [SitePermissionPolicy.Evaluation] = []
+        _ = store.requestSitePermission(
+            kind: .microphone,
+            origin: origin,
+            profileID: profileID,
+            resolutionHandler: { resolutions.append($0) }
+        )
+
+        store.cancelPendingSitePermissionRequest()
+
+        XCTAssertNil(store.pendingSitePermissionRequest)
+        XCTAssertEqual(resolutions, [.deny(reason: "Microphone is blocked for this site.")])
+    }
+
     func testRestoredSitePermissionSettingsAreLoadedFromSnapshot() throws {
         var snapshot = SessionSnapshotFactory.initial(date: Date(timeIntervalSince1970: 11))
         let profileID = try XCTUnwrap(snapshot.profiles.first?.id)
