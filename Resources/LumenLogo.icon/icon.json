@@ -23,6 +23,8 @@
           ]
         },
         {
+          "fill" : "none",
+          "glass" : false,
           "image-name" : "LumenLight.png",
           "name" : "LumenLight"
         }
