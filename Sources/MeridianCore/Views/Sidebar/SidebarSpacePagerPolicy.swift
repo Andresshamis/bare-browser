@@ -61,6 +61,11 @@ struct SidebarSpacePagerHorizontalGestureAccumulator: Equatable, Sendable {
     }
 }
 
+struct SidebarSpacePagerPhysicalGestureOrigin: Equatable, Sendable {
+    let scrollWasIdle: Bool
+    let anchoredPageIndex: Int?
+}
+
 /// Non-observable gesture geometry shared by SwiftUI's phase callbacks and the
 /// scroll-target policy. Live samples never invalidate the pager view tree.
 final class SidebarSpacePagerGeometryTracker {
@@ -103,9 +108,10 @@ final class SidebarSpacePagerGeometryTracker {
             acceptsDirectionalSnap = true
         case .animating:
             // Preserve the captured gesture origin through SwiftUI's alignment
-            // animation. Programmatic animations begin from idle and opt out.
+            // animation. Programmatic animations opt out of the active snap but
+            // retain their destination so a physical interruption can anchor to it.
             if oldPhase == .idle, activePhysicalGestureID == nil {
-                resetDirectionalSnap()
+                resetDirectionalSnap(preservingResolvedTarget: true)
             }
         case .idle:
             if activePhysicalGestureID == nil {
@@ -119,10 +125,16 @@ final class SidebarSpacePagerGeometryTracker {
         resetDirectionalSnap()
     }
 
-    func beginPhysicalGesture(id: UInt64) {
+    @discardableResult
+    func beginPhysicalGesture(id: UInt64) -> SidebarSpacePagerPhysicalGestureOrigin {
+        let origin = SidebarSpacePagerPhysicalGestureOrigin(
+            scrollWasIdle: scrollIsIdle,
+            anchoredPageIndex: resolvedTargetPageIndex
+        )
         activePhysicalGestureID = id
         creationPullLocksLastPage = false
         beginDirectionalSnap(sourcePageIndex: resolvedTargetPageIndex)
+        return origin
     }
 
     func endPhysicalGesture(id: UInt64) {
@@ -148,12 +160,20 @@ final class SidebarSpacePagerGeometryTracker {
         resolvedTargetPageIndex = pageIndex
     }
 
-    private func resetDirectionalSnap() {
+    func prepareForProgrammaticNavigation(to pageIndex: Int) {
+        activePhysicalGestureID = nil
+        resetDirectionalSnap()
+        resolvedTargetPageIndex = pageIndex
+    }
+
+    private func resetDirectionalSnap(preservingResolvedTarget: Bool = false) {
         acceptsDirectionalSnap = false
         gestureStartFractionalPageIndex = nil
         gestureSourcePageIndex = nil
         adjustedGestureDisplacementX = nil
-        resolvedTargetPageIndex = nil
+        if !preservingResolvedTarget {
+            resolvedTargetPageIndex = nil
+        }
         creationPullLocksLastPage = false
     }
 

@@ -364,26 +364,27 @@ final class SidebarSpacePagerScrollInputScalingView: NSView {
         suppressesCreationMomentum = false
         creationPullController?.returnToRest(animated: false)
 
-        let isSettledOnLastPage: Bool
+        // Use the same logical origin as normal paging. If this gesture
+        // interrupts an arrival animation, the previous resolved destination
+        // is authoritative even though the clip view has not reached it yet.
+        let gestureOrigin = geometryTracker?.beginPhysicalGesture(id: gestureID)
+        let canPullPastLastPage: Bool
         let currentOffsetX = configuredScrollView?.contentView.bounds.origin.x
-        if let currentOffsetX,
-           let lastPageOffsetX {
-            isSettledOnLastPage = SidebarSpaceCreationPullEligibility.canBegin(
+        if let gestureOrigin,
+           let currentOffsetX,
+           let lastPageOffsetX,
+           let lastPageIndex {
+            canPullPastLastPage = SidebarSpaceCreationPullEligibility.canBegin(
                 creationIsAvailable: creationIsAvailable,
-                scrollIsIdle: geometryTracker?.scrollIsIdle == true,
+                gestureOrigin: gestureOrigin,
                 currentOffsetX: currentOffsetX,
-                lastPageOffsetX: lastPageOffsetX
+                lastPageOffsetX: lastPageOffsetX,
+                lastPageIndex: lastPageIndex
             )
         } else {
-            isSettledOnLastPage = false
+            canPullPastLastPage = false
         }
-        creationSession.begin(canPullForward: isSettledOnLastPage)
-
-        // AppKit exposes a new physical trackpad gesture even when SwiftUI keeps
-        // the scroll phase in `decelerating`. Capture that boundary directly so
-        // a rapid follow-up swipe gets its own origin and advances from the
-        // previous gesture's resolved destination.
-        geometryTracker?.beginPhysicalGesture(id: gestureID)
+        creationSession.begin(canPullForward: canPullPastLastPage)
     }
 
     private func eventIsInsidePager(_ event: NSEvent, scrollView: NSScrollView) -> Bool {
@@ -440,12 +441,16 @@ final class SidebarSpacePagerScrollInputScalingView: NSView {
     }
 
     private var lastPageOffsetX: CGFloat? {
-        guard pageCount > 0,
+        guard let lastPageIndex,
               pageWidth.isFinite,
               pageWidth > 0 else {
             return nil
         }
-        return CGFloat(pageCount - 1) * pageWidth
+        return CGFloat(lastPageIndex) * pageWidth
+    }
+
+    private var lastPageIndex: Int? {
+        pageCount > 0 ? pageCount - 1 : nil
     }
 
     private func cancelCreationInteraction(animated: Bool) {
