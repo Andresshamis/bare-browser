@@ -526,7 +526,7 @@ enum BrowserPasswordCaptureScript {
             }
 
             accountPickerContainer = document.createElement("div");
-            accountPickerContainer.id = "bare-browser-password-account-picker";
+            accountPickerContainer.id = "lumen-browser-password-account-picker";
             accountPickerContainer.setAttribute("role", "listbox");
             accountPickerContainer.style.cssText = [
                 "all: initial",
@@ -3113,7 +3113,7 @@ struct NavigationFailureDiagnostics {
         }
 
         guard error.domain == NSURLErrorDomain else {
-            return "Navigation failed. Check Bare Browser logs for details."
+            return "Navigation failed. Check Lumen Browser logs for details."
         }
 
         switch error.code {
@@ -3136,7 +3136,7 @@ struct NavigationFailureDiagnostics {
              NSURLErrorClientCertificateRequired:
             return "Navigation failed: secure connection could not be verified."
         default:
-            return "Navigation failed. Check Bare Browser logs for details."
+            return "Navigation failed. Check Lumen Browser logs for details."
         }
     }
 

@@ -47,7 +47,7 @@ final class DownloadSafetyPolicyTests: XCTestCase {
             date: Date(timeIntervalSince1970: 16)
         )
 
-        XCTAssertEqual(value, "0083;10;Bare Browser;https://example.com:8443")
+        XCTAssertEqual(value, "0083;10;Lumen Browser;https://example.com:8443")
     }
 
     func testBuildsSanitizedDownloadSourceMetadata() {
@@ -79,7 +79,7 @@ final class DownloadSafetyPolicyTests: XCTestCase {
             date: Date(timeIntervalSince1970: 16)
         )
 
-        XCTAssertEqual(value, "0083;10;Bare Browser;https://example.com")
+        XCTAssertEqual(value, "0083;10;Lumen Browser;https://example.com")
         XCTAssertFalse(value.contains("user"))
         XCTAssertFalse(value.contains("password"))
         XCTAssertFalse(value.contains("private"))
@@ -96,7 +96,7 @@ final class DownloadSafetyPolicyTests: XCTestCase {
             date: Date(timeIntervalSince1970: 16)
         )
 
-        XCTAssertEqual(value, "0083;10;Bare Browser;")
+        XCTAssertEqual(value, "0083;10;Lumen Browser;")
     }
 
     private func makeTemporaryDirectory() throws -> URL {

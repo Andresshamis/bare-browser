@@ -718,6 +718,47 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         XCTAssertEqual(addressState.progress, 0)
     }
 
+    func testCreationAffordanceAlwaysFitsInsideRevealedGap() {
+        for displayedDistance in stride(
+            from: CGFloat(0),
+            through: SidebarSpacePagerMetrics.creationRailMaximumWidth,
+            by: 0.5
+        ) {
+            let revealScale = SidebarSpaceCreationAffordanceLayout.revealScale(
+                forDisplayedDistance: displayedDistance
+            )
+            let availableWidth = max(
+                displayedDistance - SidebarSpacePagerMetrics.creationRailTrailingPadding,
+                0
+            )
+            let scaledDiameter =
+                SidebarSpacePagerMetrics.creationAffordanceDiameter * revealScale
+
+            XCTAssertGreaterThanOrEqual(revealScale, 0)
+            XCTAssertLessThanOrEqual(revealScale, 1)
+            XCTAssertLessThanOrEqual(scaledDiameter, availableWidth + 0.0001)
+        }
+    }
+
+    func testCreationAffordanceBecomesFullyVisibleWithoutNonfiniteLayout() {
+        let fullyVisibleDistance =
+            SidebarSpacePagerMetrics.creationRailTrailingPadding
+            + SidebarSpacePagerMetrics.creationAffordanceDiameter
+
+        XCTAssertEqual(
+            SidebarSpaceCreationAffordanceLayout.revealScale(
+                forDisplayedDistance: fullyVisibleDistance
+            ),
+            1
+        )
+        XCTAssertEqual(
+            SidebarSpaceCreationAffordanceLayout.revealScale(
+                forDisplayedDistance: .nan
+            ),
+            0
+        )
+    }
+
     func testPagerUsesAdjustedGestureDirectionWhenDisplayedMovementIsSubthreshold() {
         XCTAssertEqual(
             SidebarSpacePagerSnap.targetPageIndex(

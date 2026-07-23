@@ -40,6 +40,6 @@ final class NavigationFailureDiagnosticsTests: XCTestCase {
 
         let diagnostics = NavigationFailureDiagnostics(error: error)
 
-        XCTAssertEqual(diagnostics.userMessage, "Navigation failed. Check Bare Browser logs for details.")
+        XCTAssertEqual(diagnostics.userMessage, "Navigation failed. Check Lumen Browser logs for details.")
     }
 }

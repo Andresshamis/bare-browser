@@ -2590,7 +2590,7 @@ public final class BrowserStore: ObservableObject {
                 fallback: SessionSnapshotFactory.initial(date: date)
             )
         } catch {
-            lastUserMessage = "Session changes could not be saved. Bare Browser will keep browsing state in memory for this run."
+            lastUserMessage = "Session changes could not be saved. Lumen Browser will keep browsing state in memory for this run."
         }
     }
 
@@ -2602,7 +2602,7 @@ public final class BrowserStore: ObservableObject {
         do {
             try localHistoryPersistence.saveHistory(localHistoryStore.entries, profiles: profiles)
         } catch {
-            lastUserMessage = "History changes could not be saved. Bare Browser will keep history in memory for this run."
+            lastUserMessage = "History changes could not be saved. Lumen Browser will keep history in memory for this run."
         }
     }
 

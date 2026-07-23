@@ -1,6 +1,6 @@
-# Bare Browser Architecture
+# Lumen Browser Architecture
 
-Bare Browser is a native macOS, SwiftUI-first, WebKit-based browser. The early codebase is package-first so model, security, command routing, and WebKit boundary code can build and test before release packaging is added.
+Lumen Browser is a native macOS, SwiftUI-first, WebKit-based browser. The early codebase is package-first so model, security, command routing, and WebKit boundary code can build and test before release packaging is added.
 
 ## Targets
 

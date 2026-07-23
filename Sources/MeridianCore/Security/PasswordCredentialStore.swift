@@ -253,12 +253,15 @@ public extension PasswordCredentialPersisting {
 }
 
 public final class KeychainPasswordCredentialStore: PasswordCredentialPersisting {
-    public static let defaultServicePrefix = "BareBrowser.WebsitePasswords"
-    public static let legacyServicePrefixes = ["MeridianBrowser.WebsitePasswords"]
+    public static let defaultServicePrefix = "LumenBrowser.WebsitePasswords"
+    public static let legacyServicePrefixes = [
+        "BareBrowser.WebsitePasswords",
+        "MeridianBrowser.WebsitePasswords"
+    ]
 
     private let servicePrefix: String
     private let legacyServicePrefixes: [String]
-    private let keychainLabelPrefix = "Bare Browser password for "
+    private let keychainLabelPrefix = "Lumen Browser password for "
     private let keychainDescription = "Website password"
 
     public init(

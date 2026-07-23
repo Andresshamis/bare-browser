@@ -112,9 +112,9 @@ public struct URLConfirmationRequest: Identifiable, Equatable, Sendable {
     public var confirmationMessage: String {
         switch kind {
         case .externalApplication:
-            return "Bare Browser will hand this link to another app only if you approve.\n\nLink: \(displayURL)\nSource: \(sourceDescription)"
+            return "Lumen Browser will hand this link to another app only if you approve.\n\nLink: \(displayURL)\nSource: \(sourceDescription)"
         case .localFile:
-            return "Bare Browser blocked local file access until you approve opening it outside the web view.\n\nFile: \(displayURL)\nSource: \(sourceDescription)"
+            return "Lumen Browser blocked local file access until you approve opening it outside the web view.\n\nFile: \(displayURL)\nSource: \(sourceDescription)"
         }
     }
 

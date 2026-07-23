@@ -1820,12 +1820,12 @@ final class BrowserStoreTests: XCTestCase {
 
         XCTAssertEqual(
             result,
-            .deny(reason: "Notifications permissions are not supported by Bare Browser on this WebKit version.")
+            .deny(reason: "Notifications permissions are not supported by Lumen Browser on this WebKit version.")
         )
         XCTAssertNil(store.pendingSitePermissionRequest)
         XCTAssertEqual(
             store.lastUserMessage,
-            "Notifications permissions are not supported by Bare Browser on this WebKit version."
+            "Notifications permissions are not supported by Lumen Browser on this WebKit version."
         )
     }
 
@@ -1885,7 +1885,7 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(store.setSitePermissionDecision(.allow, for: .notifications, origin: origin, profileID: profileID))
         XCTAssertEqual(
             store.lastUserMessage,
-            "Notifications permissions are not supported by Bare Browser on this WebKit version."
+            "Notifications permissions are not supported by Lumen Browser on this WebKit version."
         )
 
         XCTAssertFalse(store.setSitePermissionDecision(.allow, for: .autoplay, origin: origin, profileID: profileID))

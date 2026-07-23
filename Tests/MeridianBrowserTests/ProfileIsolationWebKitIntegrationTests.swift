@@ -310,7 +310,7 @@ private final class ProfileFixtureNavigationWaiter: NSObject, WKNavigationDelega
 
 private final class LoopbackProfileFixtureServer: @unchecked Sendable {
     private let listener: NWListener
-    private let queue = DispatchQueue(label: "BareBrowser.ProfileIsolationFixture")
+    private let queue = DispatchQueue(label: "LumenBrowser.ProfileIsolationFixture")
     private var startContinuation: CheckedContinuation<URL, Error>?
 
     init() throws {

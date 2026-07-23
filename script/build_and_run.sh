@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PRODUCT_NAME="Bare Browser"
+PRODUCT_NAME="Lumen Browser"
 MODE="${1:-run}"
 SWIFT_PRODUCT_NAME="MeridianBrowser"
-LEGACY_EXECUTABLE_NAME="MeridianBrowser"
+LEGACY_EXECUTABLE_NAMES=("Bare Browser" "MeridianBrowser")
 EXECUTABLE_NAME="$PRODUCT_NAME"
+# Application identity is compatibility-stable across the public rebrand so
+# existing WebKit data stores, permissions, preferences, and Keychain ACLs survive.
 BUNDLE_ID="app.barebrowser.BareBrowser"
 MIN_SYSTEM_VERSION="26.0"
 SWIFT_CONFIGURATION="debug"
-APP_ICON_NAME="MammothLogo"
+APP_ICON_NAME="LumenLogo"
 APP_ICON_FILE="$APP_ICON_NAME.icon"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,10 +22,14 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$EXECUTABLE_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
-BUILD_STAMP="$DIST_DIR/.BareBrowserBuildConfiguration"
+BUILD_STAMP="$DIST_DIR/.LumenBrowserBuildConfiguration"
+LEGACY_APP_BUNDLE="$DIST_DIR/Bare Browser.app"
+LEGACY_BUILD_STAMP="$DIST_DIR/.BareBrowserBuildConfiguration"
 APP_ICON_SOURCE="$ROOT_DIR/Resources/$APP_ICON_FILE"
 APP_ICON_PARTIAL_PLIST="$DIST_DIR/AppIconPartialInfo.plist"
 APP_ICON_ACTOOL_OUTPUT="$DIST_DIR/AppIconActoolOutput.plist"
+# Keep the established local certificate for the same continuity guarantees as
+# the stable bundle identifier. This is a development implementation detail.
 DEV_SIGNING_IDENTITY="Bare Browser Local Development"
 DEV_SIGNING_DIR="$DIST_DIR/Signing"
 DEV_SIGNING_KEYCHAIN="$DEV_SIGNING_DIR/BareBrowserLocalDevelopment.keychain-db"
@@ -45,7 +51,7 @@ app_bundle_is_current() {
   local source_paths=("$ROOT_DIR/Package.swift" "$ROOT_DIR/Sources" "$ROOT_DIR/Resources" "$ROOT_DIR/script/build_and_run.sh")
   local newest_source
 
-  [[ "${BARE_BROWSER_FORCE_BUILD:-0}" != "1" ]] || return 1
+  [[ "${LUMEN_BROWSER_FORCE_BUILD:-0}" != "1" ]] || return 1
   [[ -x "$APP_BINARY" && -f "$INFO_PLIST" && -f "$BUILD_STAMP" ]] || return 1
   [[ "$(cat "$BUILD_STAMP")" == "$(build_stamp_value)" ]] || return 1
   [[ -f "$ROOT_DIR/Package.resolved" ]] && source_paths+=("$ROOT_DIR/Package.resolved")
@@ -57,7 +63,7 @@ app_bundle_is_current() {
 reuse_current_app_if_possible() {
   app_bundle_is_current || return 1
 
-  echo "Reusing current signed app bundle. Set BARE_BROWSER_FORCE_BUILD=1 to rebuild."
+  echo "Reusing current signed app bundle. Set LUMEN_BROWSER_FORCE_BUILD=1 to rebuild."
   case "$MODE" in
     run|--release|release)
       /usr/bin/open -n "$APP_BUNDLE"
@@ -87,9 +93,11 @@ reuse_current_app_if_possible() {
 }
 
 pkill -x "$EXECUTABLE_NAME" >/dev/null 2>&1 || true
-if [[ "$LEGACY_EXECUTABLE_NAME" != "$EXECUTABLE_NAME" ]]; then
-  pkill -x "$LEGACY_EXECUTABLE_NAME" >/dev/null 2>&1 || true
-fi
+for legacy_executable_name in "${LEGACY_EXECUTABLE_NAMES[@]}"; do
+  [[ "$legacy_executable_name" == "$EXECUTABLE_NAME" ]] \
+    || pkill -x "$legacy_executable_name" >/dev/null 2>&1 \
+    || true
+done
 
 if reuse_current_app_if_possible; then
   exit 0
@@ -98,7 +106,8 @@ fi
 swift build -c "$SWIFT_CONFIGURATION"
 BUILD_BINARY="$(swift build -c "$SWIFT_CONFIGURATION" --show-bin-path)/$SWIFT_PRODUCT_NAME"
 
-rm -rf "$APP_BUNDLE"
+rm -rf "$APP_BUNDLE" "$LEGACY_APP_BUNDLE"
+rm -f "$LEGACY_BUILD_STAMP"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"
 cp "$BUILD_BINARY" "$APP_BINARY"
 chmod +x "$APP_BINARY"
@@ -150,13 +159,13 @@ cat >"$INFO_PLIST" <<PLIST
         <string>public.data</string>
       </array>
       <key>UTTypeDescription</key>
-      <string>Bare Browser Sidebar Space Identifier</string>
+      <string>Lumen Browser Sidebar Space Identifier</string>
       <key>UTTypeIdentifier</key>
-      <string>com.meridianbrowser.sidebar-space-id</string>
+      <string>app.lumenbrowser.sidebar-space-id</string>
       <key>UTTypeTagSpecification</key>
       <dict>
         <key>public.mime-type</key>
-        <string>application/x-bare-browser-sidebar-space-id</string>
+        <string>application/x-lumen-browser-sidebar-space-id</string>
       </dict>
     </dict>
   </array>
@@ -317,7 +326,7 @@ sign_with_local_identity() {
 }
 
 sign_app() {
-  local identity="${BARE_BROWSER_CODESIGN_IDENTITY:-}"
+  local identity="${LUMEN_BROWSER_CODESIGN_IDENTITY:-}"
 
   if [[ -z "$identity" ]]; then
     identity="$(

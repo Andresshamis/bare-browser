@@ -13,7 +13,7 @@ final class PasswordAutofillScriptTests: XCTestCase {
     func testAutofillInstallsVisibleAccountPickerBeforePasswordValueCheck() throws {
         let source = BrowserPasswordCaptureScript.source
 
-        XCTAssertTrue(source.contains("bare-browser-password-account-picker"))
+        XCTAssertTrue(source.contains("lumen-browser-password-account-picker"))
         XCTAssertTrue(source.contains("showAccountPicker"))
         XCTAssertTrue(source.contains("input.addEventListener(\"focus\", showAccountPickerForInput, true);"))
         XCTAssertTrue(source.contains("backdrop-filter: blur(42px) saturate(1.95) contrast(1.08)"))

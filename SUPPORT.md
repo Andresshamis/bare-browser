@@ -1,6 +1,6 @@
 # Support
 
-Bare Browser is an early-stage open-source project, not a supported release product.
+Lumen Browser is an early-stage open-source project, not a supported release product.
 
 Use GitHub issues for reproducible bugs, feature requests, documentation problems, and build failures. Include your macOS, Xcode, and Swift versions when reporting build or runtime issues.
 

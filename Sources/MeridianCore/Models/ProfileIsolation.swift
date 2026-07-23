@@ -82,9 +82,9 @@ public struct SessionIntegrityRepairReport: Codable, Equatable, Sendable {
             return nil
         }
         if duplicateWebsiteDataStoresIsolated > 0 {
-            return "Bare Browser separated profiles that were sharing website data. Some affected profiles were signed out for safety."
+            return "Lumen Browser separated profiles that were sharing website data. Some affected profiles were signed out for safety."
         }
-        return "Bare Browser repaired saved profile and space assignments before restoring this session."
+        return "Lumen Browser repaired saved profile and space assignments before restoring this session."
     }
 }
 
@@ -166,7 +166,7 @@ public struct ProfileIsolationDiagnostics: Equatable, Sendable {
         } ?? "none"
 
         return """
-        Bare Browser Profile Isolation Diagnostics
+        Lumen Browser Profile Isolation Diagnostics
         Generated: \(generatedAt.formatted(.iso8601))
         App: \(version) (\(build))
         OS: \(os)

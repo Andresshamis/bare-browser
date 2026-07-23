@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve Bare Browser.
+Thanks for helping improve Lumen Browser.
 
 ## Development Setup
 
@@ -32,7 +32,7 @@ To launch the app as a foreground macOS bundle:
 - `Tests/MeridianBrowserTests`: unit tests.
 - `Docs`: architecture, threat model, release checklist, test plan, and WebKit limitations.
 
-The public product name is Bare Browser. The Swift package and modules still use the historical `Meridian*` names.
+The public product name is Lumen Browser. The Swift package and modules still use the historical `Meridian*` names.
 
 ## Pull Requests
 

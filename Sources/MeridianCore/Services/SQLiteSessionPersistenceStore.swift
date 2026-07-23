@@ -15,7 +15,7 @@ public enum SessionPersistenceRecoveryReason: Equatable, Sendable {
         case .repairedSnapshot:
             return nil
         case .unreadableStore, .corruptPayload, .unsupportedSchema:
-            return "Bare Browser restored a clean browser session because saved session state was unavailable."
+            return "Lumen Browser restored a clean browser session because saved session state was unavailable."
         }
     }
 }
@@ -47,8 +47,11 @@ public final class SQLiteSessionPersistenceStore: SessionSnapshotPersisting {
     public static let currentSchemaVersion = 1
 
     private static let recordID = "main"
-    private static let supportDirectoryName = "Bare Browser"
-    private static let legacySupportDirectoryName = "Meridian Browser"
+    private static let supportDirectoryName = "Lumen Browser"
+    private static let legacySupportDirectoryNames = [
+        "Bare Browser",
+        "Meridian Browser"
+    ]
     private static let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     public let databaseURL: URL
@@ -91,11 +94,17 @@ public final class SQLiteSessionPersistenceStore: SessionSnapshotPersisting {
             return currentURL
         }
 
-        let legacyURL = applicationSupport
-            .appendingPathComponent(legacySupportDirectoryName, isDirectory: true)
-            .appendingPathComponent(databaseFilename, isDirectory: false)
+        for legacySupportDirectoryName in legacySupportDirectoryNames {
+            let legacyURL = applicationSupport
+                .appendingPathComponent(legacySupportDirectoryName, isDirectory: true)
+                .appendingPathComponent(databaseFilename, isDirectory: false)
 
-        return fileManager.fileExists(atPath: legacyURL.path) ? legacyURL : currentURL
+            if fileManager.fileExists(atPath: legacyURL.path) {
+                return legacyURL
+            }
+        }
+
+        return currentURL
     }
 
     public func loadSnapshot(

@@ -1,6 +1,6 @@
 # Code of Conduct
 
-Bare Browser aims to be a practical, respectful open-source project.
+Lumen Browser aims to be a practical, respectful open-source project.
 
 ## Expected Behavior
 
