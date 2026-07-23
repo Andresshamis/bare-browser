@@ -292,4 +292,3 @@ struct SidebarSpacePageSnapshotBuilder {
         }
     }
 }
-
