@@ -1,6 +1,6 @@
-# Bare Browser
+# Lumen Browser
 
-Bare Browser is an open-source, native macOS browser project built with SwiftUI
+Lumen Browser is an open-source, native macOS browser project built with SwiftUI
 and WebKit.
 
 It exists because a certain kind of browser user got left hanging.
@@ -18,7 +18,7 @@ browser that is open source, sidebar-first, WebKit-based, SwiftUI/AppKit-native,
 and shaped like it actually belongs on macOS instead of feeling like a
 cross-platform skin.
 
-Bare Browser is the reaction to that gap.
+Lumen Browser is the reaction to that gap.
 
 It is not an Arc clone. It uses original branding, assets, text, and
 implementation. The goal is to keep the part that mattered: spaces,
@@ -72,7 +72,7 @@ history results.
 
 ## Repository Notes
 
-The public product name is Bare Browser. The Swift package, module names, and
+The public product name is Lumen Browser. The Swift package, module names, and
 some internal symbols still use the historical `Meridian*` naming.
 
 First-party app assets live under `Resources/`. Do not add third-party assets
@@ -87,7 +87,7 @@ swift test
 ```
 
 `script/build_and_run.sh` stages the SwiftPM GUI executable into
-`dist/Bare Browser.app` before launching it, which gives the app foreground
+`dist/Lumen Browser.app` before launching it, which gives the app foreground
 macOS bundle behavior that `swift run MeridianBrowser` does not reliably provide.
 It also supports `--debug`, `--logs`, `--subsystem-logs`, and `--verify`.
 
@@ -100,15 +100,15 @@ the Xcode app/UI test host and owner-approved signing setup are available.
 
 ## Privacy And Diagnostics
 
-Bare Browser does not collect product analytics, browsing telemetry, page contents,
+Lumen Browser does not collect product analytics, browsing telemetry, page contents,
 URLs, cookies, tokens, or private browsing data. Website passwords are stored only
 after explicit user confirmation, only for persistent profiles, and only in the
 local macOS Keychain with this-device-only accessibility. The current app has no
 analytics SDK, tracking endpoint, or network reporting path.
 
 Developer diagnostics are local only. `script/build_and_run.sh --logs` streams
-local OS log entries for the Bare Browser process, and `--subsystem-logs` streams
-local OS log entries for Bare Browser's bundle subsystem. These modes do not send
+local OS log entries for the Lumen Browser process, and `--subsystem-logs` streams
+local OS log entries for Lumen Browser's bundle subsystem. These modes do not send
 diagnostic data off the machine.
 
 ## Documentation
@@ -129,4 +129,4 @@ diagnostic data off the machine.
 
 ## License
 
-Bare Browser is released under the MIT License. See [LICENSE](LICENSE).
+Lumen Browser is released under the MIT License. See [LICENSE](LICENSE).

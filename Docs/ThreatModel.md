@@ -23,7 +23,7 @@
 - URL navigation is centralized in `URLSecurityPolicy`.
 - Unsafe script/data schemes are blocked.
 - External app and `file://` links create a pending native confirmation before any external handoff, retaining the target URL for approval while reducing source page context to a sanitized host or scheme label.
-- Non-local HTTP main-frame navigations are HTTPS-first where practical: explicit opens and WebKit main-frame HTTP actions first attempt the HTTPS equivalent, while localhost and loopback URLs remain HTTP for local development. If a tracked HTTPS upgrade attempt falls back to HTTP, Bare Browser shows the generic insecure-transport status message without embedding the full URL.
+- Non-local HTTP main-frame navigations are HTTPS-first where practical: explicit opens and WebKit main-frame HTTP actions first attempt the HTTPS equivalent, while localhost and loopback URLs remain HTTP for local development. If a tracked HTTPS upgrade attempt falls back to HTTP, Lumen Browser shows the generic insecure-transport status message without embedding the full URL.
 - TLS certificate failures are not silently downgraded to HTTP fallback.
 - WebKit downloads are routed through a native save-location confirmation before bytes are written.
 - The download policy sanitizes candidate filenames, avoids existing destination paths, blocks installer-like packages, and requires explicit confirmation for executable-like extensions.
@@ -39,11 +39,11 @@
 - Pop-up/new-window requests and WebKit media-capture permission callbacks are routed through store state before any grant; unsupported permission kinds are denied with an explicit message.
 - Autoplay is configured to require a user gesture by default.
 - Password form submissions can create a native save prompt for HTTPS origins and loopback HTTP development origins. Accepted credentials are scoped to the current persistent profile and stored in the local macOS Keychain with this-device-only accessibility; private profiles do not prompt or persist passwords.
-- Profile isolation covers website sessions and Bare Browser-managed Keychain credentials. macOS/WebKit Password AutoFill suggestions are device-wide system behavior and are not claimed as profile-isolated; Bare Browser does not use fragile webpage-specific suppression to hide them.
+- Profile isolation covers website sessions and Lumen Browser-managed Keychain credentials. macOS/WebKit Password AutoFill suggestions are device-wide system behavior and are not claimed as profile-isolated; Lumen Browser does not use fragile webpage-specific suppression to hide them.
 - The command bar returns open-tab matches only from the active profile. The intentional all-profile Activity view labels profile ownership and selects a matching space before navigation.
 - App Sandbox entitlement file includes only sandbox and outbound network client entitlement.
 - A small `WKContentRuleList` blocks common tracker/ad endpoints without request interception hacks.
-- Bare Browser does not collect product analytics, browsing telemetry, page contents, URLs, cookies, tokens, or private browsing data; website passwords are stored only after explicit local confirmation, and developer log modes stream only local OS logs.
+- Lumen Browser does not collect product analytics, browsing telemetry, page contents, URLs, cookies, tokens, or private browsing data; website passwords are stored only after explicit local confirmation, and developer log modes stream only local OS logs.
 
 ## Required Follow-Up
 

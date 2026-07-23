@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible Bare Browser bug.
+description: Report a reproducible Lumen Browser bug.
 title: "[Bug]: "
 labels:
   - bug
@@ -21,7 +21,7 @@ body:
       label: Steps to Reproduce
       description: List the smallest reliable reproduction steps.
       placeholder: |
-        1. Open Bare Browser
+        1. Open Lumen Browser
         2. ...
         3. ...
     validations:

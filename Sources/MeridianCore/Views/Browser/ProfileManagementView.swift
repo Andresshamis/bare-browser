@@ -68,7 +68,7 @@ struct ProfileManagementView: View {
             Divider()
 
             HStack {
-                Text("Profiles keep website sessions, history, Bare Browser-managed passwords, and supported site permissions separate. macOS AutoFill suggestions are device-wide.")
+                Text("Profiles keep website sessions, history, Lumen Browser-managed passwords, and supported site permissions separate. macOS AutoFill suggestions are device-wide.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

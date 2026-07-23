@@ -108,7 +108,7 @@ final class SessionPersistenceBoundaryTests: XCTestCase {
         let persistedInterrupted = try XCTUnwrap(persisted.downloads.first { $0.id == interruptedDownload.id })
         XCTAssertEqual(persistedInterrupted.state, .failed)
         XCTAssertEqual(persistedInterrupted.completedAt, Date(timeIntervalSince1970: 10))
-        XCTAssertEqual(persistedInterrupted.failureMessage, "Download was interrupted when Bare Browser closed.")
+        XCTAssertEqual(persistedInterrupted.failureMessage, "Download was interrupted when Lumen Browser closed.")
         XCTAssertEqual(persisted.sitePermissionSettings.count, 1)
         XCTAssertEqual(persisted.sitePermissionSettings.first?.origin.serializedOrigin, "https://camera.example")
         XCTAssertEqual(persisted.sitePermissionSettings.first?.profileID, publicProfileID)

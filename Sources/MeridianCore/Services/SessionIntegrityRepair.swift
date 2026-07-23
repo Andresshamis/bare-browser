@@ -109,7 +109,7 @@ enum SessionIntegrityRepair {
             repaired.state = .failed
             repaired.updatedAt = snapshot.capturedAt
             repaired.completedAt = snapshot.capturedAt
-            repaired.failureMessage = "Download was interrupted when Bare Browser closed."
+            repaired.failureMessage = "Download was interrupted when Lumen Browser closed."
             return repaired
         }
 

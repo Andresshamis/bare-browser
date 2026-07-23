@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest an improvement for Bare Browser.
+description: Suggest an improvement for Lumen Browser.
 title: "[Feature]: "
 labels:
   - enhancement
@@ -15,7 +15,7 @@ body:
     id: proposal
     attributes:
       label: Proposal
-      description: What should Bare Browser do?
+      description: What should Lumen Browser do?
     validations:
       required: true
   - type: textarea

@@ -115,7 +115,7 @@ public struct BrowserWindowView: View {
                 }
                 Button("OK", role: .cancel) {}
             } message: {
-                Text(store.profileIsolationRepairReport.userMessage ?? "Bare Browser repaired saved profile assignments before browsing began.")
+                Text(store.profileIsolationRepairReport.userMessage ?? "Lumen Browser repaired saved profile assignments before browsing began.")
             }
             .overlay {
                 if store.isCommandBarPresented {
@@ -744,7 +744,7 @@ private struct PasswordSavePromptLayer: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Save this password?")
                                 .font(.title3.weight(.semibold))
-                            Text("Store this sign-in locally in your macOS Keychain for autofill in Bare Browser.")
+                            Text("Store this sign-in locally in your macOS Keychain for autofill in Lumen Browser.")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -1855,7 +1855,7 @@ private struct WindowChromeController: NSViewRepresentable {
 
 private extension NSWindow {
     func applyMeridianChrome() {
-        title = "Bare Browser"
+        title = "Lumen Browser"
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         titlebarSeparatorStyle = .none

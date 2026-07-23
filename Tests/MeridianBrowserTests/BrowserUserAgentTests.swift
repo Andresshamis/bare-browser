@@ -11,7 +11,7 @@ final class BrowserUserAgentTests: XCTestCase {
         XCTAssertTrue(userAgent.contains("AppleWebKit/605.1.15"))
         XCTAssertTrue(userAgent.contains("Version/26.4"))
         XCTAssertTrue(userAgent.hasSuffix("Safari/605.1.15"))
-        XCTAssertFalse(userAgent.contains("Bare Browser"))
+        XCTAssertFalse(userAgent.contains("Lumen Browser"))
         XCTAssertFalse(userAgent.contains("MeridianBrowser"))
     }
 
