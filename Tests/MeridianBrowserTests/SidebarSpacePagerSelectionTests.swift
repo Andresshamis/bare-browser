@@ -586,21 +586,33 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
     func testCreationPullBeginsOnlyFromSettledLastPage() {
         XCTAssertTrue(SidebarSpaceCreationPullEligibility.canBegin(
             creationIsAvailable: true,
-            scrollIsIdle: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: true,
+                anchoredPageIndex: nil
+            ),
             currentOffsetX: 800,
-            lastPageOffsetX: 800
+            lastPageOffsetX: 800,
+            lastPageIndex: 4
         ))
         XCTAssertFalse(SidebarSpaceCreationPullEligibility.canBegin(
             creationIsAvailable: true,
-            scrollIsIdle: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: true,
+                anchoredPageIndex: nil
+            ),
             currentOffsetX: 600,
-            lastPageOffsetX: 800
+            lastPageOffsetX: 800,
+            lastPageIndex: 4
         ))
         XCTAssertFalse(SidebarSpaceCreationPullEligibility.canBegin(
             creationIsAvailable: true,
-            scrollIsIdle: false,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: false,
+                anchoredPageIndex: nil
+            ),
             currentOffsetX: 800,
-            lastPageOffsetX: 800
+            lastPageOffsetX: 800,
+            lastPageIndex: 4
         ))
     }
 

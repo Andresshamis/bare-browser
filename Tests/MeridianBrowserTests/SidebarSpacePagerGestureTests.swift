@@ -247,18 +247,98 @@ final class SidebarSpacePagerGestureTests: XCTestCase {
         XCTAssertNil(tracker.activePhysicalGestureID)
     }
 
+    func testCreationCanInterruptNaturalArrivalAtFinalPage() throws {
+        let tracker = SidebarSpacePagerGeometryTracker()
+        tracker.visibleFractionalPageIndex = 1
+        tracker.beginPhysicalGesture(id: 1)
+        tracker.transition(from: .idle, to: .interacting)
+        tracker.recordResolvedTargetPageIndex(2)
+        tracker.transition(from: .interacting, to: .animating)
+        tracker.endPhysicalGesture(id: 1)
+
+        tracker.visibleFractionalPageIndex = 1.35
+        let origin = tracker.beginPhysicalGesture(id: 2)
+
+        XCTAssertFalse(origin.scrollWasIdle)
+        XCTAssertEqual(origin.anchoredPageIndex, 2)
+        XCTAssertTrue(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: origin,
+            currentOffsetX: 405,
+            lastPageOffsetX: 600,
+            lastPageIndex: 2
+        ))
+
+        let forwardInput = try XCTUnwrap(SidebarSpacePagerHorizontalInputSample(
+            scrollingDeltaX: -3
+        ))
+        var session = SidebarSpaceCreationGestureSession()
+        session.begin(canPullForward: true)
+        guard case .pulling = session.routeAdjustedDelta(
+            forwardInput.adjustedDisplacementX,
+            pageWidth: 300
+        ) else {
+            return XCTFail("Forward interruption at the final target must create")
+        }
+    }
+
+    func testCreationCanInterruptProgrammaticArrivalAtNewFinalPage() {
+        let tracker = SidebarSpacePagerGeometryTracker()
+        tracker.visibleFractionalPageIndex = 2
+        tracker.prepareForProgrammaticNavigation(to: 3)
+        tracker.transition(from: .idle, to: .animating)
+
+        tracker.visibleFractionalPageIndex = 2.2
+        let origin = tracker.beginPhysicalGesture(id: 10)
+
+        XCTAssertFalse(origin.scrollWasIdle)
+        XCTAssertEqual(origin.anchoredPageIndex, 3)
+        XCTAssertTrue(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: origin,
+            currentOffsetX: 660,
+            lastPageOffsetX: 900,
+            lastPageIndex: 3
+        ))
+    }
+
+    func testAnimationTowardNonfinalPageCannotEnableCreation() {
+        let tracker = SidebarSpacePagerGeometryTracker()
+        tracker.visibleFractionalPageIndex = 1
+        tracker.prepareForProgrammaticNavigation(to: 2)
+        tracker.transition(from: .idle, to: .animating)
+
+        let origin = tracker.beginPhysicalGesture(id: 20)
+
+        XCTAssertFalse(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: origin,
+            currentOffsetX: 330,
+            lastPageOffsetX: 900,
+            lastPageIndex: 3
+        ))
+    }
+
     func testVisualLastPageCanEnableCreationWithoutSelectionState() {
         XCTAssertTrue(SidebarSpaceCreationPullEligibility.canBegin(
             creationIsAvailable: true,
-            scrollIsIdle: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: true,
+                anchoredPageIndex: nil
+            ),
             currentOffsetX: 600,
-            lastPageOffsetX: 600
+            lastPageOffsetX: 600,
+            lastPageIndex: 2
         ))
         XCTAssertFalse(SidebarSpaceCreationPullEligibility.canBegin(
             creationIsAvailable: false,
-            scrollIsIdle: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: true,
+                anchoredPageIndex: nil
+            ),
             currentOffsetX: 600,
-            lastPageOffsetX: 600
+            lastPageOffsetX: 600,
+            lastPageIndex: 2
         ))
     }
 }
