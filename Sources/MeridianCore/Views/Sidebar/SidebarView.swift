@@ -3070,7 +3070,7 @@ private struct SidebarSpacePagerView: View {
                 if pageTravelIsRequired(to: request.pageID) {
                     settledStyleAwaitsScrollIdle = true
                 }
-                geometryTracker.cancelDirectionalSnap()
+                prepareGeometryTrackerForProgrammaticNavigation(to: request.pageID)
                 if case .space = request.pageID {
                     selectAuxiliaryPage(nil)
                 } else {
@@ -3289,22 +3289,26 @@ private struct SidebarSpacePagerView: View {
     }
 
     private func syncScrollPositionToSelection(animated: Bool) {
-        geometryTracker.cancelDirectionalSnap()
-        guard let selectedPageID,
-              scrollPositionPageID != selectedPageID else {
+        guard let selectedPageID else {
+            geometryTracker.cancelDirectionalSnap()
+            return
+        }
+        guard scrollPositionPageID != selectedPageID else {
             return
         }
 
-        if !animated,
-           let selectedPageIndex = snapshot.pages.firstIndex(where: { $0.id == selectedPageID }) {
-            geometryTracker.visibleFractionalPageIndex = CGFloat(selectedPageIndex)
-        }
-
         if animated {
+            prepareGeometryTrackerForProgrammaticNavigation(to: selectedPageID)
             withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
                 scrollPositionPageID = selectedPageID
             }
         } else {
+            geometryTracker.cancelDirectionalSnap()
+            if let selectedPageIndex = snapshot.pages.firstIndex(
+                where: { $0.id == selectedPageID }
+            ) {
+                geometryTracker.visibleFractionalPageIndex = CGFloat(selectedPageIndex)
+            }
             scrollPositionPageID = selectedPageID
         }
     }
@@ -3316,6 +3320,17 @@ private struct SidebarSpacePagerView: View {
         }
 
         geometryTracker.visibleFractionalPageIndex = CGFloat(pageIndex)
+    }
+
+    private func prepareGeometryTrackerForProgrammaticNavigation(
+        to pageID: SidebarSpacePagerPageID
+    ) {
+        guard let pageIndex = snapshot.pages.firstIndex(where: { $0.id == pageID }) else {
+            geometryTracker.cancelDirectionalSnap()
+            return
+        }
+
+        geometryTracker.prepareForProgrammaticNavigation(to: pageIndex)
     }
 
     private func commitPageIfNeeded(_ pageID: SidebarSpacePagerPageID?) {

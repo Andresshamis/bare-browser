@@ -3,19 +3,25 @@ import SwiftUI
 struct SidebarSpaceCreationPullEligibility {
     static func canBegin(
         creationIsAvailable: Bool,
-        scrollIsIdle: Bool,
+        gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin,
         currentOffsetX: CGFloat,
-        lastPageOffsetX: CGFloat
+        lastPageOffsetX: CGFloat,
+        lastPageIndex: Int
     ) -> Bool {
         guard creationIsAvailable,
-              scrollIsIdle,
               currentOffsetX.isFinite,
-              lastPageOffsetX.isFinite else {
+              lastPageOffsetX.isFinite,
+              lastPageIndex >= 0 else {
             return false
         }
 
-        return abs(currentOffsetX - lastPageOffsetX)
-            <= SidebarSpacePagerMetrics.creationSettledOffsetTolerance
+        if gestureOrigin.anchoredPageIndex == lastPageIndex {
+            return true
+        }
+
+        return gestureOrigin.scrollWasIdle
+            && abs(currentOffsetX - lastPageOffsetX)
+                <= SidebarSpacePagerMetrics.creationSettledOffsetTolerance
     }
 }
 
