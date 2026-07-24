@@ -43,13 +43,17 @@ public struct SidebarTabRow: View {
     }
 
     public var body: some View {
-        HStack(spacing: 8) {
-            SidebarTabFaviconView(tab: tab, size: 16, fallbackSymbolName: iconName)
-                .frame(width: 16)
+        HStack(spacing: 9) {
+            SidebarTabFaviconView(
+                tab: tab,
+                size: SidebarLayoutMetrics.rowIconSize,
+                fallbackSymbolName: iconName
+            )
+                .frame(width: SidebarLayoutMetrics.rowIconSize)
                 .accessibilityHidden(true)
 
             Text(tab.title)
-                .font(.system(size: 13))
+                .font(.system(size: SidebarLayoutMetrics.rowFontSize))
                 .lineLimit(1)
 
             Spacer(minLength: 4)
@@ -63,8 +67,8 @@ public struct SidebarTabRow: View {
             if canClose {
                 Button(action: close) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .semibold))
-                        .frame(width: 18, height: 18)
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
                 .opacity(isHovered || isSelected ? 1 : 0)
@@ -72,11 +76,11 @@ public struct SidebarTabRow: View {
                 .accessibilityLabel("Close \(tab.title)")
             }
         }
-        .padding(.leading, 6)
-        .padding(.trailing, 4)
-        .padding(.vertical, 5)
+        .padding(.leading, SidebarLayoutMetrics.rowLeadingInset)
+        .padding(.trailing, SidebarLayoutMetrics.rowTrailingInset)
+        .padding(.vertical, SidebarLayoutMetrics.rowVerticalInset)
         .background(selectionBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: SidebarLayoutMetrics.rowCornerRadius, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture(perform: select)
         .onHover { isHovered = $0 }
@@ -124,21 +128,25 @@ public struct SidebarTabRow: View {
     }
 
     private var dragPreview: some View {
-        HStack(spacing: 8) {
-            SidebarTabFaviconView(tab: tab, size: 16, fallbackSymbolName: iconName)
-                .frame(width: 16)
+        HStack(spacing: 9) {
+            SidebarTabFaviconView(
+                tab: tab,
+                size: SidebarLayoutMetrics.rowIconSize,
+                fallbackSymbolName: iconName
+            )
+                .frame(width: SidebarLayoutMetrics.rowIconSize)
 
             Text(tab.title)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: SidebarLayoutMetrics.rowFontSize, weight: .medium))
                 .lineLimit(1)
 
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
-        .frame(width: 220, height: 34, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .frame(width: 236, height: 38, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .stroke(Color.primary.opacity(0.10), lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.16), radius: 16, y: 8)

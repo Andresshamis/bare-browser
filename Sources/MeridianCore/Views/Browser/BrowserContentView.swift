@@ -536,7 +536,7 @@ public struct BrowserContentView: View {
     private func selectOverviewTab(_ id: TabID) {
         presentationState.beginSnapshotHandoff(to: store.profileContext(for: id))
         withTransaction(Transaction(animation: nil)) {
-            store.selectTab(id)
+            _ = store.activateTab(id)
         }
         activityPageIsSelected = false
     }
@@ -1190,7 +1190,7 @@ private struct BrowserSpaceContentPreviewTabRow: View {
                     .frame(width: 16, height: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.tab.title)
+                    Text(item.tab.essentialDisplayTitle)
                         .font(.callout)
                         .lineLimit(1)
 
@@ -1215,7 +1215,7 @@ private struct BrowserSpaceContentPreviewTabRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(item.tab.title)
+        .help(item.tab.essentialDisplayTitle)
     }
 
     private var subtitle: String? {
@@ -1225,7 +1225,7 @@ private struct BrowserSpaceContentPreviewTabRow: View {
         case .passwordManager:
             return "Saved Passwords"
         case .web:
-            return item.tab.url?.host(percentEncoded: false)
+            return item.tab.essentialDisplayURL?.host(percentEncoded: false)
         }
     }
 

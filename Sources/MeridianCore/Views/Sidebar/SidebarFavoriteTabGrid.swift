@@ -16,7 +16,7 @@ struct SidebarFavoriteTabGrid: View {
     var body: some View {
         responsiveGrid
             .padding(.horizontal, SidebarFavoriteGridLayout.horizontalPadding)
-            .padding(.bottom, 2)
+            .padding(.bottom, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .onDrop(
@@ -136,9 +136,9 @@ private struct SidebarFavoriteTabDropDelegate: DropDelegate {
 struct SidebarFavoriteGridLayout {
     static let minColumnCount = 2
     static let maxColumnCount = 4
-    static let tileSize: CGFloat = 34
-    static let spacing: CGFloat = 7
-    static let horizontalPadding: CGFloat = 2
+    static let tileSize: CGFloat = 40
+    static let spacing: CGFloat = 8
+    static let horizontalPadding: CGFloat = 0
 
     static func preferredColumnCount(for itemCount: Int) -> Int {
         guard itemCount > 0 else {
@@ -198,19 +198,19 @@ private struct SidebarFavoriteTabTile: View {
 
     var body: some View {
         Button(action: select) {
-            SidebarTabFaviconView(tab: item.tab, size: 18)
+            SidebarTabFaviconView(tab: item.tab, size: 20)
                 .frame(width: SidebarFavoriteGridLayout.tileSize, height: SidebarFavoriteGridLayout.tileSize)
                 .frame(maxWidth: .infinity, minHeight: SidebarFavoriteGridLayout.tileSize)
                 .background(tileBackground)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(tileBorderColor, lineWidth: 0.5)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity)
-        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onHover { isHovered = $0 }
         .onDrag {
             dragStarted()
@@ -250,7 +250,7 @@ private struct SidebarFavoriteTabTile: View {
             }
         }
         .help(helpText)
-        .accessibilityLabel("Open \(item.tab.title)")
+        .accessibilityLabel("Open \(item.tab.essentialDisplayTitle)")
         .accessibilityAddTraits(item.isSelected ? .isSelected : [])
     }
 
@@ -294,16 +294,16 @@ private struct SidebarFavoriteTabTile: View {
     }
 
     private var helpText: String {
-        guard let url = item.tab.url?.absoluteString else {
-            return item.tab.title
+        guard let url = item.tab.essentialDisplayURL?.absoluteString else {
+            return item.tab.essentialDisplayTitle
         }
-        return "\(item.tab.title)\n\(url)"
+        return "\(item.tab.essentialDisplayTitle)\n\(url)"
     }
 }
 
 struct SidebarTabFaviconSource {
     static func url(for tab: BrowserTab) -> URL? {
-        tab.faviconURL ?? rootFaviconURL(for: tab.url)
+        tab.essentialDisplayFaviconURL ?? rootFaviconURL(for: tab.essentialDisplayURL)
     }
 
     private static func rootFaviconURL(for url: URL?) -> URL? {
