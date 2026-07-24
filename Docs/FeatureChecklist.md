@@ -18,6 +18,8 @@
 - URL and download safety helpers.
 - HTTPS-first upgrade attempts for non-local HTTP main-frame navigations, with controlled HTTP fallback warnings.
 - Native pending confirmation for external app and local file URL handoff.
+- One-time default-browser onboarding for new and upgraded installations, with
+  macOS HTTP(S) handler registration and external-link delivery.
 - WebKit download delegate handling with native destination approval and risky download confirmation.
 - Opt-in HTTPS and loopback HTTP password-save prompt backed by local macOS Keychain storage for persistent profiles.
 - Native password manager view with profile filtering and account/site search across saved persistent-profile accounts.
