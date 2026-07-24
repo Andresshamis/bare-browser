@@ -142,6 +142,8 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>Lumen Browser uses Bluetooth only when a website asks to connect to a nearby device, such as using a passkey from your phone.</string>
   <key>UTExportedTypeDeclarations</key>
   <array>
     <dict>
