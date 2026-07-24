@@ -784,6 +784,22 @@ public final class BrowserStore: ObservableObject {
         persistSession()
     }
 
+    @discardableResult
+    public func activateTab(_ id: TabID) -> Bool {
+        guard let tab = tabs.first(where: { $0.id == id }) else {
+            return false
+        }
+
+        let essentialURL = tab.isFavorite ? tab.essentialReference?.url : nil
+        selectTab(id)
+
+        if let essentialURL, tab.url != essentialURL {
+            navigateActiveTab(to: essentialURL)
+        }
+
+        return true
+    }
+
     public func closeSelectedTab() {
         guard let selectedTabID else {
             return
@@ -831,6 +847,19 @@ public final class BrowserStore: ObservableObject {
             tab.parentSpaceID = targetSpaceID
             tab.parentFolderID = nil
             tab.profileID = targetSpace.profileID
+            if placement == .favorite {
+                if !tab.isFavorite || tab.essentialReference == nil {
+                    tab.essentialReference = tab.url.map {
+                        BrowserEssentialReference(
+                            title: tab.title,
+                            url: $0,
+                            faviconURL: tab.faviconURL
+                        )
+                    }
+                }
+            } else {
+                tab.essentialReference = nil
+            }
             tab.isPinned = placement == .pinned
             tab.isFavorite = placement == .favorite
         }
@@ -900,6 +929,7 @@ public final class BrowserStore: ObservableObject {
             tab.profileID = targetSpace.profileID
             tab.isPinned = false
             tab.isFavorite = false
+            tab.essentialReference = nil
         }
 
         for index in spaces.indices {
@@ -954,6 +984,15 @@ public final class BrowserStore: ObservableObject {
 
         updateTab(tabID) { tab in
             tab.parentFolderID = nil
+            tab.essentialReference = placement == .favorite
+                ? tab.url.map {
+                    BrowserEssentialReference(
+                        title: tab.title,
+                        url: $0,
+                        faviconURL: tab.faviconURL
+                    )
+                }
+                : nil
             tab.isPinned = placement == .pinned
             tab.isFavorite = placement == .favorite
         }
@@ -1996,6 +2035,14 @@ public final class BrowserStore: ObservableObject {
         updatedTab.url = url ?? updatedTab.url
         updatedTab.isLoading = isLoading
         updatedTab.restorationMetadata.lastCommittedURL = url ?? updatedTab.restorationMetadata.lastCommittedURL
+        if updatedTab.isFavorite,
+           var essentialReference = updatedTab.essentialReference,
+           url == essentialReference.url,
+           let title,
+           !title.isEmpty {
+            essentialReference.title = title
+            updatedTab.essentialReference = essentialReference
+        }
         if let updatedURL = url {
             updateHTTPSUpgradeFallbackMetadata(for: &updatedTab, committedURL: updatedURL)
         }
@@ -2039,6 +2086,12 @@ public final class BrowserStore: ObservableObject {
         }
 
         tabs[tabIndex].faviconURL = resolvedFaviconURL
+        if tabs[tabIndex].isFavorite,
+           var essentialReference = tabs[tabIndex].essentialReference,
+           tabs[tabIndex].url == essentialReference.url {
+            essentialReference.faviconURL = resolvedFaviconURL
+            tabs[tabIndex].essentialReference = essentialReference
+        }
         persistSession()
     }
 

@@ -54,15 +54,15 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
             .before(firstID)
         )
         XCTAssertEqual(
-            SidebarSpaceSwitcherLayout.target(for: 50, spaceIDs: spaceIDs),
+            SidebarSpaceSwitcherLayout.target(for: 70, spaceIDs: spaceIDs),
             .before(secondID)
         )
         XCTAssertEqual(
-            SidebarSpaceSwitcherLayout.target(for: 90, spaceIDs: spaceIDs),
+            SidebarSpaceSwitcherLayout.target(for: 110, spaceIDs: spaceIDs),
             .before(thirdID)
         )
         XCTAssertEqual(
-            SidebarSpaceSwitcherLayout.target(for: 130, spaceIDs: spaceIDs),
+            SidebarSpaceSwitcherLayout.target(for: 150, spaceIDs: spaceIDs),
             .tail
         )
     }
@@ -73,12 +73,12 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         let thirdID = UUID()
         let spaceIDs = [firstID, secondID, thirdID]
 
-        XCTAssertNil(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 12, y: 13), spaceIDs: spaceIDs))
-        XCTAssertEqual(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 32, y: 13), spaceIDs: spaceIDs), firstID)
-        XCTAssertEqual(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 64, y: 13), spaceIDs: spaceIDs), secondID)
-        XCTAssertEqual(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 96, y: 13), spaceIDs: spaceIDs), thirdID)
-        XCTAssertNil(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 128, y: 13), spaceIDs: spaceIDs))
-        XCTAssertNil(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 64, y: -1), spaceIDs: spaceIDs))
+        XCTAssertNil(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 15, y: 15), spaceIDs: spaceIDs))
+        XCTAssertEqual(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 53, y: 15), spaceIDs: spaceIDs), firstID)
+        XCTAssertEqual(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 91, y: 15), spaceIDs: spaceIDs), secondID)
+        XCTAssertEqual(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 129, y: 15), spaceIDs: spaceIDs), thirdID)
+        XCTAssertNil(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 152, y: 15), spaceIDs: spaceIDs))
+        XCTAssertNil(SidebarSpaceSwitcherLayout.spaceID(at: CGPoint(x: 91, y: -1), spaceIDs: spaceIDs))
     }
 
     func testSpaceSwitcherLayoutIgnoresEmptyOrUnknownTargets() {
@@ -2117,6 +2117,29 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
             SidebarTabFaviconSource.url(for: tab),
             try XCTUnwrap(URL(string: "https://example.com/favicon.ico"))
         )
+    }
+
+    func testFavoriteGridKeepsSavedFaviconAfterEssentialNavigatesAway() throws {
+        let savedURL = try XCTUnwrap(URL(string: "https://saved.example.com/article"))
+        let savedFaviconURL = try XCTUnwrap(URL(string: "https://saved.example.com/icon.png"))
+        let currentFaviconURL = try XCTUnwrap(URL(string: "https://current.example.com/icon.png"))
+        let tab = BrowserTab(
+            title: "Current Page",
+            url: try XCTUnwrap(URL(string: "https://current.example.com/dashboard")),
+            faviconURL: currentFaviconURL,
+            parentSpaceID: UUID(),
+            isFavorite: true,
+            essentialReference: BrowserEssentialReference(
+                title: "Saved Page",
+                url: savedURL,
+                faviconURL: savedFaviconURL
+            ),
+            profileID: UUID()
+        )
+
+        XCTAssertEqual(tab.essentialDisplayTitle, "Saved Page")
+        XCTAssertEqual(tab.essentialDisplayURL, savedURL)
+        XCTAssertEqual(SidebarTabFaviconSource.url(for: tab), savedFaviconURL)
     }
 
     func testFavoriteGridDoesNotResolveNonWebFaviconURL() throws {

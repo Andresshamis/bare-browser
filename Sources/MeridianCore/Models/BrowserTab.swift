@@ -50,6 +50,18 @@ public enum BrowserTabContent: Hashable, Codable, Sendable {
     }
 }
 
+public struct BrowserEssentialReference: Hashable, Codable, Sendable {
+    public var title: String
+    public var url: URL
+    public var faviconURL: URL?
+
+    public init(title: String, url: URL, faviconURL: URL? = nil) {
+        self.title = title
+        self.url = url
+        self.faviconURL = faviconURL
+    }
+}
+
 public struct BrowserTab: Identifiable, Hashable, Codable, Sendable {
     public var id: TabID
     public var title: String
@@ -60,6 +72,7 @@ public struct BrowserTab: Identifiable, Hashable, Codable, Sendable {
     public var parentFolderID: FolderID?
     public var isPinned: Bool
     public var isFavorite: Bool
+    public var essentialReference: BrowserEssentialReference?
     public internal(set) var profileID: ProfileID
     public var lastActiveDate: Date
     public var isLoading: Bool
@@ -77,6 +90,7 @@ public struct BrowserTab: Identifiable, Hashable, Codable, Sendable {
         parentFolderID: FolderID? = nil,
         isPinned: Bool = false,
         isFavorite: Bool = false,
+        essentialReference: BrowserEssentialReference? = nil,
         profileID: ProfileID,
         lastActiveDate: Date = Date(),
         isLoading: Bool = false,
@@ -93,6 +107,11 @@ public struct BrowserTab: Identifiable, Hashable, Codable, Sendable {
         self.parentFolderID = parentFolderID
         self.isPinned = isPinned
         self.isFavorite = isFavorite
+        self.essentialReference = isFavorite
+            ? essentialReference ?? url.map {
+                BrowserEssentialReference(title: title, url: $0, faviconURL: faviconURL)
+            }
+            : nil
         self.profileID = profileID
         self.lastActiveDate = lastActiveDate
         self.isLoading = isLoading
@@ -111,6 +130,7 @@ public struct BrowserTab: Identifiable, Hashable, Codable, Sendable {
         case parentFolderID
         case isPinned
         case isFavorite
+        case essentialReference
         case profileID
         case lastActiveDate
         case isLoading
@@ -131,6 +151,10 @@ public struct BrowserTab: Identifiable, Hashable, Codable, Sendable {
             parentFolderID: try container.decodeIfPresent(FolderID.self, forKey: .parentFolderID),
             isPinned: try container.decode(Bool.self, forKey: .isPinned),
             isFavorite: try container.decode(Bool.self, forKey: .isFavorite),
+            essentialReference: try container.decodeIfPresent(
+                BrowserEssentialReference.self,
+                forKey: .essentialReference
+            ),
             profileID: try container.decode(ProfileID.self, forKey: .profileID),
             lastActiveDate: try container.decodeIfPresent(Date.self, forKey: .lastActiveDate) ?? Date(),
             isLoading: try container.decodeIfPresent(Bool.self, forKey: .isLoading) ?? false,
@@ -141,6 +165,27 @@ public struct BrowserTab: Identifiable, Hashable, Codable, Sendable {
                 forKey: .restorationMetadata
             ) ?? .init()
         )
+    }
+
+    public var essentialDisplayTitle: String {
+        guard isFavorite, let essentialReference else {
+            return title
+        }
+        return essentialReference.title
+    }
+
+    public var essentialDisplayURL: URL? {
+        guard isFavorite, let essentialReference else {
+            return url
+        }
+        return essentialReference.url
+    }
+
+    public var essentialDisplayFaviconURL: URL? {
+        guard isFavorite, let essentialReference else {
+            return faviconURL
+        }
+        return essentialReference.faviconURL
     }
 }
 
