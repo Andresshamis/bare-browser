@@ -160,6 +160,8 @@ cat >"$INFO_PLIST" <<PLIST
   <string>NSApplication</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Lumen Browser uses the microphone only when you allow a website to capture audio.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>Lumen Browser uses Bluetooth only when a website asks to connect to a nearby device, such as using a passkey from your phone.</string>
   <key>UTExportedTypeDeclarations</key>
   <array>
     <dict>

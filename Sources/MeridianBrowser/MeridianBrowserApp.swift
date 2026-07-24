@@ -11,6 +11,7 @@ struct MeridianBrowserApp: App {
     private let sessionPersistence: SQLiteSessionPersistenceStore
     private let historyPersistence: SQLiteLocalHistoryPersistenceStore
     @StateObject private var store: BrowserStore
+    @StateObject private var passkeyAccessController = BrowserPasskeyAccessController()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -46,6 +47,9 @@ struct MeridianBrowserApp: App {
         WindowGroup("Lumen Browser") {
             BrowserWindowView(store: store)
                 .frame(minWidth: 900, minHeight: 620)
+                .task {
+                    passkeyAccessController.requestAuthorizationIfNeeded()
+                }
                 .onChange(of: scenePhase) { _, phase in
                     if phase != .active {
                         store.flushScheduledSessionPersistence()
