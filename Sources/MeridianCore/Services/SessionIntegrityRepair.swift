@@ -60,6 +60,17 @@ enum SessionIntegrityRepair {
                 tabs[index].isPinned = false
                 report.ownershipListsRebuilt += 1
             }
+            if tabs[index].isFavorite {
+                if tabs[index].essentialReference == nil, let url = tabs[index].url {
+                    tabs[index].essentialReference = BrowserEssentialReference(
+                        title: tabs[index].title,
+                        url: url,
+                        faviconURL: tabs[index].faviconURL
+                    )
+                }
+            } else {
+                tabs[index].essentialReference = nil
+            }
         }
 
         rebuildFolderRelationships(folders: &folders, tabs: tabs, report: &report)

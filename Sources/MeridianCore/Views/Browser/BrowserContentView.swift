@@ -54,29 +54,6 @@ public struct BrowserContentView: View {
                     .padding(.trailing, 16)
                     .padding(.bottom, 16)
             }
-            .overlay(alignment: .topTrailing) {
-                if let profile = activeWebProfile,
-                   activeWebTab != nil,
-                   !activityPageIsSelected {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(Color(hex: profile.colorHex))
-                            .frame(width: 7, height: 7)
-                        Text(profile.name)
-                            .font(.caption2.weight(.semibold))
-                            .lineLimit(1)
-                    }
-                    .padding(.horizontal, 9)
-                    .frame(height: 24)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay {
-                        Capsule().stroke(.separator.opacity(0.35), lineWidth: 0.5)
-                    }
-                    .padding(12)
-                    .help("Website data profile: \(profile.name)")
-                    .accessibilityLabel("Website data profile \(profile.name)")
-                }
-            }
             .animation(.snappy(duration: 0.18), value: store.lastUserMessage)
             .animation(.snappy(duration: 0.18), value: store.primaryActiveDownload?.id)
             .animation(.snappy(duration: 0.18), value: store.activeDownloads.count)
@@ -559,7 +536,7 @@ public struct BrowserContentView: View {
     private func selectOverviewTab(_ id: TabID) {
         presentationState.beginSnapshotHandoff(to: store.profileContext(for: id))
         withTransaction(Transaction(animation: nil)) {
-            store.selectTab(id)
+            _ = store.activateTab(id)
         }
         activityPageIsSelected = false
     }
@@ -1213,7 +1190,7 @@ private struct BrowserSpaceContentPreviewTabRow: View {
                     .frame(width: 16, height: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.tab.title)
+                    Text(item.tab.essentialDisplayTitle)
                         .font(.callout)
                         .lineLimit(1)
 
@@ -1238,7 +1215,7 @@ private struct BrowserSpaceContentPreviewTabRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(item.tab.title)
+        .help(item.tab.essentialDisplayTitle)
     }
 
     private var subtitle: String? {
@@ -1248,7 +1225,7 @@ private struct BrowserSpaceContentPreviewTabRow: View {
         case .passwordManager:
             return "Saved Passwords"
         case .web:
-            return item.tab.url?.host(percentEncoded: false)
+            return item.tab.essentialDisplayURL?.host(percentEncoded: false)
         }
     }
 

@@ -28,6 +28,7 @@ Current coverage:
 - Profile-scoped local history recording, private-profile exclusion, URL normalization before retention/restore, restored duplicate collapse, scoped querying, command-bar history result activation, active-profile clear, and individual history delete.
 - Persistent profile creation and switching, including default profile space/tab seeding, command-bar profile results, public session persistence, active-profile open-tab/history scoping, and site-permission scoping.
 - URL scheme security decisions.
+- Versioned one-time default-browser prompt policy for fresh and existing installations.
 - Pending confirmation state for external app and local file URLs.
 - Insecure HTTP detection, HTTPS-first explicit HTTP opens, controlled HTTP fallback warning publication, and stale insecure-status clearing after successful HTTPS updates.
 - Download filename sanitization, risk classification, safe destination selection, and pending confirmation state.
@@ -55,6 +56,13 @@ Run Google account isolation in both directions: University → Personal and Per
 - File upload/download
 
 Profile-isolation release acceptance additionally requires unique persistent website-store IDs, every tab resolving to its parent space's profile, no accepted stale callback after reassignment, no previous-profile snapshot flash, private-session disposal passing, and a clean full test run.
+
+Default-browser release acceptance requires checking both a fresh preferences domain
+and an upgraded preferences domain without `DefaultBrowserPromptVersion`. The prompt
+must appear once when Lumen Browser is not already the default, “Not Now” must prevent
+repeat prompting for this rollout, “Set as Default” must register both HTTP and HTTPS,
+and a link opened from another app must arrive in a new Lumen Browser tab. No prompt
+should appear when Lumen Browser already handles both schemes.
 
 ## Required Future Tests
 
