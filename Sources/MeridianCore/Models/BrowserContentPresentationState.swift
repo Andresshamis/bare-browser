@@ -142,6 +142,23 @@ public final class BrowserContentPresentationState: ObservableObject {
     }
 }
 
+struct BrowserContentPreviewPlaceholder {
+    static func shouldShow(
+        for previewTab: BrowserTab?,
+        selectedTabID: TabID?,
+        snapshotIsAvailable: Bool
+    ) -> Bool {
+        guard let previewTab,
+              previewTab.id != selectedTabID,
+              previewTab.content.isWeb,
+              previewTab.url != nil else {
+            return false
+        }
+
+        return !snapshotIsAvailable
+    }
+}
+
 struct BrowserSpaceFocusedTabResolver {
     static func focusedTabID(
         for space: BrowserSpace,

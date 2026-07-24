@@ -11,6 +11,8 @@ struct MeridianBrowserApp: App {
     private let sessionPersistence: SQLiteSessionPersistenceStore
     private let historyPersistence: SQLiteLocalHistoryPersistenceStore
     @StateObject private var store: BrowserStore
+    @StateObject private var passkeyAccessController = BrowserPasskeyAccessController()
+    @StateObject private var defaultBrowserManager = DefaultBrowserManager()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -44,7 +46,10 @@ struct MeridianBrowserApp: App {
 
     var body: some Scene {
         WindowGroup("Lumen Browser") {
-            BrowserWindowView(store: store)
+            BrowserWindowView(
+                store: store,
+                initialAlertsCompleted: beginStartupPromptSequence
+            )
                 .frame(minWidth: 900, minHeight: 620)
                 .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
                 .onOpenURL { url in
@@ -54,6 +59,36 @@ struct MeridianBrowserApp: App {
                     if phase != .active {
                         store.flushScheduledSessionPersistence()
                     }
+                }
+                .alert(
+                    "Make Lumen Browser Your Default?",
+                    isPresented: defaultBrowserPromptIsPresented
+                ) {
+                    Button("Not Now", role: .cancel) {
+                        defaultBrowserManager.dismissPrompt()
+                        passkeyAccessController.requestAuthorizationIfNeeded()
+                    }
+                    Button("Set as Default") {
+                        defaultBrowserManager.dismissPrompt()
+                        Task {
+                            let result = await defaultBrowserManager.setAsDefaultBrowser()
+                            switch result {
+                            case .succeeded:
+                                store.publishStatusMessage(
+                                    "Lumen Browser is now your default browser."
+                                )
+                            case .failed:
+                                store.publishStatusMessage(
+                                    "Lumen Browser could not become your default browser. You can choose it in System Settings."
+                                )
+                            }
+                            passkeyAccessController.requestAuthorizationIfNeeded()
+                        }
+                    }
+                } message: {
+                    Text(
+                        "Open web links in Lumen Browser by default. You can change this later in System Settings."
+                    )
                 }
         }
         .windowStyle(.hiddenTitleBar)
@@ -181,6 +216,23 @@ struct MeridianBrowserApp: App {
 
     private static func saveSidebarRevealEdge(_ edge: SidebarRevealEdge) {
         UserDefaults.standard.set(edge.rawValue, forKey: Preferences.sidebarRevealEdgeKey)
+    }
+
+    private var defaultBrowserPromptIsPresented: Binding<Bool> {
+        Binding(
+            get: { defaultBrowserManager.isPromptPresented },
+            set: { isPresented in
+                if !isPresented {
+                    defaultBrowserManager.dismissPrompt()
+                }
+            }
+        )
+    }
+
+    private func beginStartupPromptSequence() {
+        if !defaultBrowserManager.preparePromptIfNeeded() {
+            passkeyAccessController.requestAuthorizationIfNeeded()
+        }
     }
 }
 

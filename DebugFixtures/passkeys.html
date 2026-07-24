@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Passkey Capability Fixture</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font: 16px/1.5 system-ui, sans-serif;
+    }
+
+    body {
+      box-sizing: border-box;
+      display: grid;
+      min-height: 100vh;
+      margin: 0;
+      padding: 2rem;
+      place-items: center;
+    }
+
+    main {
+      width: min(38rem, 100%);
+    }
+
+    button {
+      font: inherit;
+      padding: 0.65rem 1rem;
+    }
+
+    output {
+      display: block;
+      margin: 1rem 0;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Passkey Capability Fixture</h1>
+    <p>Checks WebAuthn support without creating or sending a credential.</p>
+    <output id="capabilities">Checking…</output>
+    <button id="start" type="button">Test passkey chooser</button>
+    <output id="result">Ready</output>
+  </main>
+  <script>
+    const capabilities = document.querySelector("#capabilities");
+    const result = document.querySelector("#result");
+    const startButton = document.querySelector("#start");
+
+    const reportCapabilities = async () => {
+      if (!window.PublicKeyCredential) {
+        capabilities.textContent = "PublicKeyCredential: unavailable";
+        return;
+      }
+
+      const platform = await PublicKeyCredential
+        .isUserVerifyingPlatformAuthenticatorAvailable();
+      const conditional = typeof PublicKeyCredential.isConditionalMediationAvailable === "function"
+        ? await PublicKeyCredential.isConditionalMediationAvailable()
+        : false;
+      capabilities.textContent = [
+        "PublicKeyCredential: available",
+        `Platform authenticator: ${platform}`,
+        `Conditional mediation: ${conditional}`
+      ].join("\n");
+    };
+
+    startButton.addEventListener("click", async () => {
+      startButton.disabled = true;
+      result.textContent = "Opening the system passkey chooser…";
+
+      try {
+        await navigator.credentials.get({
+          publicKey: {
+            challenge: crypto.getRandomValues(new Uint8Array(32)),
+            rpId: location.hostname,
+            allowCredentials: [],
+            userVerification: "preferred",
+            timeout: 60_000
+          }
+        });
+        result.textContent = "PASS: WebAuthn returned a credential to this local-only fixture.";
+      } catch (error) {
+        result.textContent = `RESULT: ${error.name}: ${error.message}`;
+      } finally {
+        startButton.disabled = false;
+      }
+    });
+
+    reportCapabilities().catch(error => {
+      capabilities.textContent = `Capability check failed: ${error.name}: ${error.message}`;
+    });
+  </script>
+</body>
+</html>

@@ -4,9 +4,9 @@ import UniformTypeIdentifiers
 enum SidebarTabReorderInteractionMetrics {
     static let animation = Animation.smooth(duration: 0.18, extraBounce: 0)
     static let indicatorAnimation = Animation.smooth(duration: 0.12, extraBounce: 0)
-    static let rowDropMidlineY: CGFloat = 14
+    static let rowDropMidlineY: CGFloat = 17
     static let dropSlotHitHeight: CGFloat = 10
-    static let emptySectionDropSlotHitHeight: CGFloat = 34
+    static let emptySectionDropSlotHitHeight: CGFloat = 40
 }
 
 struct SidebarTabDropState: Equatable {

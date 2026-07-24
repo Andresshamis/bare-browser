@@ -10,6 +10,7 @@ private let browserContentLogger = Logger(
 private let activeTabSnapshotHandoffDelayNanoseconds: UInt64 = 90_000_000
 
 public struct BrowserContentView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var webViewState: WebViewState
     @ObservedObject private var presentationState: BrowserContentPresentationState
@@ -53,29 +54,6 @@ public struct BrowserContentView: View {
                 floatingStatusStack
                     .padding(.trailing, 16)
                     .padding(.bottom, 16)
-            }
-            .overlay(alignment: .topTrailing) {
-                if let profile = activeWebProfile,
-                   activeWebTab != nil,
-                   !activityPageIsSelected {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(Color(hex: profile.colorHex))
-                            .frame(width: 7, height: 7)
-                        Text(profile.name)
-                            .font(.caption2.weight(.semibold))
-                            .lineLimit(1)
-                    }
-                    .padding(.horizontal, 9)
-                    .frame(height: 24)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay {
-                        Capsule().stroke(.separator.opacity(0.35), lineWidth: 0.5)
-                    }
-                    .padding(12)
-                    .help("Website data profile: \(profile.name)")
-                    .accessibilityLabel("Website data profile \(profile.name)")
-                }
             }
             .animation(.snappy(duration: 0.18), value: store.lastUserMessage)
             .animation(.snappy(duration: 0.18), value: store.primaryActiveDownload?.id)
@@ -251,14 +229,15 @@ public struct BrowserContentView: View {
                     return
                 }
                 store.failDownload(downloadID, message: message)
-            } onSitePermissionRequest: { identity, kind, origin in
+            } onSitePermissionRequest: { identity, kind, origin, resolutionHandler in
                 guard isSelected(identity: identity) else {
                     return .deny(reason: "Site permission request was blocked because its profile session is no longer active.")
                 }
                 return store.requestSitePermission(
                     kind: kind,
                     origin: origin,
-                    profileID: identity.profileID
+                    profileID: identity.profileID,
+                    resolutionHandler: resolutionHandler
                 )
             } onPasswordCredentialCaptured: { identity, candidate in
                 guard isSelected(identity: identity) else {
@@ -294,6 +273,8 @@ public struct BrowserContentView: View {
             foregroundSurface
 
             customizationPreviewSurface
+
+            unloadedPreviewSurface
 
             snapshotOverlay
         }
@@ -396,6 +377,32 @@ public struct BrowserContentView: View {
             return nil
         }
         return store.profiles.first { $0.id == identity.profileID }
+    }
+
+    @ViewBuilder
+    private var unloadedPreviewSurface: some View {
+        if unloadedPreviewSurfaceIsVisible {
+            Color(nsColor: BrowserWebContentAppearance.underPageBackgroundColor(for: colorScheme))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var unloadedPreviewSurfaceIsVisible: Bool {
+        let previewTab = presentationState.previewTabID.flatMap { previewTabID in
+            store.tabs.first(where: { $0.id == previewTabID })
+        }
+        let snapshotIsAvailable = previewTab.flatMap { tab in
+            presentationState.snapshot(for: store.profileContext(for: tab.id))
+        } != nil
+
+        return !activityPageIsSelected
+            && previewCustomizationContext == nil
+            && BrowserContentPreviewPlaceholder.shouldShow(
+                for: previewTab,
+                selectedTabID: store.selectedTabID,
+                snapshotIsAvailable: snapshotIsAvailable
+            )
     }
 
     @ViewBuilder
@@ -559,7 +566,7 @@ public struct BrowserContentView: View {
     private func selectOverviewTab(_ id: TabID) {
         presentationState.beginSnapshotHandoff(to: store.profileContext(for: id))
         withTransaction(Transaction(animation: nil)) {
-            store.selectTab(id)
+            _ = store.activateTab(id)
         }
         activityPageIsSelected = false
     }
@@ -1213,7 +1220,7 @@ private struct BrowserSpaceContentPreviewTabRow: View {
                     .frame(width: 16, height: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.tab.title)
+                    Text(item.tab.essentialDisplayTitle)
                         .font(.callout)
                         .lineLimit(1)
 
@@ -1238,7 +1245,7 @@ private struct BrowserSpaceContentPreviewTabRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(item.tab.title)
+        .help(item.tab.essentialDisplayTitle)
     }
 
     private var subtitle: String? {
@@ -1248,7 +1255,7 @@ private struct BrowserSpaceContentPreviewTabRow: View {
         case .passwordManager:
             return "Saved Passwords"
         case .web:
-            return item.tab.url?.host(percentEncoded: false)
+            return item.tab.essentialDisplayURL?.host(percentEncoded: false)
         }
     }
 

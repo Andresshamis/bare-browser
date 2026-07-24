@@ -21,6 +21,8 @@
 ## Current Controls
 
 - URL navigation is centralized in `URLSecurityPolicy`.
+- HTTP(S) URLs delivered by macOS when Lumen Browser is the default browser enter
+  through the same `BrowserStore.open` and `URLSecurityPolicy` path as in-app opens.
 - Unsafe script/data schemes are blocked.
 - External app and `file://` links create a pending native confirmation before any external handoff, retaining the target URL for approval while reducing source page context to a sanitized host or scheme label.
 - Non-local HTTP main-frame navigations are HTTPS-first where practical: explicit opens and WebKit main-frame HTTP actions first attempt the HTTPS equivalent, while localhost and loopback URLs remain HTTP for local development. If a tracked HTTPS upgrade attempt falls back to HTTP, Lumen Browser shows the generic insecure-transport status message without embedding the full URL.
@@ -41,7 +43,7 @@
 - Password form submissions can create a native save prompt for HTTPS origins and loopback HTTP development origins. Accepted credentials are scoped to the current persistent profile and stored in the local macOS Keychain with this-device-only accessibility; private profiles do not prompt or persist passwords.
 - Profile isolation covers website sessions and Lumen Browser-managed Keychain credentials. macOS/WebKit Password AutoFill suggestions are device-wide system behavior and are not claimed as profile-isolated; Lumen Browser does not use fragile webpage-specific suppression to hide them.
 - The command bar returns open-tab matches only from the active profile. The intentional all-profile Activity view labels profile ownership and selects a matching space before navigation.
-- App Sandbox entitlement file includes only sandbox and outbound network client entitlement.
+- The local signed development bundle carries only the audio-input entitlement needed for user-approved website microphone capture. The separate App Sandbox entitlement draft includes sandbox, outbound network client, and audio input for future packaged builds.
 - A small `WKContentRuleList` blocks common tracker/ad endpoints without request interception hacks.
 - Lumen Browser does not collect product analytics, browsing telemetry, page contents, URLs, cookies, tokens, or private browsing data; website passwords are stored only after explicit local confirmation, and developer log modes stream only local OS logs.
 

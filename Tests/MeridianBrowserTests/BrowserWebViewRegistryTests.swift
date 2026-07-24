@@ -382,7 +382,7 @@ private struct RegistryFixture {
             onSecurityMessage: { _ in },
             onURLConfirmationRequired: { _, _, _ in },
             onDownloadConfirmationRequired: { _, completion in completion(nil) },
-            onSitePermissionRequest: { _, _ in
+            onSitePermissionRequest: { _, _, _ in
                 .deny(reason: "Test denies site permission requests.")
             }
         )

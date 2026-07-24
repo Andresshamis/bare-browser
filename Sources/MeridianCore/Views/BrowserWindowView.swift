@@ -35,6 +35,7 @@ private enum BrowserSidebarSizing {
 
 public struct BrowserWindowView: View {
     @ObservedObject private var store: BrowserStore
+    private let initialAlertsCompleted: @MainActor () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var webViewState = WebViewState()
     @StateObject private var webViewRegistry = BrowserWebViewRegistry()
@@ -54,6 +55,7 @@ public struct BrowserWindowView: View {
     @State private var activityPageIsSelected = false
     @State private var sidebarThemeColorPickerSpaceID: SpaceID?
     @State private var showsProfileIsolationRepairAlert = false
+    @State private var didCompleteInitialAlerts = false
     @Namespace private var passwordPromptGlassNamespace
     private let floatingSidebarInset: CGFloat = 8
     private let floatingSidebarCornerRadius: CGFloat = 12
@@ -75,8 +77,12 @@ public struct BrowserWindowView: View {
         sidebarWidth
     }
 
-    public init(store: BrowserStore) {
+    public init(
+        store: BrowserStore,
+        initialAlertsCompleted: @escaping @MainActor () -> Void = {}
+    ) {
         self.store = store
+        self.initialAlertsCompleted = initialAlertsCompleted
     }
 
     public var body: some View {
@@ -103,6 +109,9 @@ public struct BrowserWindowView: View {
             }
             .onAppear {
                 showsProfileIsolationRepairAlert = store.profileIsolationRepairOccurredThisLaunch
+                if !showsProfileIsolationRepairAlert {
+                    completeInitialAlertsIfNeeded()
+                }
             }
             .alert("Profile Isolation Repaired", isPresented: $showsProfileIsolationRepairAlert) {
                 Button("Copy Diagnostics") {
@@ -112,8 +121,11 @@ public struct BrowserWindowView: View {
                         store.profileIsolationDiagnostics().redactedText,
                         forType: .string
                     )
+                    completeInitialAlertsIfNeeded()
                 }
-                Button("OK", role: .cancel) {}
+                Button("OK", role: .cancel) {
+                    completeInitialAlertsIfNeeded()
+                }
             } message: {
                 Text(store.profileIsolationRepairReport.userMessage ?? "Lumen Browser repaired saved profile assignments before browsing began.")
             }
@@ -207,6 +219,17 @@ public struct BrowserWindowView: View {
                 .clipped()
         }
         .focusedSceneValue(\.browserNavigationCommandContext, browserNavigationCommandContext)
+    }
+
+    private func completeInitialAlertsIfNeeded() {
+        guard !didCompleteInitialAlerts else {
+            return
+        }
+        didCompleteInitialAlerts = true
+        Task { @MainActor in
+            await Task.yield()
+            initialAlertsCompleted()
+        }
     }
 
     private var profileManagementRequestBinding: Binding<ProfileManagementRequest?> {

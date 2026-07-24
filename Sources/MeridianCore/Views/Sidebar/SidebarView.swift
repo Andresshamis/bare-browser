@@ -120,32 +120,21 @@ private struct SidebarFixedChromeForeground<Content: View>: View {
     }
 }
 
-private struct SidebarThemeSeparator: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.sidebarForegroundWhiteAmount) private var foregroundWhiteAmount
-
-    var body: some View {
-        Divider()
-            .opacity(foregroundWhiteAmount * (colorScheme == .dark ? 0.12 : 1))
-            .accessibilityHidden(true)
-    }
-}
-
 private let sidebarLockControlAnimation = Animation.smooth(duration: 0.24, extraBounce: 0)
 
 private enum SidebarHeaderMetrics {
-    static let trafficLightEdgeInset: CGFloat = 12
-    static let controlRowHeight: CGFloat = 24
-    static let controlRowBottomInset: CGFloat = 7
-    static let compactAddressControlsHeight: CGFloat = 34
+    static let trafficLightEdgeInset: CGFloat = 14
+    static let controlRowHeight: CGFloat = 28
+    static let controlRowBottomInset: CGFloat = 10
+    static let compactAddressControlsHeight: CGFloat = 40
     static let pageContentTopInset: CGFloat = 20
-    static let pageContentBottomInset: CGFloat = 12
-    static let inlineControlHeight: CGFloat = 14
-    static let spaceSwitcherButtonSize: CGFloat = 26
-    static let spaceSwitcherGlyphSize: CGFloat = 26
-    static let spaceSwitcherIconFrameSize: CGFloat = 20
-    static let spaceSwitcherSpacing: CGFloat = 6
-    static let spaceSwitcherPlusSymbolSize: CGFloat = 12
+    static let pageContentBottomInset: CGFloat = 16
+    static let inlineControlHeight: CGFloat = 24
+    static let spaceSwitcherButtonSize: CGFloat = 30
+    static let spaceSwitcherGlyphSize: CGFloat = 30
+    static let spaceSwitcherIconFrameSize: CGFloat = 22
+    static let spaceSwitcherSpacing: CGFloat = 8
+    static let spaceSwitcherPlusSymbolSize: CGFloat = 13
 
     static var spaceSwitcherVerticalInset: CGFloat {
         max(
@@ -322,7 +311,6 @@ public struct SidebarView: View {
                 VStack(spacing: 0) {
                     browserControlsHeader
                     compactAddressButton
-                    sidebarSeparator
                 }
             }
             spacePager
@@ -332,10 +320,7 @@ public struct SidebarView: View {
                 fallbackStyle: settledChromeLiveStyle,
                 isPinned: store.sidebarIsLockedOpen
             ) {
-                VStack(spacing: 0) {
-                    sidebarSeparator
-                    spaceSwitcher
-                }
+                spaceSwitcher
             }
         }
         .accessibilityLabel("Sidebar")
@@ -348,7 +333,7 @@ public struct SidebarView: View {
     }
 
     private var browserControlsHeader: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .center, spacing: 8) {
             WindowTrafficLightGroup(window: window)
 
             SidebarPinButton(isLockedOpen: store.sidebarIsLockedOpen) {
@@ -409,10 +394,6 @@ public struct SidebarView: View {
             addressMorphController: addressMorphController,
             isActivitySelected: activityPageIsSelected
         )
-    }
-
-    private var sidebarSeparator: some View {
-        SidebarThemeSeparator()
     }
 
     private var commandTargetTabID: TabID? {
@@ -501,7 +482,7 @@ public struct SidebarView: View {
                 )
             }
             .contentShape(Rectangle())
-            .padding(.horizontal, 12)
+            .padding(.horizontal, SidebarHeaderMetrics.trafficLightEdgeInset)
             .padding(.vertical, SidebarHeaderMetrics.spaceSwitcherVerticalInset)
         }
     }
@@ -584,7 +565,7 @@ public struct SidebarView: View {
         SidebarSpacePagerView(
             snapshot: makeSpacePagerSnapshot(),
             navigationRequest: pagerNavigationRequest,
-            selectTab: { store.selectTab($0) },
+            selectTab: { store.activateTab($0) },
             closeTab: { store.closeTab($0.id) },
             setTabPlacement: { tabID, placement in store.setTabPlacement(placement, for: tabID) },
             moveTab: { tabID, direction in
@@ -1061,22 +1042,22 @@ private struct SidebarAddressControls: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            HStack(spacing: 6) {
+        HStack(spacing: 8) {
+            HStack(spacing: 7) {
                 Button {
                     store.showCommandBar()
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 7) {
                         Image(systemName: siteSymbolName)
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
-                            .frame(width: 12)
+                            .frame(width: 14)
 
                         SidebarAddressMorphingText(
                             settledText: addressText,
                             controller: addressMorphController
                         )
-                            .font(.caption)
+                            .font(.system(size: 13))
                             .foregroundStyle(sidebarForegroundColor)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -1093,22 +1074,22 @@ private struct SidebarAddressControls: View {
                     copyCurrentURLToPasteboard()
                 } label: {
                     Image(systemName: didCopyCurrentURL ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(currentURLForCopy == nil ? .tertiary : .secondary)
-                        .frame(width: 22, height: 22)
-                        .contentShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .frame(width: 26, height: 26)
+                        .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .disabled(currentURLForCopy == nil)
                 .help("Copy current URL")
                 .accessibilityLabel("Copy current URL")
             }
-            .padding(.leading, 8)
+            .padding(.leading, 10)
             .padding(.trailing, 3)
-            .frame(height: 26)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .frame(height: 30)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(
                         .separator.opacity(0.35 * sidebarForegroundWhiteAmount),
                         lineWidth: 0.5
@@ -1117,8 +1098,8 @@ private struct SidebarAddressControls: View {
 
             sitePermissionsMenu
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 8)
+        .padding(.horizontal, SidebarHeaderMetrics.trafficLightEdgeInset)
+        .padding(.bottom, 10)
         .frame(height: SidebarHeaderMetrics.compactAddressControlsHeight, alignment: .top)
     }
 
@@ -1216,14 +1197,14 @@ private struct SidebarAddressControls: View {
             }
         } label: {
             Image(systemName: sitePermissionMenuSymbolName)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .symbolRenderingMode(.monochrome)
                 .foregroundStyle(sidebarForegroundColor)
                 .foregroundColor(sidebarForegroundColor)
-                .frame(width: 26, height: 26)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .frame(width: 30, height: 30)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(
                             .separator.opacity(0.35 * sidebarForegroundWhiteAmount),
                             lineWidth: 0.5
@@ -1577,7 +1558,7 @@ private struct ActivitySwitcherButtonLabel: View {
 
     var body: some View {
         Image(systemName: "clock.arrow.circlepath")
-            .font(.system(size: 14, weight: .semibold))
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(sidebarForegroundColor)
             .frame(
                 width: SidebarHeaderMetrics.spaceSwitcherIconFrameSize,
@@ -2883,17 +2864,17 @@ private struct SidebarPinButton: View {
         isLockedOpen ? "Use auto-hide sidebar" : "Pin sidebar open"
     }
 
-	var body: some View {
-		Button(action: action) {
-			Image(systemName: "sidebar.leading")
-				.font(.system(size: 11, weight: .semibold))
-				.foregroundStyle(.secondary)
-				.frame(width: 26, height: SidebarHeaderMetrics.inlineControlHeight)
-            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .background {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isHovered ? sidebarForegroundColor.opacity(0.08) : .clear)
-            }
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "sidebar.leading")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: SidebarHeaderMetrics.inlineControlHeight)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isHovered ? sidebarForegroundColor.opacity(0.08) : .clear)
+                }
         }
         .buttonStyle(.plain)
         .help(label)
@@ -2912,8 +2893,8 @@ private struct SidebarNavigationButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 11, weight: .semibold))
-                .frame(width: 22, height: SidebarHeaderMetrics.inlineControlHeight)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 24, height: SidebarHeaderMetrics.inlineControlHeight)
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
@@ -3406,12 +3387,12 @@ private struct SidebarActivityPageView: View, Equatable {
     var body: some View {
         GeometryReader { geometry in
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: SidebarLayoutMetrics.pageSectionSpacing) {
                     header
                     modeButtons
                     selectedSection
                 }
-                .padding(.horizontal, 10)
+                .padding(.horizontal, SidebarLayoutMetrics.contentHorizontalInset)
                 .padding(.top, SidebarHeaderMetrics.pageContentTopInset)
                 .padding(.bottom, SidebarHeaderMetrics.pageContentBottomInset)
                 .frame(width: max(geometry.size.width, 1), alignment: .topLeading)
@@ -3442,7 +3423,7 @@ private struct SidebarActivityPageView: View, Equatable {
             profileFilterMenu
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 4)
+        .padding(.horizontal, SidebarLayoutMetrics.sectionHeaderHorizontalInset)
     }
 
     private var modeButtons: some View {
@@ -3451,7 +3432,6 @@ private struct SidebarActivityPageView: View, Equatable {
                 modeButton(mode)
             }
         }
-        .padding(.horizontal, 2)
     }
 
     private func modeButton(_ mode: SidebarActivityMode) -> some View {
@@ -3829,7 +3809,7 @@ private struct SidebarSpacePageView: View, Equatable {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: SidebarLayoutMetrics.pageSectionSpacing) {
                 favoriteTabGrid
                 emptyFavoriteTabDropTarget
                 tabSection(
@@ -3851,7 +3831,7 @@ private struct SidebarSpacePageView: View, Equatable {
                     )
                 )
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, SidebarLayoutMetrics.contentHorizontalInset)
             .padding(.top, SidebarHeaderMetrics.pageContentTopInset)
             .padding(.bottom, SidebarHeaderMetrics.pageContentBottomInset)
             .frame(maxWidth: .infinity, minHeight: 1, alignment: .topLeading)
@@ -4345,18 +4325,18 @@ private struct SidebarFolderNodeView: View {
                     }
                 }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, SidebarLayoutMetrics.rowLeadingInset)
+        .padding(.vertical, 5)
     }
 
     private var folderLabel: some View {
         HStack(spacing: 8) {
             Image(systemName: "folder")
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: SidebarLayoutMetrics.rowFontSize, weight: .medium))
                 .foregroundStyle(.secondary)
-                .frame(width: 16)
+                .frame(width: SidebarLayoutMetrics.rowIconSize)
             Text(folderItem.folder.name)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: SidebarLayoutMetrics.rowFontSize, weight: .medium))
                 .lineLimit(1)
         }
         .contentShape(Rectangle())
@@ -4408,11 +4388,11 @@ private struct SidebarFolderNodeView: View {
     }
 
     private var folderLabelIndent: CGFloat {
-        CGFloat(nestingLevel) * 16
+        CGFloat(nestingLevel) * 18
     }
 
     private var folderContentIndent: CGFloat {
-        CGFloat(nestingLevel + 1) * 16
+        CGFloat(nestingLevel + 1) * 18
     }
 
     private func tabDropResetToken(for tabs: [SidebarTabItemSnapshot]) -> String {

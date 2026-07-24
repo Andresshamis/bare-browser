@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Microphone Capture Fixture</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font: 16px/1.5 system-ui, sans-serif;
+    }
+
+    body {
+      box-sizing: border-box;
+      display: grid;
+      min-height: 100vh;
+      margin: 0;
+      padding: 2rem;
+      place-items: center;
+    }
+
+    main {
+      width: min(34rem, 100%);
+    }
+
+    button {
+      font: inherit;
+      padding: 0.65rem 1rem;
+    }
+
+    output {
+      display: block;
+      margin-top: 1rem;
+      white-space: pre-wrap;
+    }
+
+    meter {
+      display: block;
+      width: 100%;
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Microphone Capture Fixture</h1>
+    <p>Starts an audio-only WebRTC capture and reports whether the track is live.</p>
+    <button id="start" type="button">Start microphone</button>
+    <output id="status">Ready</output>
+    <meter id="level" min="0" max="1" value="0" aria-label="Microphone level"></meter>
+  </main>
+  <script>
+    const startButton = document.querySelector("#start");
+    const status = document.querySelector("#status");
+    const level = document.querySelector("#level");
+
+    const report = (state, message) => {
+      document.documentElement.dataset.microphoneState = state;
+      status.textContent = message;
+    };
+
+    startButton.addEventListener("click", async () => {
+      startButton.disabled = true;
+      report("pending", "Requesting microphone access…");
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const track = stream.getAudioTracks()[0];
+        if (!track || track.readyState !== "live") {
+          throw new Error("The microphone stream did not contain a live audio track.");
+        }
+
+        const audioContext = new AudioContext();
+        const source = audioContext.createMediaStreamSource(stream);
+        const analyser = audioContext.createAnalyser();
+        const samples = new Uint8Array(analyser.fftSize);
+        source.connect(analyser);
+
+        const updateLevel = () => {
+          analyser.getByteTimeDomainData(samples);
+          const peak = samples.reduce(
+            (maximum, sample) => Math.max(maximum, Math.abs(sample - 128) / 128),
+            0
+          );
+          level.value = peak;
+          requestAnimationFrame(updateLevel);
+        };
+
+        updateLevel();
+        report("granted", `PASS: live audio track (${track.label || "default microphone"})`);
+      } catch (error) {
+        report("denied", `FAIL: ${error.name}: ${error.message}`);
+        startButton.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

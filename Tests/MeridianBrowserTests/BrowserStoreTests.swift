@@ -749,6 +749,7 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(store.spaces.first(where: { $0.id == spaceID })?.regularTabIDs.contains(tab.id) ?? true)
         XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isPinned, true)
         XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isFavorite, false)
+        XCTAssertNil(store.tabs.first(where: { $0.id == tab.id })?.essentialReference)
 
         XCTAssertTrue(store.setTabPlacement(.favorite, for: tab.id))
         XCTAssertEqual(store.selectedTabID, tab.id)
@@ -757,6 +758,13 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(store.spaces.first(where: { $0.id == spaceID })?.pinnedTabIDs.contains(tab.id) ?? true)
         XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isPinned, false)
         XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isFavorite, true)
+        XCTAssertEqual(
+            store.tabs.first(where: { $0.id == tab.id })?.essentialReference,
+            BrowserEssentialReference(
+                title: "Docs",
+                url: URL(string: "https://docs.example.com")!
+            )
+        )
 
         XCTAssertTrue(store.setTabPlacement(.regular, for: tab.id))
         XCTAssertEqual(store.selectedTabID, tab.id)
@@ -764,6 +772,79 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(store.spaces.first(where: { $0.id == spaceID })?.favoriteTabIDs.contains(tab.id) ?? true)
         XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isPinned, false)
         XCTAssertEqual(store.tabs.first(where: { $0.id == tab.id })?.isFavorite, false)
+        XCTAssertNil(store.tabs.first(where: { $0.id == tab.id })?.essentialReference)
+    }
+
+    func testActivatingEssentialRestoresCapturedPageAfterTabNavigatesAway() throws {
+        let store = BrowserStore()
+        let originalURL = try XCTUnwrap(URL(string: "https://original.example.com/article"))
+        let originalFaviconURL = try XCTUnwrap(URL(string: "https://original.example.com/icon.png"))
+        let otherURL = try XCTUnwrap(URL(string: "https://other.example.com/dashboard"))
+        let otherFaviconURL = try XCTUnwrap(URL(string: "https://other.example.com/icon.png"))
+        let tab = try XCTUnwrap(store.createTab(title: "Original Article", url: originalURL))
+
+        store.updateTabFavicon(originalFaviconURL, for: tab.id)
+        XCTAssertTrue(store.setTabPlacement(.favorite, for: tab.id))
+
+        store.updateTabFromWebView(
+            tabID: tab.id,
+            title: "Other Dashboard",
+            url: otherURL,
+            isLoading: false
+        )
+        store.updateTabFavicon(otherFaviconURL, for: tab.id)
+
+        let navigatedTab = try XCTUnwrap(store.tabs.first { $0.id == tab.id })
+        XCTAssertEqual(navigatedTab.url, otherURL)
+        XCTAssertEqual(navigatedTab.title, "Other Dashboard")
+        XCTAssertEqual(
+            navigatedTab.essentialReference,
+            BrowserEssentialReference(
+                title: "Original Article",
+                url: originalURL,
+                faviconURL: originalFaviconURL
+            )
+        )
+
+        XCTAssertTrue(store.activateTab(tab.id))
+
+        let restoredTab = try XCTUnwrap(store.tabs.first { $0.id == tab.id })
+        XCTAssertEqual(store.selectedTabID, tab.id)
+        XCTAssertEqual(restoredTab.url, originalURL)
+        XCTAssertNil(restoredTab.faviconURL)
+        XCTAssertEqual(
+            restoredTab.essentialReference,
+            BrowserEssentialReference(
+                title: "Original Article",
+                url: originalURL,
+                faviconURL: originalFaviconURL
+            )
+        )
+    }
+
+    func testLegacyFavoriteTabInfersEssentialReferenceWhenDecoded() throws {
+        let tabID = UUID()
+        let spaceID = UUID()
+        let profileID = UUID()
+        let legacyData = try JSONSerialization.data(withJSONObject: [
+            "id": tabID.uuidString,
+            "title": "Legacy Essential",
+            "url": "https://legacy.example.com/saved",
+            "parentSpaceID": spaceID.uuidString,
+            "isPinned": false,
+            "isFavorite": true,
+            "profileID": profileID.uuidString
+        ])
+
+        let tab = try JSONDecoder().decode(BrowserTab.self, from: legacyData)
+
+        XCTAssertEqual(
+            tab.essentialReference,
+            BrowserEssentialReference(
+                title: "Legacy Essential",
+                url: try XCTUnwrap(URL(string: "https://legacy.example.com/saved"))
+            )
+        )
     }
 
     func testCloseInactiveTabPreservesSelectedTab() throws {
@@ -857,6 +938,33 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(restoredTab.isFavorite)
         XCTAssertEqual(restoredSpace.pinnedTabIDs, [tab.id])
         XCTAssertFalse(restoredSpace.regularTabIDs.contains(tab.id))
+    }
+
+    func testEssentialReferenceRoundTripsAfterCurrentPageChanges() throws {
+        let store = BrowserStore()
+        let originalURL = try XCTUnwrap(URL(string: "https://saved.example.com/original"))
+        let currentURL = try XCTUnwrap(URL(string: "https://current.example.com/elsewhere"))
+        let tab = try XCTUnwrap(store.createTab(title: "Saved Page", url: originalURL))
+        XCTAssertTrue(store.setTabPlacement(.favorite, for: tab.id))
+        store.updateTabFromWebView(
+            tabID: tab.id,
+            title: "Current Page",
+            url: currentURL,
+            isLoading: false
+        )
+
+        let data = try JSONEncoder().encode(
+            store.persistentSnapshot(date: Date(timeIntervalSince1970: 18))
+        )
+        let decoded = try JSONDecoder().decode(BrowserSessionSnapshot.self, from: data)
+        let restored = BrowserStore(snapshot: decoded)
+        let restoredTab = try XCTUnwrap(restored.tabs.first { $0.id == tab.id })
+
+        XCTAssertEqual(restoredTab.url, currentURL)
+        XCTAssertEqual(
+            restoredTab.essentialReference,
+            BrowserEssentialReference(title: "Saved Page", url: originalURL)
+        )
     }
 
     func testTabReorderMovesWithinSidebarSectionsAndPreservesSelection() throws {
@@ -1768,6 +1876,48 @@ final class BrowserStoreTests: XCTestCase {
             store.requestSitePermission(kind: .popupWindow, origin: origin, profileID: profileID),
             .allow
         )
+    }
+
+    func testResolvingSitePermissionContinuesThePendingWebKitRequest() throws {
+        let store = BrowserStore()
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let origin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://microphone.example")!))
+        var resolutions: [SitePermissionPolicy.Evaluation] = []
+
+        let result = store.requestSitePermission(
+            kind: .microphone,
+            origin: origin,
+            profileID: profileID,
+            resolutionHandler: { resolutions.append($0) }
+        )
+
+        XCTAssertEqual(result, .ask)
+        XCTAssertTrue(resolutions.isEmpty)
+
+        _ = store.resolvePendingSitePermission(
+            .allow,
+            requestID: try XCTUnwrap(store.pendingSitePermissionRequest?.id)
+        )
+
+        XCTAssertEqual(resolutions, [.allow])
+    }
+
+    func testDismissingSitePermissionDeniesThePendingWebKitRequest() throws {
+        let store = BrowserStore()
+        let profileID = try XCTUnwrap(store.activeProfile?.id)
+        let origin = try XCTUnwrap(SitePermissionOrigin(url: URL(string: "https://microphone.example")!))
+        var resolutions: [SitePermissionPolicy.Evaluation] = []
+        _ = store.requestSitePermission(
+            kind: .microphone,
+            origin: origin,
+            profileID: profileID,
+            resolutionHandler: { resolutions.append($0) }
+        )
+
+        store.cancelPendingSitePermissionRequest()
+
+        XCTAssertNil(store.pendingSitePermissionRequest)
+        XCTAssertEqual(resolutions, [.deny(reason: "Microphone is blocked for this site.")])
     }
 
     func testRestoredSitePermissionSettingsAreLoadedFromSnapshot() throws {

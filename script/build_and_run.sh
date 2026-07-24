@@ -28,6 +28,7 @@ LEGACY_BUILD_STAMP="$DIST_DIR/.BareBrowserBuildConfiguration"
 APP_ICON_SOURCE="$ROOT_DIR/Resources/$APP_ICON_FILE"
 APP_ICON_PARTIAL_PLIST="$DIST_DIR/AppIconPartialInfo.plist"
 APP_ICON_ACTOOL_OUTPUT="$DIST_DIR/AppIconActoolOutput.plist"
+LOCAL_ENTITLEMENTS="$ROOT_DIR/Configuration/MeridianBrowserLocal.entitlements"
 # Keep the established local certificate for the same continuity guarantees as
 # the stable bundle identifier. This is a development implementation detail.
 DEV_SIGNING_IDENTITY="Bare Browser Local Development"
@@ -48,7 +49,13 @@ build_stamp_value() {
 }
 
 app_bundle_is_current() {
-  local source_paths=("$ROOT_DIR/Package.swift" "$ROOT_DIR/Sources" "$ROOT_DIR/Resources" "$ROOT_DIR/script/build_and_run.sh")
+  local source_paths=(
+    "$ROOT_DIR/Package.swift"
+    "$ROOT_DIR/Sources"
+    "$ROOT_DIR/Resources"
+    "$ROOT_DIR/script/build_and_run.sh"
+    "$LOCAL_ENTITLEMENTS"
+  )
   local newest_source
 
   [[ "${LUMEN_BROWSER_FORCE_BUILD:-0}" != "1" ]] || return 1
@@ -165,6 +172,10 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Lumen Browser uses the microphone only when you allow a website to capture audio.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>Lumen Browser uses Bluetooth only when a website asks to connect to a nearby device, such as using a passkey from your phone.</string>
   <key>UTExportedTypeDeclarations</key>
   <array>
     <dict>
@@ -331,6 +342,7 @@ sign_with_local_identity() {
     --keychain "$DEV_SIGNING_KEYCHAIN" \
     --sign "$identity" \
     --identifier "$BUNDLE_ID" \
+    --entitlements "$LOCAL_ENTITLEMENTS" \
     "$APP_BUNDLE"
   status=$?
   set -e
@@ -350,7 +362,11 @@ sign_app() {
   fi
 
   if [[ -n "$identity" && "$identity" != "-" ]]; then
-    codesign --force --sign "$identity" --identifier "$BUNDLE_ID" "$APP_BUNDLE"
+    codesign --force \
+      --sign "$identity" \
+      --identifier "$BUNDLE_ID" \
+      --entitlements "$LOCAL_ENTITLEMENTS" \
+      "$APP_BUNDLE"
     return
   fi
 
@@ -360,7 +376,11 @@ sign_app() {
     return
   fi
 
-  codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"
+  codesign --force \
+    --sign - \
+    --identifier "$BUNDLE_ID" \
+    --entitlements "$LOCAL_ENTITLEMENTS" \
+    "$APP_BUNDLE"
   echo "warning: no valid code-signing identity found and local signing identity creation failed; using ad-hoc signing. Keychain Always Allow may not persist across rebuilt app binaries." >&2
 }
 
