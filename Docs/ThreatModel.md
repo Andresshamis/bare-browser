@@ -21,6 +21,8 @@
 ## Current Controls
 
 - URL navigation is centralized in `URLSecurityPolicy`.
+- HTTP(S) URLs delivered by macOS when Lumen Browser is the default browser enter
+  through the same `BrowserStore.open` and `URLSecurityPolicy` path as in-app opens.
 - Unsafe script/data schemes are blocked.
 - External app and `file://` links create a pending native confirmation before any external handoff, retaining the target URL for approval while reducing source page context to a sanitized host or scheme label.
 - Non-local HTTP main-frame navigations are HTTPS-first where practical: explicit opens and WebKit main-frame HTTP actions first attempt the HTTPS equivalent, while localhost and loopback URLs remain HTTP for local development. If a tracked HTTPS upgrade attempt falls back to HTTP, Lumen Browser shows the generic insecure-transport status message without embedding the full URL.
