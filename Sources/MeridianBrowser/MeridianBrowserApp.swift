@@ -51,6 +51,7 @@ struct MeridianBrowserApp: App {
                 initialAlertsCompleted: beginStartupPromptSequence
             )
                 .frame(minWidth: 900, minHeight: 620)
+                .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
                 .onOpenURL { url in
                     store.open(url)
                 }
