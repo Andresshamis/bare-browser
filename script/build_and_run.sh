@@ -142,12 +142,14 @@ cat >"$INFO_PLIST" <<PLIST
   <array>
     <dict>
       <key>CFBundleURLName</key>
-      <string>Web site URL</string>
+      <string>Web URLs</string>
       <key>CFBundleURLSchemes</key>
       <array>
         <string>http</string>
         <string>https</string>
       </array>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
     </dict>
   </array>
   <key>LSMinimumSystemVersion</key>
