@@ -69,6 +69,7 @@ struct SidebarFavoriteTabGrid: View {
                     canMoveDown: item.canMoveDown,
                     dragStarted: { tabDropState.beginDrag() }
                 )
+                .transition(SidebarTabLifecycleMotion.tileTransition)
                 .onDrop(
                     of: SidebarTabDragPayload.acceptedTypes,
                     delegate: SidebarFavoriteTabDropDelegate(
@@ -193,7 +194,6 @@ private struct SidebarFavoriteTabTile: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
-    @Environment(\.sidebarUsesDarkForeground) private var sidebarUsesDarkForeground
     @State private var isHovered = false
 
     var body: some View {
@@ -206,12 +206,19 @@ private struct SidebarFavoriteTabTile: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(tileBorderColor, lineWidth: 0.5)
                 }
+                .shadow(
+                    color: sidebarForegroundColor.opacity(isHovered ? 0.10 : 0),
+                    radius: isHovered ? 5 : 0,
+                    y: isHovered ? 2 : 0
+                )
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .scaleEffect(isHovered ? 1.025 : 1)
         }
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity)
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.14), value: isHovered)
         .onDrag {
             dragStarted()
             return NSItemProvider(object: item.tab.id.uuidString as NSString)
@@ -272,25 +279,26 @@ private struct SidebarFavoriteTabTile: View {
         if isHovered {
             return AnyShapeStyle(sidebarForegroundColor.opacity(hoverBackgroundOpacity))
         }
-        return AnyShapeStyle(.clear)
+        return AnyShapeStyle(sidebarForegroundColor.opacity(idleBackgroundOpacity))
     }
 
     private var tileBorderColor: Color {
-        if sidebarUsesDarkForeground {
-            return .clear
-        }
         if item.isSelected {
-            return sidebarForegroundColor.opacity(colorScheme == .dark ? 0.24 : 0.18)
+            return sidebarForegroundColor.opacity(colorScheme == .dark ? 0.26 : 0.22)
         }
-        return sidebarForegroundColor.opacity(isHovered ? 0.14 : 0.06)
+        return sidebarForegroundColor.opacity(isHovered ? 0.20 : 0.10)
     }
 
     private var selectionBackgroundOpacity: Double {
-        colorScheme == .dark ? 0.14 : 0.07
+        colorScheme == .dark ? 0.17 : 0.10
     }
 
     private var hoverBackgroundOpacity: Double {
-        colorScheme == .dark ? 0.08 : 0.045
+        colorScheme == .dark ? 0.13 : 0.085
+    }
+
+    private var idleBackgroundOpacity: Double {
+        colorScheme == .dark ? 0.065 : 0.04
     }
 
     private var helpText: String {

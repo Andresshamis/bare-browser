@@ -89,6 +89,59 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         XCTAssertNil(SidebarSpaceSwitcherLayout.indicatorX(for: .before(UUID()), spaceIDs: [spaceID]))
     }
 
+    func testSpaceSwitcherSelectionResolvesTheActiveButtonScrollTarget() {
+        let spaceID = UUID()
+
+        XCTAssertEqual(
+            SidebarSpaceSwitcherSelection.scrollTarget(
+                visualSelectedSpaceID: spaceID,
+                isActivitySelected: false
+            ),
+            .space(spaceID)
+        )
+        XCTAssertEqual(
+            SidebarSpaceSwitcherSelection.scrollTarget(
+                visualSelectedSpaceID: spaceID,
+                isActivitySelected: true
+            ),
+            .activity
+        )
+        XCTAssertNil(
+            SidebarSpaceSwitcherSelection.scrollTarget(
+                visualSelectedSpaceID: nil,
+                isActivitySelected: false
+            )
+        )
+    }
+
+    func testSpaceSwitcherSelectionOnlyRevealsOffscreenTargets() {
+        let visibleSpaceID = UUID()
+        let hiddenSpaceID = UUID()
+        let visibleTargets: Set<SidebarSpacePagerPageID> = [
+            .activity,
+            .space(visibleSpaceID)
+        ]
+
+        XCTAssertFalse(
+            SidebarSpaceSwitcherSelection.shouldReveal(
+                .activity,
+                visibleTargets: visibleTargets
+            )
+        )
+        XCTAssertFalse(
+            SidebarSpaceSwitcherSelection.shouldReveal(
+                .space(visibleSpaceID),
+                visibleTargets: visibleTargets
+            )
+        )
+        XCTAssertTrue(
+            SidebarSpaceSwitcherSelection.shouldReveal(
+                .space(hiddenSpaceID),
+                visibleTargets: visibleTargets
+            )
+        )
+    }
+
     func testSpaceSwitcherLayoutIndicatorPositionsAdvanceAcrossSlots() throws {
         let firstID = UUID()
         let secondID = UUID()
@@ -182,6 +235,13 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         let destinationID = UUID()
 
         XCTAssertEqual(
+            SidebarSpacePagerPreview.pageID(
+                for: .space(destinationID),
+                selectedPageID: .space(selectedID)
+            ),
+            .space(destinationID)
+        )
+        XCTAssertEqual(
             SidebarSpacePagerPreview.spaceID(
                 for: .space(destinationID),
                 selectedPageID: .space(selectedID)
@@ -190,9 +250,25 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         )
     }
 
-    func testDoesNotPreviewCurrentSpaceOrActivityPage() {
+    func testPreviewsActivityDestinationBeforePagerSettles() {
         let selectedID = UUID()
 
+        XCTAssertEqual(
+            SidebarSpacePagerPreview.pageID(
+                for: .activity,
+                selectedPageID: .space(selectedID)
+            ),
+            .activity
+        )
+    }
+
+    func testDoesNotPreviewCurrentPageOrResolveActivityAsSpace() {
+        let selectedID = UUID()
+
+        XCTAssertNil(SidebarSpacePagerPreview.pageID(
+            for: .space(selectedID),
+            selectedPageID: .space(selectedID)
+        ))
         XCTAssertNil(SidebarSpacePagerPreview.spaceID(
             for: .space(selectedID),
             selectedPageID: .space(selectedID)
@@ -1579,6 +1655,68 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         XCTAssertEqual(page.regularTabs.first?.hasLiveSession, false)
     }
 
+    func testPageLifecycleIDsIncludeEveryVisibleTabInDisplayOrder() {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let parentFolder = BrowserFolder(name: "Parent", parentSpaceID: space.id)
+        let childFolder = BrowserFolder(
+            name: "Child",
+            parentSpaceID: space.id,
+            parentFolderID: parentFolder.id
+        )
+        let favorite = sidebarTabItem(
+            title: "Favorite",
+            spaceID: space.id,
+            profileID: profileID,
+            isFavorite: true
+        )
+        let pinned = sidebarTabItem(
+            title: "Pinned",
+            spaceID: space.id,
+            profileID: profileID,
+            isPinned: true
+        )
+        let parentTab = sidebarTabItem(
+            title: "Parent Tab",
+            spaceID: space.id,
+            profileID: profileID,
+            folderID: parentFolder.id
+        )
+        let childTab = sidebarTabItem(
+            title: "Child Tab",
+            spaceID: space.id,
+            profileID: profileID,
+            folderID: childFolder.id
+        )
+        let regular = sidebarTabItem(
+            title: "Regular",
+            spaceID: space.id,
+            profileID: profileID
+        )
+        let childItem = SidebarFolderItemSnapshot(
+            folder: childFolder,
+            tabs: [childTab],
+            childFolders: []
+        )
+        let parentItem = SidebarFolderItemSnapshot(
+            folder: parentFolder,
+            tabs: [parentTab],
+            childFolders: [childItem]
+        )
+        let page = sidebarPage(
+            space: space,
+            favoriteTabs: [favorite],
+            pinnedTabs: [pinned],
+            folders: [parentItem],
+            regularTabs: [regular]
+        )
+
+        XCTAssertEqual(
+            page.tabLifecycleIDs,
+            [favorite.id, pinned.id, parentTab.id, childTab.id, regular.id]
+        )
+    }
+
     func testShowsEmptyRegularDropSectionDuringDragWhenOnlyEssentialsHaveTabs() throws {
         let profileID = UUID()
         let space = BrowserSpace(name: "Work", profileID: profileID)
@@ -1890,6 +2028,89 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
 
         state.setPreviewStartPageSpaceID(nil)
         XCTAssertNil(state.previewStartPageSpaceID)
+    }
+
+    @MainActor
+    func testPresentationStateCanOverrideActivityPageDuringPagerPreview() {
+        let state = BrowserContentPresentationState()
+
+        state.setActivityPagePreviewOverride(true)
+        XCTAssertEqual(state.activityPagePreviewOverride, true)
+
+        state.setActivityPagePreviewOverride(false)
+        XCTAssertEqual(state.activityPagePreviewOverride, false)
+
+        state.setActivityPagePreviewOverride(nil)
+        XCTAssertNil(state.activityPagePreviewOverride)
+    }
+
+    func testActivityPresentationUsesPagerTargetBeforeCommittedSelection() {
+        XCTAssertTrue(BrowserActivityPagePresentation.isPresented(
+            isSelected: false,
+            previewOverride: true
+        ))
+        XCTAssertFalse(BrowserActivityPagePresentation.isPresented(
+            isSelected: true,
+            previewOverride: false
+        ))
+        XCTAssertTrue(BrowserActivityPagePresentation.isPresented(
+            isSelected: true,
+            previewOverride: nil
+        ))
+    }
+
+    func testUnloadedWebPreviewUsesPlaceholderUntilSnapshotExists() throws {
+        let selectedTabID = UUID()
+        let previewTab = BrowserTab(
+            title: "Target",
+            url: try XCTUnwrap(URL(string: "https://example.com")),
+            parentSpaceID: UUID(),
+            profileID: UUID()
+        )
+
+        XCTAssertTrue(
+            BrowserContentPreviewPlaceholder.shouldShow(
+                for: previewTab,
+                selectedTabID: selectedTabID,
+                snapshotIsAvailable: false
+            )
+        )
+        XCTAssertFalse(
+            BrowserContentPreviewPlaceholder.shouldShow(
+                for: previewTab,
+                selectedTabID: selectedTabID,
+                snapshotIsAvailable: true
+            )
+        )
+    }
+
+    func testPreviewPlaceholderIgnoresCurrentAndStartPageTabs() throws {
+        let currentTab = BrowserTab(
+            title: "Current",
+            url: try XCTUnwrap(URL(string: "https://example.com")),
+            parentSpaceID: UUID(),
+            profileID: UUID()
+        )
+        let startPageTab = BrowserTab(
+            title: "New Tab",
+            parentSpaceID: UUID(),
+            profileID: UUID()
+        )
+
+        XCTAssertFalse(
+            BrowserContentPreviewPlaceholder.shouldShow(
+                for: currentTab,
+                selectedTabID: currentTab.id,
+                snapshotIsAvailable: false
+            )
+        )
+        XCTAssertFalse(
+            BrowserContentPreviewPlaceholder.shouldShow(
+                for: startPageTab,
+                selectedTabID: currentTab.id,
+                snapshotIsAvailable: false
+            )
+        )
     }
 
     @MainActor

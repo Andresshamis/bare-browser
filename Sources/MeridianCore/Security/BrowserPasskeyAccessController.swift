@@ -8,6 +8,24 @@ private let browserPasskeyLogger = Logger(
     category: "Passkeys"
 )
 
+public enum BrowserPasskeyCapability {
+    public static let browserEntitlement =
+        "com.apple.developer.web-browser.public-key-credential"
+
+    public static let hasSignedBrowserEntitlement: Bool = {
+        guard let task = SecTaskCreateFromSelf(nil),
+              let value = SecTaskCopyValueForEntitlement(
+                task,
+                browserEntitlement as CFString,
+                nil
+              ) else {
+            return false
+        }
+
+        return value as? Bool == true
+    }()
+}
+
 public enum BrowserPasskeyAuthorizationState: Equatable, Sendable {
     case authorized
     case denied
@@ -37,12 +55,18 @@ public enum BrowserPasskeyAccessPolicy {
             && state == .notDetermined
             && !didRequestThisLaunch
     }
+
+    public static func shouldInstallUnavailableInterception(
+        isBrowserEntitled: Bool
+    ) -> Bool {
+        !isBrowserEntitled
+    }
 }
 
 @MainActor
 public final class BrowserPasskeyAccessController: ObservableObject {
     public static let browserEntitlement =
-        "com.apple.developer.web-browser.public-key-credential"
+        BrowserPasskeyCapability.browserEntitlement
 
     @Published public private(set) var authorizationState: BrowserPasskeyAuthorizationState
     public let isBrowserEntitled: Bool
@@ -56,9 +80,7 @@ public final class BrowserPasskeyAccessController: ObservableObject {
         self.authorizationState = BrowserPasskeyAuthorizationState(
             credentialManager.authorizationStateForPlatformCredentials
         )
-        self.isBrowserEntitled = Self.signedEntitlementIsEnabled(
-            Self.browserEntitlement
-        )
+        self.isBrowserEntitled = BrowserPasskeyCapability.hasSignedBrowserEntitlement
     }
 
     public func requestAuthorizationIfNeeded() {
@@ -85,18 +107,5 @@ public final class BrowserPasskeyAccessController: ObservableObject {
                 )
             }
         }
-    }
-
-    private static func signedEntitlementIsEnabled(_ entitlement: String) -> Bool {
-        guard let task = SecTaskCreateFromSelf(nil),
-              let value = SecTaskCopyValueForEntitlement(
-                task,
-                entitlement as CFString,
-                nil
-              ) else {
-            return false
-        }
-
-        return value as? Bool == true
     }
 }
