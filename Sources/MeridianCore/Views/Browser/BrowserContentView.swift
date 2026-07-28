@@ -86,14 +86,14 @@ public struct BrowserContentView: View {
                 pruneWebViewRegistry()
             }
             .onChange(of: store.selectedTabID) { _, _ in
-                if !activityPageIsSelected {
+                if !activityPageIsPresented {
                     beginSnapshotHandoffIfNeeded(for: store.selectedTabID)
                 }
                 if store.selectedTabID != nil {
                     presentationState.setPreviewStartPageSpaceID(nil)
                 }
                 syncWebViewState()
-                if !activityPageIsSelected {
+                if !activityPageIsPresented {
                     webViewRegistry.markActive(store.selectedTabID)
                 }
             }
@@ -106,6 +106,9 @@ public struct BrowserContentView: View {
                     beginSnapshotHandoffIfNeeded(for: store.selectedTabID)
                     webViewRegistry.markActive(store.selectedTabID)
                 }
+                syncWebViewState()
+            }
+            .onChange(of: presentationState.activityPagePreviewOverride) { _, _ in
                 syncWebViewState()
             }
             .onChange(of: store.spaces) { _, _ in
@@ -150,7 +153,7 @@ public struct BrowserContentView: View {
                 state: webViewState,
                 activeTab: activeWebTab,
                 activeProfile: activeWebProfile,
-                isActive: !activityPageIsSelected,
+                isActive: !activityPageIsPresented,
                 passwordAutofillRevision: store.passwordCredentialAutofillRevision,
                 registry: webViewRegistry,
                 dataStoreProvider: dataStoreProvider,
@@ -264,7 +267,7 @@ public struct BrowserContentView: View {
                 completeSnapshotHandoffSoon(for: identity)
             }
             .opacity(activeWebTab == nil ? 0 : 1)
-            .allowsHitTesting(activeWebTab != nil && !activityPageIsSelected)
+            .allowsHitTesting(activeWebTab != nil && !activityPageIsPresented)
 
             activityOverviewSurface
 
@@ -290,10 +293,10 @@ public struct BrowserContentView: View {
             selectTab: { selectOverviewTab($0) },
             customizeSpace: { customizeOverviewSpace($0) }
         )
-        .opacity(activityPageIsSelected ? 1 : 0)
-        .allowsHitTesting(activityPageIsSelected)
-        .accessibilityHidden(!activityPageIsSelected)
-        .zIndex(activityPageIsSelected ? 2 : 0)
+        .opacity(activityPageIsPresented ? 1 : 0)
+        .allowsHitTesting(activityPageIsPresented)
+        .accessibilityHidden(!activityPageIsPresented)
+        .zIndex(activityPageIsPresented ? 2 : 0)
     }
 
     @ViewBuilder
@@ -329,7 +332,7 @@ public struct BrowserContentView: View {
 
     @ViewBuilder
     private var foregroundSurface: some View {
-        if activityPageIsSelected {
+        if activityPageIsPresented {
             EmptyView()
         } else if let tab = store.activeTab {
             switch tab.content {
@@ -396,7 +399,7 @@ public struct BrowserContentView: View {
             presentationState.snapshot(for: store.profileContext(for: tab.id))
         } != nil
 
-        return !activityPageIsSelected
+        return !activityPageIsPresented
             && previewCustomizationContext == nil
             && BrowserContentPreviewPlaceholder.shouldShow(
                 for: previewTab,
@@ -418,7 +421,7 @@ public struct BrowserContentView: View {
     }
 
     private var snapshotOverlayImage: NSImage? {
-        guard !activityPageIsSelected,
+        guard !activityPageIsPresented,
               previewCustomizationContext == nil else {
             return nil
         }
@@ -483,7 +486,7 @@ public struct BrowserContentView: View {
     }
 
     private var activeContentShowsStartPage: Bool {
-        guard !activityPageIsSelected else {
+        guard !activityPageIsPresented else {
             return false
         }
 
@@ -505,7 +508,7 @@ public struct BrowserContentView: View {
     }
 
     private var previewCustomizationContext: SpaceCustomizationPreviewContext? {
-        guard !activityPageIsSelected,
+        guard !activityPageIsPresented,
               let previewTabID = presentationState.previewTabID,
               previewTabID != store.selectedTabID,
               let previewTab = store.tabs.first(where: { $0.id == previewTabID }),
@@ -519,6 +522,13 @@ public struct BrowserContentView: View {
 
     private var spaceOverviewPagesForDisplay: [SidebarSpacePageSnapshot] {
         cachedSpaceOverviewPages ?? []
+    }
+
+    private var activityPageIsPresented: Bool {
+        BrowserActivityPagePresentation.isPresented(
+            isSelected: activityPageIsSelected,
+            previewOverride: presentationState.activityPagePreviewOverride
+        )
     }
 
     private var spaceOverviewIsLoading: Bool {
@@ -836,7 +846,7 @@ public struct BrowserContentView: View {
     }
 
     private func syncWebViewState() {
-        guard !activityPageIsSelected else {
+        guard !activityPageIsPresented else {
             presentationState.setActiveContentTabID(nil)
             webViewState.title = "Activity"
             webViewState.isLoading = false
@@ -873,7 +883,7 @@ public struct BrowserContentView: View {
     }
 
     private func isSelected(identity: WebContentSessionIdentity) -> Bool {
-        !activityPageIsSelected
+        !activityPageIsPresented
             && identity.tabID == store.selectedTabID
             && isCurrent(identity: identity)
     }

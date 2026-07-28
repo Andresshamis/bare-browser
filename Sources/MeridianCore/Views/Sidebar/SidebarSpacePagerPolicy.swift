@@ -4,6 +4,7 @@ import SwiftUI
 enum SidebarSpacePagerMetrics {
     static let selectionAnimation: Animation = .smooth(duration: 0.18, extraBounce: 0)
     static let activeScrollSensitivity: CGFloat = 0.35
+    static let inputAxisLockMinimumDisplacement: CGFloat = 0.5
     static let directionalDistanceThresholdInPages: CGFloat = 0.0025
     static let directionalVelocityThreshold: CGFloat = 20
     static let creationDirectionInferenceDistance: CGFloat = 2
@@ -46,6 +47,57 @@ struct SidebarSpacePagerHorizontalInputSample: Equatable, Sendable {
             return nil
         }
         adjustedDisplacementX = -scrollingDeltaX
+    }
+}
+
+enum SidebarSpacePagerScrollAxis: Equatable, Sendable {
+    case undecided
+    case horizontal
+    case vertical
+}
+
+/// Locks a precise trackpad gesture to one axis before the pager rewrites any
+/// events. Vertical tab-list scrolling must remain on AppKit's untouched
+/// NSScrollView path; copying those events here adds work at display cadence
+/// and can interfere with native scroll coalescing.
+struct SidebarSpacePagerScrollAxisLock: Equatable, Sendable {
+    private(set) var axis: SidebarSpacePagerScrollAxis = .undecided
+    private var cumulativeX: CGFloat = 0
+    private var cumulativeY: CGFloat = 0
+
+    mutating func update(
+        scrollingDeltaX: CGFloat,
+        scrollingDeltaY: CGFloat,
+        minimumDisplacement: CGFloat
+    ) -> SidebarSpacePagerScrollAxis {
+        guard axis == .undecided,
+              scrollingDeltaX.isFinite,
+              scrollingDeltaY.isFinite else {
+            return axis
+        }
+
+        cumulativeX += scrollingDeltaX
+        cumulativeY += scrollingDeltaY
+
+        let minimum = max(minimumDisplacement.isFinite ? minimumDisplacement : 0, 0)
+        guard hypot(cumulativeX, cumulativeY) >= minimum else {
+            return .undecided
+        }
+
+        let horizontalMagnitude = abs(cumulativeX)
+        let verticalMagnitude = abs(cumulativeY)
+        guard horizontalMagnitude != verticalMagnitude else {
+            return .undecided
+        }
+
+        axis = horizontalMagnitude > verticalMagnitude ? .horizontal : .vertical
+        return axis
+    }
+
+    mutating func reset() {
+        axis = .undecided
+        cumulativeX = 0
+        cumulativeY = 0
     }
 }
 
@@ -408,12 +460,21 @@ struct SidebarSpacePagerSelection {
 }
 
 struct SidebarSpacePagerPreview {
+    static func pageID(
+        for targetPageID: SidebarSpacePagerPageID,
+        selectedPageID: SidebarSpacePagerPageID?
+    ) -> SidebarSpacePagerPageID? {
+        targetPageID == selectedPageID ? nil : targetPageID
+    }
+
     static func spaceID(
         for targetPageID: SidebarSpacePagerPageID,
         selectedPageID: SidebarSpacePagerPageID?
     ) -> SpaceID? {
-        guard targetPageID != selectedPageID,
-              case .space(let spaceID) = targetPageID else {
+        guard case .space(let spaceID)? = pageID(
+            for: targetPageID,
+            selectedPageID: selectedPageID
+        ) else {
             return nil
         }
         return spaceID

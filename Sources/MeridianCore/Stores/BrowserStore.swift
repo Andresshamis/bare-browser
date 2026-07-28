@@ -830,7 +830,7 @@ public final class BrowserStore: ObservableObject {
             selectedTabID = selectedSpace?.selectedTabID
         }
         refreshActivePageSecurityStatus()
-        persistSession()
+        schedulePersistSession()
         return true
     }
 

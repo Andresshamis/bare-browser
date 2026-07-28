@@ -860,6 +860,30 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertFalse(store.selectedSpace?.regularTabIDs.contains(inactiveTab.id) ?? true)
     }
 
+    func testRapidTabClosuresCoalesceSessionPersistenceUntilFlush() throws {
+        let persistence = BrowserStoreSessionPersistenceSpy()
+        let store = BrowserStore(sessionPersistence: persistence)
+        let firstTab = try XCTUnwrap(
+            store.createTab(title: "First", url: URL(string: "https://first.example.com")!)
+        )
+        let secondTab = try XCTUnwrap(
+            store.createTab(title: "Second", url: URL(string: "https://second.example.com")!)
+        )
+        persistence.savedSnapshots.removeAll()
+        persistence.fallbacks.removeAll()
+
+        XCTAssertTrue(store.closeTab(firstTab.id))
+        XCTAssertTrue(store.closeTab(secondTab.id))
+        XCTAssertTrue(persistence.savedSnapshots.isEmpty)
+
+        store.flushScheduledSessionPersistence(date: Date(timeIntervalSince1970: 20))
+
+        XCTAssertEqual(persistence.savedSnapshots.count, 1)
+        XCTAssertFalse(persistence.savedSnapshots[0].tabs.contains { tab in
+            tab.id == firstTab.id || tab.id == secondTab.id
+        })
+    }
+
     func testMoveTabReordersRegularTabs() throws {
         let store = BrowserStore()
         let first = try XCTUnwrap(store.createTab(title: "First", url: URL(string: "https://first.example.com")!))

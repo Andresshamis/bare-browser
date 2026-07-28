@@ -4,6 +4,8 @@ import AppKit
 public final class BrowserContentPresentationState: ObservableObject {
     @Published public private(set) var previewTabID: TabID?
     @Published public private(set) var previewStartPageSpaceID: SpaceID?
+    // nil follows the committed selection; true/false follows the live pager target.
+    @Published private(set) var activityPagePreviewOverride: Bool?
     @Published public private(set) var activeContentTabID: TabID?
     @Published public private(set) var snapshotHandoffIdentity: WebContentSessionIdentity?
     private var snapshotHandoffID: UUID?
@@ -37,6 +39,14 @@ public final class BrowserContentPresentationState: ObservableObject {
         }
 
         previewStartPageSpaceID = spaceID
+    }
+
+    func setActivityPagePreviewOverride(_ isPresented: Bool?) {
+        guard activityPagePreviewOverride != isPresented else {
+            return
+        }
+
+        activityPagePreviewOverride = isPresented
     }
 
     public func setActiveContentTabID(_ tabID: TabID?) {
@@ -139,6 +149,15 @@ public final class BrowserContentPresentationState: ObservableObject {
 
             self?.completeSnapshotHandoff(handoffID, for: identity)
         }
+    }
+}
+
+struct BrowserActivityPagePresentation {
+    static func isPresented(
+        isSelected: Bool,
+        previewOverride: Bool?
+    ) -> Bool {
+        previewOverride ?? isSelected
     }
 }
 

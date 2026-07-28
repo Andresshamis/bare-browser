@@ -5,6 +5,7 @@ Lumen Browser uses `WKWebView`, not Safari's full browser process or Chromium. K
 ## Current Known Limitations
 
 - Some Safari browser features are not public `WKWebView` APIs.
+- Passkeys and security keys for arbitrary relying-party domains require Apple's managed `com.apple.developer.web-browser.public-key-credential` entitlement. When that signed entitlement is absent, Lumen Browser rejects webpage WebAuthn `create` and `get` requests and displays a native message directing the user to another sign-in method. Entitled builds leave WebAuthn handling to WebKit.
 - Chrome extension compatibility is not available and should not be claimed.
 - Safari Web Extensions require a dedicated extension architecture and are not part of this scaffold.
 - Per-profile isolation depends on WebKit support for identified website data stores. Persistent profiles use `WKWebsiteDataStore(forIdentifier:)`; each private profile reuses one `.nonPersistent()` store until that private profile closes.

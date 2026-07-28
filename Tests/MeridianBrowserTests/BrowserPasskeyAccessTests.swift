@@ -22,6 +22,19 @@ final class BrowserPasskeyAccessTests: XCTestCase {
         )
     }
 
+    func testInstallsUnavailableInterceptionOnlyWithoutBrowserEntitlement() {
+        XCTAssertTrue(
+            BrowserPasskeyAccessPolicy.shouldInstallUnavailableInterception(
+                isBrowserEntitled: false
+            )
+        )
+        XCTAssertFalse(
+            BrowserPasskeyAccessPolicy.shouldInstallUnavailableInterception(
+                isBrowserEntitled: true
+            )
+        )
+    }
+
     func testDoesNotRepeatOrOverridePasskeyAuthorizationDecision() {
         XCTAssertFalse(
             BrowserPasskeyAccessPolicy.shouldRequestAuthorization(

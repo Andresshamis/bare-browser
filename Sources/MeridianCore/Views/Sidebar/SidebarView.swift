@@ -144,6 +144,17 @@ private enum SidebarHeaderMetrics {
     }
 }
 
+private enum SidebarSpaceSwitcherMotion {
+    static let revealAnimation = Animation.timingCurve(
+        0.42,
+        0,
+        0.20,
+        1,
+        duration: 0.48
+    )
+    static let selectionAnimation = Animation.easeOut(duration: 0.20)
+}
+
 enum SidebarSpaceSwitcherDropTarget: Equatable {
     case before(SpaceID)
     case tail
@@ -228,6 +239,25 @@ enum SidebarSpaceSwitcherLayout {
     }
 }
 
+enum SidebarSpaceSwitcherSelection {
+    static func scrollTarget(
+        visualSelectedSpaceID: SpaceID?,
+        isActivitySelected: Bool
+    ) -> SidebarSpacePagerPageID? {
+        if isActivitySelected {
+            return .activity
+        }
+        return visualSelectedSpaceID.map(SidebarSpacePagerPageID.space)
+    }
+
+    static func shouldReveal(
+        _ target: SidebarSpacePagerPageID,
+        visibleTargets: Set<SidebarSpacePagerPageID>
+    ) -> Bool {
+        !visibleTargets.contains(target)
+    }
+}
+
 struct SidebarSpaceSwitcherDragState: Equatable {
     var draggedSpaceID: SpaceID?
     var activeTarget: SidebarSpaceSwitcherDropTarget?
@@ -256,9 +286,10 @@ public struct SidebarView: View {
     @ObservedObject private var presentationState: BrowserContentPresentationState
     @Binding private var activityPageIsSelected: Bool
     @State private var window: NSWindow?
-    @State private var previewedSpaceID: SpaceID?
+    @State private var previewedPageID: SidebarSpacePagerPageID?
     @State private var pagerNavigationRequest: SidebarSpacePagerNavigationRequest?
     @State private var spaceSwitcherDragState = SidebarSpaceSwitcherDragState()
+    @State private var visibleSpaceSwitcherTargets: Set<SidebarSpacePagerPageID> = []
     private let tabHasLiveSession: @MainActor (TabID) -> Bool
     private let fixedChromeLiveStyleController: SidebarFixedChromeLiveStyleController
     private let addressMorphController: SidebarAddressMorphController
@@ -413,77 +444,118 @@ public struct SidebarView: View {
     }
 
     private var spaceSwitcher: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            let sidebarSpaces = store.sidebarSpaces
-            let sidebarSpaceIDs = sidebarSpaces.map(\.id)
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                let sidebarSpaces = store.sidebarSpaces
+                let sidebarSpaceIDs = sidebarSpaces.map(\.id)
 
-            HStack(spacing: SidebarHeaderMetrics.spaceSwitcherSpacing) {
-                Button {
-                    showActivity()
-                } label: {
-                    ActivitySwitcherButtonLabel(isSelected: isActivitySelected)
-                }
-                .buttonStyle(.plain)
-                .help("History and Downloads")
-                .accessibilityLabel("History and Downloads")
+                HStack(spacing: SidebarHeaderMetrics.spaceSwitcherSpacing) {
+                    Button {
+                        showActivity()
+                    } label: {
+                        ActivitySwitcherButtonLabel(isSelected: isActivitySelected)
+                    }
+                    .buttonStyle(.plain)
+                    .help("History and Downloads")
+                    .accessibilityLabel("History and Downloads")
+                    .id(SidebarSpacePagerPageID.activity)
+                    .onScrollVisibilityChange(threshold: 0.98) { isVisible in
+                        updateSpaceSwitcherVisibility(.activity, isVisible: isVisible)
+                    }
 
-                ForEach(sidebarSpaces) { space in
-                    spaceSwitcherButton(
-                        space,
-                        isBeingDragged: spaceSwitcherDragState.draggedSpaceID == space.id
-                    )
-                }
-
-                Button {
-                    _ = store.createSpace(name: "New Space")
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: SidebarHeaderMetrics.spaceSwitcherPlusSymbolSize, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(
-                            width: SidebarHeaderMetrics.spaceSwitcherButtonSize,
-                            height: SidebarHeaderMetrics.spaceSwitcherButtonSize
+                    ForEach(sidebarSpaces) { space in
+                        let pageID = SidebarSpacePagerPageID.space(space.id)
+                        spaceSwitcherButton(
+                            space,
+                            isBeingDragged: spaceSwitcherDragState.draggedSpaceID == space.id
                         )
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("New space")
-            }
-            .overlay(alignment: .leading) {
-                ZStack(alignment: .leading) {
-                    if spaceSwitcherDragState.isDragging,
-                       let target = spaceSwitcherDragState.activeTarget,
-                       let indicatorX = SidebarSpaceSwitcherLayout.indicatorX(
-                        for: target,
-                        spaceIDs: sidebarSpaceIDs
-                       ) {
-                        spaceSwitcherDropIndicator
-                            .offset(x: indicatorX - 1)
-                    }
-
-                    if let draggedSpaceID = spaceSwitcherDragState.draggedSpaceID,
-                       let locationX = spaceSwitcherDragState.locationX,
-                       let draggedSpace = sidebarSpaces.first(where: { $0.id == draggedSpaceID }) {
-                        spaceSwitcherDragPreview(draggedSpace)
-                            .offset(x: locationX - SidebarHeaderMetrics.spaceSwitcherButtonSize / 2)
-                    }
-                }
-            }
-            .overlay {
-                SidebarSpaceSwitcherReorderEventLayer(
-                    spaceIDs: sidebarSpaceIDs,
-                    dragState: $spaceSwitcherDragState,
-                    selectSpace: { showSpace($0) },
-                    moveSpace: { draggedSpaceID, targetSpaceID in
-                        withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
-                            store.moveSpace(draggedSpaceID, before: targetSpaceID)
+                        .id(pageID)
+                        .onScrollVisibilityChange(threshold: 0.98) { isVisible in
+                            updateSpaceSwitcherVisibility(pageID, isVisible: isVisible)
                         }
                     }
-                )
+
+                    Button {
+                        _ = store.createSpace(name: "New Space")
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: SidebarHeaderMetrics.spaceSwitcherPlusSymbolSize, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(
+                                width: SidebarHeaderMetrics.spaceSwitcherButtonSize,
+                                height: SidebarHeaderMetrics.spaceSwitcherButtonSize
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("New space")
+                }
+                .overlay(alignment: .leading) {
+                    ZStack(alignment: .leading) {
+                        if spaceSwitcherDragState.isDragging,
+                           let target = spaceSwitcherDragState.activeTarget,
+                           let indicatorX = SidebarSpaceSwitcherLayout.indicatorX(
+                            for: target,
+                            spaceIDs: sidebarSpaceIDs
+                           ) {
+                            spaceSwitcherDropIndicator
+                                .offset(x: indicatorX - 1)
+                        }
+
+                        if let draggedSpaceID = spaceSwitcherDragState.draggedSpaceID,
+                           let locationX = spaceSwitcherDragState.locationX,
+                           let draggedSpace = sidebarSpaces.first(where: { $0.id == draggedSpaceID }) {
+                            spaceSwitcherDragPreview(draggedSpace)
+                                .offset(x: locationX - SidebarHeaderMetrics.spaceSwitcherButtonSize / 2)
+                        }
+                    }
+                }
+                .overlay {
+                    SidebarSpaceSwitcherReorderEventLayer(
+                        spaceIDs: sidebarSpaceIDs,
+                        dragState: $spaceSwitcherDragState,
+                        selectSpace: { showSpace($0) },
+                        moveSpace: { draggedSpaceID, targetSpaceID in
+                            withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
+                                store.moveSpace(draggedSpaceID, before: targetSpaceID)
+                            }
+                        }
+                    )
+                }
+                .contentShape(Rectangle())
+                .padding(.horizontal, SidebarHeaderMetrics.trafficLightEdgeInset)
+                .padding(.vertical, SidebarHeaderMetrics.spaceSwitcherVerticalInset)
             }
-            .contentShape(Rectangle())
-            .padding(.horizontal, SidebarHeaderMetrics.trafficLightEdgeInset)
-            .padding(.vertical, SidebarHeaderMetrics.spaceSwitcherVerticalInset)
+            .scrollEdgeEffectHidden(for: .top)
+            .onAppear {
+                guard let target = selectedSpaceSwitcherScrollTarget else {
+                    return
+                }
+                proxy.scrollTo(target, anchor: .center)
+            }
+            .onChange(of: selectedSpaceSwitcherScrollTarget) { _, target in
+                guard let target,
+                      SidebarSpaceSwitcherSelection.shouldReveal(
+                        target,
+                        visibleTargets: visibleSpaceSwitcherTargets
+                      ) else {
+                    return
+                }
+                withAnimation(SidebarSpaceSwitcherMotion.revealAnimation) {
+                    proxy.scrollTo(target, anchor: .center)
+                }
+            }
+        }
+    }
+
+    private func updateSpaceSwitcherVisibility(
+        _ target: SidebarSpacePagerPageID,
+        isVisible: Bool
+    ) {
+        if isVisible {
+            visibleSpaceSwitcherTargets.insert(target)
+        } else {
+            visibleSpaceSwitcherTargets.remove(target)
         }
     }
 
@@ -597,7 +669,7 @@ public struct SidebarView: View {
             selectSpace: { selectSpace($0) },
             selectAuxiliaryPage: { selectAuxiliaryPage($0) },
             createSpace: { _ = store.createSpace(name: "New Space") },
-            previewSpace: { setPreviewSpace($0) },
+            previewPage: { setPreviewPage($0) },
             sidebarIsPinned: store.sidebarIsLockedOpen,
             updateSidebarFixedChromeLiveStyle: {
                 fixedChromeLiveStyleController.update($0)
@@ -616,11 +688,26 @@ public struct SidebarView: View {
     }
 
     private var visualSelectedSpaceID: SpaceID? {
-        previewedSpaceID ?? (selectedAuxiliaryPageID == nil ? store.selectedSpaceID : nil)
+        switch previewedPageID {
+        case .space(let spaceID):
+            return spaceID
+        case .activity:
+            return nil
+        case nil:
+            return selectedAuxiliaryPageID == nil ? store.selectedSpaceID : nil
+        }
+    }
+
+    private var selectedSpaceSwitcherScrollTarget: SidebarSpacePagerPageID? {
+        SidebarSpaceSwitcherSelection.scrollTarget(
+            visualSelectedSpaceID: visualSelectedSpaceID,
+            isActivitySelected: isActivitySelected
+        )
     }
 
     private var isActivitySelected: Bool {
-        previewedSpaceID == nil && selectedAuxiliaryPageID == .activity
+        previewedPageID == .activity
+            || (previewedPageID == nil && selectedAuxiliaryPageID == .activity)
     }
 
     private var selectedAuxiliaryPageID: SidebarSpacePagerPageID? {
@@ -654,7 +741,7 @@ public struct SidebarView: View {
     private func showActivity() {
         selectedAuxiliaryPageID = .activity
         pagerNavigationRequest = SidebarSpacePagerNavigationRequest(pageID: .activity)
-        setPreviewSpace(nil)
+        setPreviewPage(nil)
     }
 
     private func selectAuxiliaryPage(_ pageID: SidebarSpacePagerPageID?) {
@@ -715,11 +802,15 @@ public struct SidebarView: View {
         NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
     }
 
-    private func setPreviewSpace(_ spaceID: SpaceID?) {
-        previewedSpaceID = spaceID
+    private func setPreviewPage(_ pageID: SidebarSpacePagerPageID?) {
+        previewedPageID = pageID
+        let spaceID = pageID?.spaceID
         let previewTabID = addressPreviewTabID(for: spaceID)
 
         withTransaction(Transaction(animation: nil)) {
+            presentationState.setActivityPagePreviewOverride(
+                pageID.map { $0 == .activity }
+            )
             presentationState.setPreviewTabID(previewTabID)
             presentationState.setPreviewStartPageSpaceID(previewTabID == nil ? spaceID : nil)
         }
@@ -1028,6 +1119,7 @@ private struct SidebarAddressControls: View {
     @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
     @Environment(\.sidebarForegroundWhiteAmount) private var sidebarForegroundWhiteAmount
     @State private var didCopyCurrentURL = false
+    @State private var copyButtonIsHovered = false
 
     init(
         store: BrowserStore,
@@ -1075,12 +1167,28 @@ private struct SidebarAddressControls: View {
                 } label: {
                     Image(systemName: didCopyCurrentURL ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(currentURLForCopy == nil ? .tertiary : .secondary)
+                        .foregroundStyle(
+                            currentURLForCopy == nil
+                                ? sidebarForegroundColor.opacity(0.34)
+                                : copyButtonIsHovered
+                                    ? sidebarForegroundColor
+                                    : sidebarForegroundColor.opacity(0.70)
+                        )
                         .frame(width: 26, height: 26)
+                        .background {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(
+                                    copyButtonIsHovered && currentURLForCopy != nil
+                                        ? sidebarForegroundColor.opacity(0.10)
+                                        : .clear
+                                )
+                        }
                         .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .disabled(currentURLForCopy == nil)
+                .onHover { copyButtonIsHovered = $0 }
+                .animation(.easeOut(duration: 0.12), value: copyButtonIsHovered)
                 .help("Copy current URL")
                 .accessibilityLabel("Copy current URL")
             }
@@ -1537,8 +1645,8 @@ private struct SpaceSwitcherButtonLabel: View {
             size: SidebarHeaderMetrics.spaceSwitcherGlyphSize,
             foregroundColor: sidebarForegroundColor
         )
-        .opacity(isSelected ? 1 : 0.74)
-        .scaleEffect(isSelected ? 1.06 : 1)
+        .opacity(isSelected ? 1 : 0.56)
+        .scaleEffect(isSelected ? 1.03 : 1)
         .frame(
             width: SidebarHeaderMetrics.spaceSwitcherIconFrameSize,
             height: SidebarHeaderMetrics.spaceSwitcherIconFrameSize
@@ -1547,8 +1655,15 @@ private struct SpaceSwitcherButtonLabel: View {
             width: SidebarHeaderMetrics.spaceSwitcherButtonSize,
             height: SidebarHeaderMetrics.spaceSwitcherButtonSize
         )
+        .overlay(alignment: .bottom) {
+            Capsule()
+                .fill(sidebarForegroundColor.opacity(0.88))
+                .frame(width: 8, height: 2)
+                .padding(.bottom, 1)
+                .opacity(isSelected ? 1 : 0)
+        }
         .contentShape(Rectangle())
-        .animation(SidebarSpacePagerMetrics.selectionAnimation, value: isSelected)
+        .animation(SidebarSpaceSwitcherMotion.selectionAnimation, value: isSelected)
     }
 }
 
@@ -1564,14 +1679,21 @@ private struct ActivitySwitcherButtonLabel: View {
                 width: SidebarHeaderMetrics.spaceSwitcherIconFrameSize,
                 height: SidebarHeaderMetrics.spaceSwitcherIconFrameSize
             )
-            .opacity(isSelected ? 1 : 0.74)
-            .scaleEffect(isSelected ? 1.06 : 1)
+            .opacity(isSelected ? 1 : 0.56)
+            .scaleEffect(isSelected ? 1.03 : 1)
             .frame(
                 width: SidebarHeaderMetrics.spaceSwitcherButtonSize,
                 height: SidebarHeaderMetrics.spaceSwitcherButtonSize
             )
+            .overlay(alignment: .bottom) {
+                Capsule()
+                    .fill(sidebarForegroundColor.opacity(0.88))
+                    .frame(width: 8, height: 2)
+                    .padding(.bottom, 1)
+                    .opacity(isSelected ? 1 : 0)
+            }
             .contentShape(Rectangle())
-            .animation(SidebarSpacePagerMetrics.selectionAnimation, value: isSelected)
+            .animation(SidebarSpaceSwitcherMotion.selectionAnimation, value: isSelected)
     }
 }
 
@@ -2889,15 +3011,36 @@ private struct SidebarNavigationButton: View {
     let help: String
     let isDisabled: Bool
     let action: () -> Void
+    @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(
+                    isDisabled
+                        ? sidebarForegroundColor.opacity(0.30)
+                        : isHovered
+                            ? sidebarForegroundColor
+                            : sidebarForegroundColor.opacity(0.72)
+                )
                 .frame(width: 24, height: SidebarHeaderMetrics.inlineControlHeight)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(
+                            isHovered && !isDisabled
+                                ? sidebarForegroundColor.opacity(0.10)
+                                : .clear
+                        )
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
+        .animation(.smooth(duration: 0.14, extraBounce: 0), value: systemName)
         .help(help)
         .accessibilityLabel(help)
     }
@@ -2934,7 +3077,7 @@ private struct SidebarSpacePagerView: View {
     let selectSpace: (SpaceID) -> Void
     let selectAuxiliaryPage: (SidebarSpacePagerPageID?) -> Void
     let createSpace: () -> Void
-    let previewSpace: (SpaceID?) -> Void
+    let previewPage: (SidebarSpacePagerPageID?) -> Void
     let sidebarIsPinned: Bool
     let updateSidebarFixedChromeLiveStyle: (SidebarChromeLiveStyle?) -> Void
     let updateAddressMorph: (SidebarAddressMorphState?) -> Void
@@ -2974,6 +3117,9 @@ private struct SidebarSpacePagerView: View {
                         pageView(page)
                         .id(page.id)
                         .frame(width: pageWidth, height: proxy.size.height, alignment: .top)
+                        // Once horizontal paging owns the gesture, tab rows no
+                        // longer participate in hit testing until the pager is idle.
+                        .allowsHitTesting(!scrollIsActive)
                     }
                 }
                 .scrollTargetLayout()
@@ -3006,7 +3152,7 @@ private struct SidebarSpacePagerView: View {
             .scrollDisabled(snapshot.pageCount <= 1)
             .onAppear {
                 syncScrollPositionToSelection(animated: false)
-                previewSpace(nil)
+                previewPage(nil)
                 updateAddressMorph(nil)
                 updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
                 updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
@@ -3023,7 +3169,7 @@ private struct SidebarSpacePagerView: View {
                     settledStyleAwaitsScrollIdle = true
                 }
                 syncScrollPositionToSelection(animated: true)
-                previewSpace(nil)
+                previewPage(nil)
                 updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
                 if !settledStyleAwaitsScrollIdle {
                     updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
@@ -3039,7 +3185,7 @@ private struct SidebarSpacePagerView: View {
                     updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
                 }
                 if !scrollIsActive, !settledStyleAwaitsScrollIdle {
-                    previewSpace(nil)
+                    previewPage(nil)
                     updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
                 }
             }
@@ -3077,7 +3223,7 @@ private struct SidebarSpacePagerView: View {
                     }
 
                     if !settledStyleAwaitsScrollIdle {
-                        previewSpace(nil)
+                        previewPage(nil)
                         updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
                         updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
                     }
@@ -3106,7 +3252,7 @@ private struct SidebarSpacePagerView: View {
                         ) ?? selectedChromeLiveStyle
                     )
                     commitPageIfNeeded(scrollPositionPageID)
-                    previewSpace(nil)
+                    previewPage(nil)
                     updateAddressMorph(nil)
                 }
             }
@@ -3163,8 +3309,8 @@ private struct SidebarSpacePagerView: View {
                     pageWidth: pageWidth,
                     pages: snapshot.pages
                 ) {
-                    previewSpace(
-                        SidebarSpacePagerPreview.spaceID(
+                    previewPage(
+                        SidebarSpacePagerPreview.pageID(
                             for: targetPageID,
                             selectedPageID: selectedPageID
                         )
@@ -3177,7 +3323,7 @@ private struct SidebarSpacePagerView: View {
                 updateSidebarChromeLiveStyle(nil)
                 updateSidebarFixedChromeLiveStyle(nil)
                 updateAddressMorph(nil)
-                previewSpace(nil)
+                previewPage(nil)
             }
             .modifier(SidebarSpaceCreationPullPresentationModifier(
                 controller: creationPullController,
@@ -3801,6 +3947,7 @@ private struct SidebarSpacePageView: View, Equatable {
     let createFolder: (String, SpaceID, FolderID?) -> BrowserFolder?
     let customizeSpace: (BrowserSpace) -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var tabDropState = SidebarTabDropState()
 
     nonisolated static func == (lhs: SidebarSpacePageView, rhs: SidebarSpacePageView) -> Bool {
@@ -3838,6 +3985,10 @@ private struct SidebarSpacePageView: View, Equatable {
             .contentShape(Rectangle())
             .background(EnclosingScrollIndicatorHider())
             .animation(SidebarTabReorderInteractionMetrics.indicatorAnimation, value: tabDropState.isDragging)
+            .animation(
+                accessibilityReduceMotion ? nil : SidebarTabLifecycleMotion.animation,
+                value: page.tabLifecycleIDs
+            )
         }
         .scrollIndicators(.hidden)
         .background(EnclosingScrollIndicatorHider())
@@ -3872,6 +4023,7 @@ private struct SidebarSpacePageView: View, Equatable {
                 moveTabToPlacement: moveTabToPlacement,
                 tabDropState: $tabDropState
             )
+            .transition(SidebarTabLifecycleMotion.sectionTransition)
         }
     }
 
@@ -3958,6 +4110,7 @@ private struct SidebarSpacePageView: View, Equatable {
                     moveTabToPlacement(draggedTabID, placement)
                 }
             }
+            .transition(SidebarTabLifecycleMotion.sectionTransition)
         }
     }
 
@@ -4004,6 +4157,7 @@ private struct SidebarSpacePageView: View, Equatable {
                 dragStarted: { tabDropState.beginDrag() }
             )
         }
+        .transition(SidebarTabLifecycleMotion.rowTransition)
     }
 
     private func tabDropResetToken(for tabs: [SidebarTabItemSnapshot]) -> String {
@@ -4377,6 +4531,7 @@ private struct SidebarFolderNodeView: View {
                 dragStarted: { tabDropState.beginDrag() }
             )
         }
+        .transition(SidebarTabLifecycleMotion.rowTransition)
     }
 
     private func clearDropTargetAfterDrop() {

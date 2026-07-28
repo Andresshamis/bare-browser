@@ -123,6 +123,7 @@ final class SidebarSpacePagerScrollInputScalingView: NSView {
     private var deferredInstallationIsScheduled = false
     private var gestureLifecycle = SidebarSpacePagerPhysicalGestureLifecycle()
     private var gestureGate = SidebarSpacePagerPhysicalGestureGate()
+    private var scrollAxisLock = SidebarSpacePagerScrollAxisLock()
     private var inputScalingState = SidebarSpacePagerScrollInputScalingState()
     private var horizontalGestureAccumulator =
         SidebarSpacePagerHorizontalGestureAccumulator()
@@ -273,7 +274,7 @@ final class SidebarSpacePagerScrollInputScalingView: NSView {
         }
 
         if phase.contains(.mayBegin) || phase.contains(.began) {
-            beginGestureIfInsidePager(event, scrollView: scrollView)
+            prepareGestureIfInsidePager(event, scrollView: scrollView)
         }
 
         if phase.contains(.ended) || phase.contains(.cancelled) {
@@ -293,12 +294,28 @@ final class SidebarSpacePagerScrollInputScalingView: NSView {
             return event
         }
 
-        if !gestureLifecycle.isActive {
-            guard phase.contains(.changed),
-                  eventIsInsidePager(event, scrollView: scrollView) else {
-                return event
-            }
+        guard eventIsInsidePager(event, scrollView: scrollView) else {
+            return event
+        }
 
+        switch scrollAxisLock.update(
+            scrollingDeltaX: event.scrollingDeltaX,
+            scrollingDeltaY: event.scrollingDeltaY,
+            minimumDisplacement: SidebarSpacePagerMetrics.inputAxisLockMinimumDisplacement
+        ) {
+        case .undecided:
+            return event
+        case .vertical:
+            // Preserve the boundary between the workspace pager and its nested
+            // tab scrollboxes: vertical events stay byte-for-byte native and
+            // never pay for a CGEvent copy or horizontal pager bookkeeping.
+            ignoreRemainderOfPhysicalGesture()
+            return event
+        case .horizontal:
+            break
+        }
+
+        if !gestureLifecycle.isActive {
             beginGesture()
         }
 
@@ -345,14 +362,15 @@ final class SidebarSpacePagerScrollInputScalingView: NSView {
         return scaledEvent
     }
 
-    private func beginGestureIfInsidePager(_ event: NSEvent, scrollView: NSScrollView) {
+    private func prepareGestureIfInsidePager(_ event: NSEvent, scrollView: NSScrollView) {
         guard eventIsInsidePager(event, scrollView: scrollView) else {
             resetLocalGestureState()
             return
         }
 
         if !gestureLifecycle.isActive {
-            beginGesture()
+            gestureGate.begin()
+            scrollAxisLock.reset()
         }
     }
 
@@ -404,6 +422,8 @@ final class SidebarSpacePagerScrollInputScalingView: NSView {
         reason: SidebarSpacePagerPhysicalGestureEndReason
     ) {
         guard let gestureID = gestureLifecycle.finish(for: reason) else {
+            gestureGate.end()
+            scrollAxisLock.reset()
             return
         }
 
@@ -431,6 +451,7 @@ final class SidebarSpacePagerScrollInputScalingView: NSView {
 
         creationSession.end()
         gestureGate.end()
+        scrollAxisLock.reset()
         inputScalingState.reset()
         horizontalGestureAccumulator.reset()
 
@@ -468,6 +489,7 @@ final class SidebarSpacePagerScrollInputScalingView: NSView {
     private func clearLocalGestureState() {
         _ = gestureLifecycle.reset()
         geometryTracker?.cancelDirectionalSnap()
+        scrollAxisLock.reset()
         inputScalingState.reset()
         horizontalGestureAccumulator.reset()
     }
