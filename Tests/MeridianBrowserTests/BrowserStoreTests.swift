@@ -589,7 +589,7 @@ final class BrowserStoreTests: XCTestCase {
         XCTAssertEqual(store.commandBarFocusRequest, previousFocusRequest + 2)
     }
 
-    func testSelectingSpacePreservesNewTabCommandBar() throws {
+    func testSelectingSpaceClosesNewTabCommandBar() throws {
         let store = BrowserStore()
         let initialSpaceID = try XCTUnwrap(store.selectedSpaceID)
         let targetSpace = store.createSpace(name: "Work")
@@ -599,23 +599,17 @@ final class BrowserStoreTests: XCTestCase {
         store.selectSpace(targetSpace.id)
 
         XCTAssertEqual(store.selectedSpaceID, targetSpace.id)
-        XCTAssertTrue(store.isCommandBarPresented)
-        XCTAssertEqual(store.commandBarMode, .newTab)
+        XCTAssertFalse(store.isCommandBarPresented)
+        XCTAssertEqual(store.commandBarMode, .address)
     }
 
-    func testNewTabCommandBarSubmissionUsesSelectedTargetSpaceAfterSwitching() throws {
+    func testSelectingTabClosesNewTabCommandBar() throws {
         let store = BrowserStore()
-        let initialSpaceID = try XCTUnwrap(store.selectedSpaceID)
-        let targetSpace = store.createSpace(name: "Work")
-        store.selectSpace(initialSpaceID)
+        let selectedTabID = try XCTUnwrap(store.selectedTabID)
 
         store.beginNewTab()
-        store.selectSpace(targetSpace.id)
-        store.submitAddressInput("example.com")
+        store.selectTab(selectedTabID)
 
-        let activeTab = try XCTUnwrap(store.activeTab)
-        XCTAssertEqual(activeTab.parentSpaceID, targetSpace.id)
-        XCTAssertTrue(store.selectedSpace?.regularTabIDs.contains(activeTab.id) ?? false)
         XCTAssertFalse(store.isCommandBarPresented)
         XCTAssertEqual(store.commandBarMode, .address)
     }
