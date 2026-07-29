@@ -1,5 +1,8 @@
 import AppKit
 import Combine
+#if DEBUG
+import OSLog
+#endif
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -13,6 +16,10 @@ private struct SidebarUsesDarkForegroundEnvironmentKey: EnvironmentKey {
 
 private struct SidebarForegroundWhiteAmountEnvironmentKey: EnvironmentKey {
     static let defaultValue = 1.0
+}
+
+private struct SidebarDefersRemoteFaviconLoadingEnvironmentKey: EnvironmentKey {
+    static let defaultValue = false
 }
 
 extension EnvironmentValues {
@@ -30,29 +37,32 @@ extension EnvironmentValues {
         get { self[SidebarForegroundWhiteAmountEnvironmentKey.self] }
         set { self[SidebarForegroundWhiteAmountEnvironmentKey.self] = newValue }
     }
+
+    var sidebarDefersRemoteFaviconLoading: Bool {
+        get { self[SidebarDefersRemoteFaviconLoadingEnvironmentKey.self] }
+        set { self[SidebarDefersRemoteFaviconLoadingEnvironmentKey.self] = newValue }
+    }
 }
 
 @MainActor
 final class SidebarFixedChromeLiveStyleController: ObservableObject {
     @Published private(set) var style: SidebarChromeLiveStyle?
 
-    func update(_ style: SidebarChromeLiveStyle?) {
+    func update(_ style: SidebarChromeLiveStyle?, animated: Bool = false) {
         guard self.style != style else {
             return
         }
-        self.style = style
-    }
-}
 
-@MainActor
-final class SidebarAddressMorphController: ObservableObject {
-    @Published private(set) var state: SidebarAddressMorphState?
-
-    func update(_ state: SidebarAddressMorphState?) {
-        guard self.state != state else {
-            return
+        let update = {
+            self.style = style
         }
-        self.state = state
+        if animated {
+            withAnimation(.easeOut(duration: 0.12), update)
+        } else {
+            var transaction = Transaction()
+            transaction.animation = nil
+            withTransaction(transaction, update)
+        }
     }
 }
 
@@ -671,10 +681,10 @@ public struct SidebarView: View {
             createSpace: { _ = store.createSpace(name: "New Space") },
             previewPage: { setPreviewPage($0) },
             sidebarIsPinned: store.sidebarIsLockedOpen,
-            updateSidebarFixedChromeLiveStyle: {
-                fixedChromeLiveStyleController.update($0)
+            updateSidebarFixedChromeLiveStyle: { style, animated in
+                fixedChromeLiveStyleController.update(style, animated: animated)
             },
-            updateAddressMorph: { addressMorphController.update($0) },
+            addressMorphController: addressMorphController,
             updateSidebarChromeLiveStyle: updateSidebarChromeLiveStyle
         )
     }
@@ -803,16 +813,35 @@ public struct SidebarView: View {
     }
 
     private func setPreviewPage(_ pageID: SidebarSpacePagerPageID?) {
+        guard previewedPageID != pageID else {
+            return
+        }
+#if DEBUG
+        os_signpost(
+            .event,
+            log: sidebarPagerPerformanceLog,
+            name: "Sidebar Preview Handoff"
+        )
+#endif
         previewedPageID = pageID
         let spaceID = pageID?.spaceID
         let previewTabID = addressPreviewTabID(for: spaceID)
+        let previewTarget: BrowserContentPagerPreviewTarget?
+        switch pageID {
+        case .activity:
+            previewTarget = .activity
+        case .space(let spaceID):
+            if let previewTabID {
+                previewTarget = .tab(previewTabID)
+            } else {
+                previewTarget = .startPage(spaceID)
+            }
+        case nil:
+            previewTarget = nil
+        }
 
         withTransaction(Transaction(animation: nil)) {
-            presentationState.setActivityPagePreviewOverride(
-                pageID.map { $0 == .activity }
-            )
-            presentationState.setPreviewTabID(previewTabID)
-            presentationState.setPreviewStartPageSpaceID(previewTabID == nil ? spaceID : nil)
+            presentationState.setPagerPreviewTarget(previewTarget)
         }
     }
 
@@ -838,114 +867,6 @@ struct SidebarAddressMorphState: Equatable, Sendable {
     let sourceText: String
     let destinationText: String
     let progress: Double
-}
-
-struct SidebarAddressMorphPlan: Equatable, Sendable {
-    let sharedPrefixCount: Int
-    let sourceChangedCount: Int
-    let destinationChangedCount: Int
-    let sharedSuffixCount: Int
-
-    init(sourceText: String, destinationText: String) {
-        let sourceCharacters = Array(sourceText)
-        let destinationCharacters = Array(destinationText)
-        let sharedPrefixCount = zip(sourceCharacters, destinationCharacters)
-            .prefix { $0 == $1 }
-            .count
-        let remainingSource = sourceCharacters.dropFirst(sharedPrefixCount)
-        let remainingDestination = destinationCharacters.dropFirst(sharedPrefixCount)
-        let sharedSuffixCount = zip(remainingSource.reversed(), remainingDestination.reversed())
-            .prefix { $0 == $1 }
-            .count
-
-        self.sharedPrefixCount = sharedPrefixCount
-        self.sharedSuffixCount = sharedSuffixCount
-        sourceChangedCount = max(sourceCharacters.count - sharedPrefixCount - sharedSuffixCount, 0)
-        destinationChangedCount = max(destinationCharacters.count - sharedPrefixCount - sharedSuffixCount, 0)
-    }
-}
-
-enum SidebarAddressGlyphRole: Equatable, Sendable {
-    case source
-    case destination
-}
-
-struct SidebarAddressGlyphRenderState: Equatable, Sendable {
-    let opacity: Double
-    let translationY: CGFloat
-    let blurProgress: Double
-}
-
-enum SidebarAddressGlyphMorph {
-    static func state(
-        progress: Double,
-        role: SidebarAddressGlyphRole,
-        sliceIndex: Int,
-        sliceCount: Int,
-        morphPlan: SidebarAddressMorphPlan
-    ) -> SidebarAddressGlyphRenderState {
-        guard sliceCount > 0,
-              sliceIndex >= 0,
-              sliceIndex < sliceCount else {
-            return SidebarAddressGlyphRenderState(opacity: 0, translationY: 0, blurProgress: 0)
-        }
-
-        let clampedProgress = min(max(progress, 0), 1)
-        let smoothProgress = clampedProgress * clampedProgress * (3 - 2 * clampedProgress)
-        let prefixCount = min(morphPlan.sharedPrefixCount, sliceCount)
-        let suffixCount = min(
-            morphPlan.sharedSuffixCount,
-            max(sliceCount - prefixCount, 0)
-        )
-        let changedRange = prefixCount..<max(sliceCount - suffixCount, prefixCount)
-
-        // The common prefix occupies the same leading coordinates in both
-        // strings. Draw it once from the source layout so it never doubles or
-        // flickers while the changed portion morphs.
-        if sliceIndex < prefixCount {
-            return SidebarAddressGlyphRenderState(
-                opacity: role == .source ? 1 : 0,
-                translationY: 0,
-                blurProgress: 0
-            )
-        }
-
-        // A shared suffix can have a different x origin when the changed text
-        // has a different width. Cross-fade the two exact positions; never
-        // leave either endpoint translated or scaled.
-        guard changedRange.contains(sliceIndex) else {
-            return SidebarAddressGlyphRenderState(
-                opacity: role == .source ? 1 - smoothProgress : smoothProgress,
-                translationY: 0,
-                blurProgress: 0
-            )
-        }
-
-        let changedCount = max(changedRange.count, 1)
-        let sequencePosition = changedCount > 1
-            ? Double(sliceIndex - changedRange.lowerBound) / Double(changedCount - 1)
-            : 0
-        let delay = sequencePosition * 0.18
-        let localProgress = min(max((clampedProgress - delay) / (1 - 0.18), 0), 1)
-        let easedProgress = localProgress * localProgress * (3 - 2 * localProgress)
-        let visibility = role == .source ? 1 - easedProgress : easedProgress
-        let blurProgress = role == .source ? easedProgress : 1 - easedProgress
-        let verticalDirection = role == .source ? -1.0 : 1.0
-
-        if visibility <= 0 {
-            return SidebarAddressGlyphRenderState(
-                opacity: 0,
-                translationY: 0,
-                blurProgress: 0
-            )
-        }
-
-        return SidebarAddressGlyphRenderState(
-            opacity: visibility,
-            translationY: verticalDirection * blurProgress * 1.5,
-            blurProgress: blurProgress
-        )
-    }
 }
 
 enum SidebarAddressScrollMorph {
@@ -1022,95 +943,6 @@ enum SidebarAddressDisplay {
     }
 }
 
-private struct SidebarAddressMorphingText: View {
-    let settledText: String
-    @ObservedObject private var controller: SidebarAddressMorphController
-
-    init(
-        settledText: String,
-        controller: SidebarAddressMorphController
-    ) {
-        self.settledText = settledText
-        self.controller = controller
-    }
-
-    var body: some View {
-        ZStack(alignment: .leading) {
-            if let state = controller.state {
-                let morphPlan = SidebarAddressMorphPlan(
-                    sourceText: state.sourceText,
-                    destinationText: state.destinationText
-                )
-
-                Text(state.sourceText)
-                    .textRenderer(SidebarAddressGlyphRenderer(
-                        progress: state.progress,
-                        role: .source,
-                        morphPlan: morphPlan
-                    ))
-
-                Text(state.destinationText)
-                    .textRenderer(SidebarAddressGlyphRenderer(
-                        progress: state.progress,
-                        role: .destination,
-                        morphPlan: morphPlan
-                    ))
-            } else {
-                Text(settledText)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityHidden(true)
-    }
-}
-
-private struct SidebarAddressGlyphRenderer: TextRenderer {
-    let progress: Double
-    let role: SidebarAddressGlyphRole
-    let morphPlan: SidebarAddressMorphPlan
-
-    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
-        let slices = layout.sidebarFlattenedRunSlices
-        guard !slices.isEmpty else {
-            return
-        }
-
-        for (index, slice) in slices.enumerated() {
-            var copy = context
-            let renderState = SidebarAddressGlyphMorph.state(
-                progress: progress,
-                role: role,
-                sliceIndex: index,
-                sliceCount: slices.count,
-                morphPlan: morphPlan
-            )
-            guard renderState.opacity > 0.001 else {
-                continue
-            }
-
-            copy.opacity = renderState.opacity
-            copy.translateBy(x: 0, y: renderState.translationY)
-            if renderState.blurProgress > 0.001 {
-                copy.addFilter(.blur(
-                    radius: slice.typographicBounds.rect.height / 14
-                        * renderState.blurProgress
-                ))
-            }
-            copy.draw(slice, options: .disablesSubpixelQuantization)
-        }
-    }
-}
-
-private extension Text.Layout {
-    var sidebarFlattenedRunSlices: [Text.Layout.RunSlice] {
-        flatMap { line in
-            line.flatMap { run in
-                run.map { $0 }
-            }
-        }
-    }
-}
-
 private struct SidebarAddressControls: View {
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var presentationState: BrowserContentPresentationState
@@ -1147,12 +979,16 @@ private struct SidebarAddressControls: View {
 
                         SidebarAddressMorphingText(
                             settledText: addressText,
+                            foregroundWhiteAmount: sidebarForegroundWhiteAmount,
                             controller: addressMorphController
                         )
-                            .font(.system(size: 13))
-                            .foregroundStyle(sidebarForegroundColor)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        .frame(
+                            maxWidth: .infinity,
+                            minHeight: SidebarAddressTextLayout.controlHeight,
+                            maxHeight: SidebarAddressTextLayout.controlHeight,
+                            alignment: .leading
+                        )
+                        .accessibilityHidden(true)
 
                         Spacer(minLength: 0)
                     }
@@ -3079,8 +2915,8 @@ private struct SidebarSpacePagerView: View {
     let createSpace: () -> Void
     let previewPage: (SidebarSpacePagerPageID?) -> Void
     let sidebarIsPinned: Bool
-    let updateSidebarFixedChromeLiveStyle: (SidebarChromeLiveStyle?) -> Void
-    let updateAddressMorph: (SidebarAddressMorphState?) -> Void
+    let updateSidebarFixedChromeLiveStyle: (SidebarChromeLiveStyle?, Bool) -> Void
+    let addressMorphController: SidebarAddressMorphController
     let updateSidebarChromeLiveStyle: (SidebarChromeLiveStyle?) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -3091,7 +2927,8 @@ private struct SidebarSpacePagerView: View {
     // This tracker is deliberately non-observable. The target behavior needs the
     // latest offset, but publishing every offset would rebuild the pager per frame.
     @State private var geometryTracker = SidebarSpacePagerGeometryTracker()
-    @StateObject private var creationPullController = SidebarSpaceCreationPullController()
+    @State private var liveRenderController = SidebarPagerLiveRenderController()
+    @State private var creationPullController = SidebarSpaceCreationPullController()
 
     var body: some View {
         GeometryReader { proxy in
@@ -3102,15 +2939,13 @@ private struct SidebarSpacePagerView: View {
             let pageChromeLiveStyles = snapshot.pages.map {
                 SidebarChromeLiveStyle(theme: $0.chromeTheme)
             }
+            let pageIDs = snapshot.pages.map(\.id)
+            let pageAddressTexts = snapshot.pages.map(SidebarAddressDisplay.text(for:))
             let creationRailWhiteAmount = SidebarForegroundPalette.whiteAmount(
                 for: pageChromeLiveStyles.last ?? SidebarChromeLiveStyle(theme: .standard),
                 isPinned: sidebarIsPinned,
                 colorScheme: colorScheme
             )
-            let creationRailForegroundColor = SidebarForegroundPalette.color(
-                whiteAmount: creationRailWhiteAmount
-            )
-
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 0) {
                     ForEach(snapshot.pages) { page in
@@ -3131,6 +2966,8 @@ private struct SidebarSpacePagerView: View {
                             pageWidth: pageWidth,
                             pageCount: snapshot.pageCount,
                             creationIsAvailable: creationIsAvailable,
+                            creationRailForegroundWhiteAmount: creationRailWhiteAmount,
+                            performanceTrackingIsActive: scrollIsActive,
                             geometryTracker: geometryTracker,
                             creationPullController: creationPullController,
                             createSpace: createSpace
@@ -3153,9 +2990,9 @@ private struct SidebarSpacePagerView: View {
             .onAppear {
                 syncScrollPositionToSelection(animated: false)
                 previewPage(nil)
-                updateAddressMorph(nil)
+                addressMorphController.update(nil)
                 updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
-                updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
+                updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle, false)
             }
             .onChange(of: selectedPageID) { _, _ in
                 guard !scrollIsActive else {
@@ -3170,7 +3007,7 @@ private struct SidebarSpacePagerView: View {
                 }
                 syncScrollPositionToSelection(animated: true)
                 previewPage(nil)
-                updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
+                updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle, false)
                 if !settledStyleAwaitsScrollIdle {
                     updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
                 }
@@ -3182,7 +3019,7 @@ private struct SidebarSpacePagerView: View {
                 }
                 syncScrollPositionToSelection(animated: true)
                 if !scrollIsActive {
-                    updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
+                    updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle, false)
                 }
                 if !scrollIsActive, !settledStyleAwaitsScrollIdle {
                     previewPage(nil)
@@ -3208,7 +3045,8 @@ private struct SidebarSpacePagerView: View {
                     SidebarSpacePagerChrome.liveStyle(
                         for: request.pageID,
                         in: snapshot.pages
-                    )
+                    ),
+                    false
                 )
 
                 withAnimation(SidebarSpacePagerMetrics.selectionAnimation) {
@@ -3225,7 +3063,7 @@ private struct SidebarSpacePagerView: View {
                     if !settledStyleAwaitsScrollIdle {
                         previewPage(nil)
                         updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
-                        updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
+                        updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle, false)
                     }
                 }
             }
@@ -3233,27 +3071,26 @@ private struct SidebarSpacePagerView: View {
                 scrollIsActive = newPhase != .idle
                 geometryTracker.transition(from: oldPhase, to: newPhase)
 
+                if oldPhase == .idle, newPhase != .idle {
+                    liveRenderController.begin(
+                        pageIDs: pageIDs,
+                        pageTexts: pageAddressTexts,
+                        pageStyles: pageChromeLiveStyles
+                    )
+                }
+
                 if newPhase == .idle {
                     settledStyleAwaitsScrollIdle = false
                     normalizeGeometryTracker(to: scrollPositionPageID ?? selectedPageID)
-                    // End on the exact page color after the scroll-linked samples.
-                    // The exact retained chrome and fixed-control foreground
-                    // settle together before the committed selection handoff.
-                    updateSidebarChromeLiveStyle(
-                        SidebarSpacePagerChrome.liveStyle(
-                            for: scrollPositionPageID,
-                            in: snapshot.pages
-                        ) ?? selectedChromeLiveStyle
-                    )
-                    updateSidebarFixedChromeLiveStyle(
-                        SidebarSpacePagerChrome.liveStyle(
-                            for: scrollPositionPageID,
-                            in: snapshot.pages
-                        ) ?? selectedChromeLiveStyle
+                    liveRenderController.end(
+                        settledPageID: scrollPositionPageID,
+                        fallbackStyle: selectedChromeLiveStyle,
+                        addressController: addressMorphController,
+                        updateChrome: updateSidebarChromeLiveStyle,
+                        updateFixedChrome: updateSidebarFixedChromeLiveStyle,
+                        previewPage: previewPage
                     )
                     commitPageIfNeeded(scrollPositionPageID)
-                    previewPage(nil)
-                    updateAddressMorph(nil)
                 }
             }
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
@@ -3269,7 +3106,7 @@ private struct SidebarSpacePagerView: View {
                     // Handles an immediate/no-phase programmatic alignment.
                     settledStyleAwaitsScrollIdle = false
                     updateSidebarChromeLiveStyle(selectedChromeLiveStyle)
-                    updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle)
+                    updateSidebarFixedChromeLiveStyle(selectedChromeLiveStyle, false)
                     return
                 }
 
@@ -3277,58 +3114,41 @@ private struct SidebarSpacePagerView: View {
                     return
                 }
 
-                updateAddressMorph(
-                    SidebarAddressScrollMorph.state(
-                        at: newState,
-                        pageTexts: snapshot.pages.map(SidebarAddressDisplay.text(for:))
+                let targetPageID: SidebarSpacePagerPageID?
+                if geometryTracker.acceptsDirectionalSnap {
+                    targetPageID = SidebarSpacePagerFixedChromeTarget.pageID(
+                        visibleFractionalPageIndex: newState,
+                        gestureStartFractionalPageIndex: geometryTracker.gestureStartFractionalPageIndex,
+                        gestureSourcePageIndex: geometryTracker.gestureSourcePageIndex,
+                        adjustedGestureDisplacementX:
+                            geometryTracker.adjustedGestureDisplacementX,
+                        pageWidth: pageWidth,
+                        pages: snapshot.pages
                     )
-                )
-
-                // Keep the fixed controls on the same live interpolation path
-                // as the retained glass treatment so text and icon colors track
-                // the gesture linearly instead of easing toward one endpoint.
-                updateSidebarChromeLiveStyle(
-                    SidebarSpacePagerChrome.liveStyle(
-                        at: newState,
-                        styles: pageChromeLiveStyles
-                    )
-                )
-                updateSidebarFixedChromeLiveStyle(
-                    SidebarSpacePagerChrome.liveStyle(
-                        at: newState,
-                        styles: pageChromeLiveStyles
-                    )
-                )
-                if geometryTracker.acceptsDirectionalSnap,
-                   let targetPageID = SidebarSpacePagerFixedChromeTarget.pageID(
-                    visibleFractionalPageIndex: newState,
-                    gestureStartFractionalPageIndex: geometryTracker.gestureStartFractionalPageIndex,
-                    gestureSourcePageIndex: geometryTracker.gestureSourcePageIndex,
-                    adjustedGestureDisplacementX:
-                        geometryTracker.adjustedGestureDisplacementX,
-                    pageWidth: pageWidth,
-                    pages: snapshot.pages
-                ) {
-                    previewPage(
-                        SidebarSpacePagerPreview.pageID(
-                            for: targetPageID,
-                            selectedPageID: selectedPageID
-                        )
-                    )
+                } else {
+                    targetPageID = nil
                 }
+
+                liveRenderController.update(
+                    fractionalPageIndex: newState,
+                    directionalTargetPageID: targetPageID,
+                    selectedPageID: selectedPageID,
+                    addressController: addressMorphController,
+                    updateChrome: updateSidebarChromeLiveStyle,
+                    updateFixedChrome: updateSidebarFixedChromeLiveStyle,
+                    previewPage: previewPage
+                )
             }
             .onDisappear {
                 geometryTracker.cancelDirectionalSnap()
                 creationPullController.returnToRest(animated: false)
-                updateSidebarChromeLiveStyle(nil)
-                updateSidebarFixedChromeLiveStyle(nil)
-                updateAddressMorph(nil)
-                previewPage(nil)
+                liveRenderController.reset(
+                    addressController: addressMorphController,
+                    updateChrome: updateSidebarChromeLiveStyle,
+                    updateFixedChrome: updateSidebarFixedChromeLiveStyle,
+                    previewPage: previewPage
+                )
             }
-            .modifier(SidebarSpaceCreationPullPresentationModifier(
-                controller: creationPullController,
-                foregroundColor: creationRailForegroundColor
-            ))
         }
     }
 
@@ -3375,6 +3195,10 @@ private struct SidebarSpacePagerView: View {
         .environment(\.sidebarForegroundColor, foregroundColor)
         .environment(\.sidebarForegroundWhiteAmount, whiteAmount)
         .environment(\.sidebarUsesDarkForeground, whiteAmount < 0.5)
+        .environment(
+            \.sidebarDefersRemoteFaviconLoading,
+            scrollIsActive && page.id != selectedPageID
+        )
     }
 
     private var selectedChromeLiveStyle: SidebarChromeLiveStyle? {
@@ -3948,6 +3772,8 @@ private struct SidebarSpacePageView: View, Equatable {
     let customizeSpace: (BrowserSpace) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.sidebarDefersRemoteFaviconLoading)
+    private var defersRemoteFaviconLoading
     @State private var tabDropState = SidebarTabDropState()
 
     nonisolated static func == (lhs: SidebarSpacePageView, rhs: SidebarSpacePageView) -> Bool {
@@ -3986,7 +3812,9 @@ private struct SidebarSpacePageView: View, Equatable {
             .background(EnclosingScrollIndicatorHider())
             .animation(SidebarTabReorderInteractionMetrics.indicatorAnimation, value: tabDropState.isDragging)
             .animation(
-                accessibilityReduceMotion ? nil : SidebarTabLifecycleMotion.animation,
+                accessibilityReduceMotion || defersRemoteFaviconLoading
+                    ? nil
+                    : SidebarTabLifecycleMotion.animation,
                 value: page.tabLifecycleIDs
             )
         }

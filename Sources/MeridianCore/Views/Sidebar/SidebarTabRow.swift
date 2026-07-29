@@ -14,6 +14,8 @@ public struct SidebarTabRow: View {
     private let dragStarted: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
+    @Environment(\.sidebarDefersRemoteFaviconLoading)
+    private var defersRemoteFaviconLoading
     @State private var isHovered = false
     @State private var closeIsHovered = false
 
@@ -59,7 +61,7 @@ public struct SidebarTabRow: View {
 
             Spacer(minLength: 4)
 
-            if showsLoadingIndicator && tab.isLoading {
+            if showsLoadingIndicator && tab.isLoading && !defersRemoteFaviconLoading {
                 ProgressView()
                     .controlSize(.small)
                     .frame(width: 14, height: 14)

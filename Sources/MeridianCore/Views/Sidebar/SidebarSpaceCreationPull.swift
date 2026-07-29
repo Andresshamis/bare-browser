@@ -286,8 +286,26 @@ struct SidebarSpaceCreationAffordanceLayout {
 }
 
 @MainActor
-final class SidebarSpaceCreationPullController: ObservableObject {
-    @Published private(set) var presentation = SidebarSpaceCreationPullPresentation()
+protocol SidebarSpaceCreationPullRendering: AnyObject {
+    func setCreationPullPresentation(
+        _ presentation: SidebarSpaceCreationPullPresentation,
+        animated: Bool
+    )
+}
+
+@MainActor
+private final class SidebarSpaceCreationPullWeakRenderer {
+    weak var renderer: (any SidebarSpaceCreationPullRendering)?
+
+    init(_ renderer: any SidebarSpaceCreationPullRendering) {
+        self.renderer = renderer
+    }
+}
+
+@MainActor
+final class SidebarSpaceCreationPullController {
+    private(set) var presentation = SidebarSpaceCreationPullPresentation()
+    private var renderers: [SidebarSpaceCreationPullWeakRenderer] = []
 
     func update(displayedDistance: CGFloat, progress: CGFloat) {
         let presentation = SidebarSpaceCreationPullPresentation(
@@ -298,83 +316,49 @@ final class SidebarSpaceCreationPullController: ObservableObject {
             return
         }
         self.presentation = presentation
+        applyPresentation(animated: false)
     }
 
     func returnToRest(animated: Bool) {
-        let update = {
-            self.presentation = SidebarSpaceCreationPullPresentation()
+        let restingPresentation = SidebarSpaceCreationPullPresentation()
+        guard presentation != restingPresentation else {
+            return
         }
-        if animated {
-            withAnimation(SidebarSpacePagerMetrics.creationReturnAnimation, update)
-        } else {
-            update()
-        }
+        presentation = restingPresentation
+        applyPresentation(animated: animated)
     }
-}
 
-private struct SidebarSpaceCreationRailView: View {
-    let presentation: SidebarSpaceCreationPullPresentation
-    let foregroundColor: Color
-
-    var body: some View {
-        let revealScale = SidebarSpaceCreationAffordanceLayout.revealScale(
-            forDisplayedDistance: presentation.displayedDistance
-        )
-
-        HStack(spacing: 0) {
-            Spacer(minLength: 0)
-
-            ZStack {
-                Circle()
-                    .stroke(foregroundColor.opacity(0.20), lineWidth: 2.2)
-
-                Circle()
-                    .trim(from: 0, to: presentation.progress)
-                    .stroke(
-                        foregroundColor.opacity(presentation.isArmed ? 1 : 0.84),
-                        style: StrokeStyle(lineWidth: 2.4, lineCap: .round)
-                    )
-                    .rotationEffect(.degrees(-90))
-
-                Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(foregroundColor.opacity(presentation.isArmed ? 1 : 0.78))
+    func attach(_ renderer: any SidebarSpaceCreationPullRendering) {
+        renderers.removeAll {
+            guard let attachedRenderer = $0.renderer else {
+                return true
             }
-            .frame(
-                width: SidebarSpacePagerMetrics.creationAffordanceDiameter,
-                height: SidebarSpacePagerMetrics.creationAffordanceDiameter
-            )
-            // Keep the complete circular affordance inside the revealed gap.
-            // The former rectangular clip sliced through the ring and exposed
-            // its darker gradient backing as a visible square.
-            .scaleEffect(revealScale, anchor: .trailing)
-            .opacity(revealScale)
-
-            Spacer()
-                .frame(width: SidebarSpacePagerMetrics.creationRailTrailingPadding)
+            return attachedRenderer === renderer
         }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        renderers.append(SidebarSpaceCreationPullWeakRenderer(renderer))
+        renderer.setCreationPullPresentation(presentation, animated: false)
     }
-}
 
-struct SidebarSpaceCreationPullPresentationModifier: ViewModifier {
-    @ObservedObject var controller: SidebarSpaceCreationPullController
-    let foregroundColor: Color
-
-    func body(content: Content) -> some View {
-        let presentation = controller.presentation
-
-        ZStack(alignment: .trailing) {
-            SidebarSpaceCreationRailView(
-                presentation: presentation,
-                foregroundColor: foregroundColor
-            )
-            .frame(width: SidebarSpacePagerMetrics.creationRailMaximumWidth)
-
-            content
-                .offset(x: -presentation.displayedDistance)
+    func detach(_ renderer: any SidebarSpaceCreationPullRendering) {
+        renderers.removeAll {
+            guard let attachedRenderer = $0.renderer else {
+                return true
+            }
+            return attachedRenderer === renderer
         }
-        .clipped()
+    }
+
+    var attachedRendererCountForTesting: Int {
+        renderers.lazy.compactMap(\.renderer).count
+    }
+
+    private func applyPresentation(animated: Bool) {
+        renderers.removeAll { $0.renderer == nil }
+        for renderer in renderers {
+            renderer.renderer?.setCreationPullPresentation(
+                presentation,
+                animated: animated
+            )
+        }
     }
 }

@@ -335,6 +335,8 @@ struct SidebarTabFaviconView: View {
     let tab: BrowserTab
     let size: CGFloat
     var fallbackSymbolName: String? = nil
+    @Environment(\.sidebarDefersRemoteFaviconLoading)
+    private var defersRemoteFaviconLoading
     @StateObject private var loader = SidebarFaviconImageLoader()
 
     var body: some View {
@@ -349,8 +351,11 @@ struct SidebarTabFaviconView: View {
             }
         }
         .frame(width: size, height: size)
-        .task(id: faviconURL) {
-            await loader.load(faviconURL)
+        .task(id: loadRequest) {
+            await loader.load(
+                faviconURL,
+                defersRemoteLoad: defersRemoteFaviconLoading
+            )
         }
     }
 
@@ -379,6 +384,18 @@ struct SidebarTabFaviconView: View {
     private var faviconURL: URL? {
         SidebarTabFaviconSource.url(for: tab)
     }
+
+    private var loadRequest: SidebarFaviconLoadRequest {
+        SidebarFaviconLoadRequest(
+            url: faviconURL,
+            defersRemoteLoad: defersRemoteFaviconLoading
+        )
+    }
+}
+
+private struct SidebarFaviconLoadRequest: Equatable {
+    let url: URL?
+    let defersRemoteLoad: Bool
 }
 
 @MainActor
@@ -386,13 +403,13 @@ private final class SidebarFaviconImageLoader: ObservableObject {
     @Published private(set) var image: NSImage?
     private var loadedURL: URL?
 
-    func load(_ url: URL?) async {
-        guard loadedURL != url else {
+    func load(_ url: URL?, defersRemoteLoad: Bool) async {
+        if loadedURL != url {
+            loadedURL = url
+            image = nil
+        } else if image != nil {
             return
         }
-
-        loadedURL = url
-        image = nil
 
         guard let url else {
             return
@@ -400,6 +417,10 @@ private final class SidebarFaviconImageLoader: ObservableObject {
 
         if let cachedImage = SidebarFaviconImageCache.image(for: url) {
             image = cachedImage
+            return
+        }
+
+        guard !defersRemoteLoad else {
             return
         }
 
