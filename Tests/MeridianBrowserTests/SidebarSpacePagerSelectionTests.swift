@@ -4,6 +4,27 @@ import Foundation
 @testable import MeridianCore
 import XCTest
 
+@MainActor
+private final class SidebarAddressMorphRendererSpy: SidebarAddressMorphRendering {
+    private(set) var states: [SidebarAddressMorphState?] = []
+
+    func setMorphState(_ state: SidebarAddressMorphState?) {
+        states.append(state)
+    }
+}
+
+@MainActor
+private final class SidebarCreationPullRendererSpy: SidebarSpaceCreationPullRendering {
+    private(set) var updates: [(SidebarSpaceCreationPullPresentation, Bool)] = []
+
+    func setCreationPullPresentation(
+        _ presentation: SidebarSpaceCreationPullPresentation,
+        animated: Bool
+    ) {
+        updates.append((presentation, animated))
+    }
+}
+
 final class SidebarSpacePagerSelectionTests: XCTestCase {
     func testSpaceDragPayloadRoundTripsSpaceID() {
         let spaceID = UUID()
@@ -314,6 +335,81 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         ))
     }
 
+    func testAddressCrossfadeRendersExactSourceAtBeginning() {
+        let presentation = SidebarAddressCrossfadePresentation.resolved(
+            progress: 0,
+            isActive: true
+        )
+
+        XCTAssertEqual(presentation.sourceOpacity, 1, accuracy: 0.0001)
+        XCTAssertEqual(presentation.destinationOpacity, 0, accuracy: 0.0001)
+        XCTAssertEqual(presentation.sourceTranslationY, 0, accuracy: 0.0001)
+        XCTAssertEqual(presentation.destinationTranslationY, 1.5, accuracy: 0.0001)
+    }
+
+    func testAddressCrossfadeRendersExactDestinationAtEnd() {
+        let presentation = SidebarAddressCrossfadePresentation.resolved(
+            progress: 1,
+            isActive: true
+        )
+
+        XCTAssertEqual(presentation.sourceOpacity, 0, accuracy: 0.0001)
+        XCTAssertEqual(presentation.destinationOpacity, 1, accuracy: 0.0001)
+        XCTAssertEqual(presentation.sourceTranslationY, -1.5, accuracy: 0.0001)
+        XCTAssertEqual(presentation.destinationTranslationY, 0, accuracy: 0.0001)
+    }
+
+    func testAddressCrossfadeTracksMidpointAndSettledState() {
+        let midpoint = SidebarAddressCrossfadePresentation.resolved(
+            progress: 0.5,
+            isActive: true
+        )
+        XCTAssertEqual(midpoint.sourceOpacity, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(midpoint.destinationOpacity, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(midpoint.sourceTranslationY, -0.75, accuracy: 0.0001)
+        XCTAssertEqual(midpoint.destinationTranslationY, 0.75, accuracy: 0.0001)
+
+        let settled = SidebarAddressCrossfadePresentation.resolved(
+            progress: 0.8,
+            isActive: false
+        )
+        XCTAssertEqual(settled.sourceOpacity, 1, accuracy: 0.0001)
+        XCTAssertEqual(settled.destinationOpacity, 0, accuracy: 0.0001)
+        XCTAssertEqual(settled.sourceTranslationY, 0, accuracy: 0.0001)
+        XCTAssertEqual(settled.destinationTranslationY, 0, accuracy: 0.0001)
+    }
+
+    func testAddressTextLayoutCentersRetainedTextWithinControl() {
+        let bounds = CGRect(x: 0, y: 0, width: 180, height: 30)
+
+        XCTAssertEqual(
+            SidebarAddressTextLayout.textFrame(
+                in: bounds,
+                preferredHeight: 16
+            ),
+            CGRect(x: 0, y: 7, width: 180, height: 16)
+        )
+    }
+
+    func testAddressTextLayoutClampsInvalidOrOversizedHeight() {
+        let bounds = CGRect(x: 4, y: 6, width: 180, height: 30)
+
+        XCTAssertEqual(
+            SidebarAddressTextLayout.textFrame(
+                in: bounds,
+                preferredHeight: 40
+            ),
+            CGRect(x: 4, y: 6, width: 180, height: 30)
+        )
+        XCTAssertEqual(
+            SidebarAddressTextLayout.textFrame(
+                in: bounds,
+                preferredHeight: .nan
+            ),
+            CGRect(x: 4, y: 21, width: 180, height: 0)
+        )
+    }
+
     func testChromeHandoffDefersExactStyleOnlyWhenPageTravelIsRequired() {
         let first = SidebarSpacePagerPageID.space(UUID())
         let second = SidebarSpacePagerPageID.space(UUID())
@@ -416,6 +512,124 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         controller.update(secondStyle)
         XCTAssertEqual(publicationCount, 2)
         withExtendedLifetime(observation) {}
+    }
+
+    @MainActor
+    func testLiveRenderControllerPublishesFixedChromeAndPreviewOnlyAtTargetChanges() {
+        let firstPageID = SidebarSpacePagerPageID.space(UUID())
+        let secondPageID = SidebarSpacePagerPageID.space(UUID())
+        let firstStyle = SidebarChromeLiveStyle(theme: .standard)
+        let secondStyle = SidebarChromeLiveStyle(theme: SidebarChromeTheme(
+            appearance: SidebarAppearance(tintSource: .spaceColor),
+            spaceColorHex: "#3366FF"
+        ))
+        let addressController = SidebarAddressMorphController()
+        let controller = SidebarPagerLiveRenderController()
+        var fixedUpdateCount = 0
+        var fixedStyle: SidebarChromeLiveStyle?
+        var previewUpdates: [SidebarSpacePagerPageID?] = []
+        var chromeUpdateCount = 0
+
+        controller.begin(
+            pageIDs: [firstPageID, secondPageID],
+            pageTexts: ["First", "Second"],
+            pageStyles: [firstStyle, secondStyle]
+        )
+
+        for _ in 0..<500 {
+            controller.update(
+                fractionalPageIndex: 0.75,
+                directionalTargetPageID: secondPageID,
+                selectedPageID: firstPageID,
+                addressController: addressController,
+                updateChrome: { _ in chromeUpdateCount += 1 },
+                updateFixedChrome: { style, _ in
+                    fixedUpdateCount += 1
+                    fixedStyle = style
+                },
+                previewPage: { previewUpdates.append($0) }
+            )
+        }
+
+        XCTAssertEqual(chromeUpdateCount, 500)
+        XCTAssertEqual(fixedUpdateCount, 1)
+        XCTAssertEqual(fixedStyle, secondStyle)
+        XCTAssertEqual(previewUpdates.count, 1)
+        XCTAssertEqual(previewUpdates[0], secondPageID)
+
+        controller.update(
+            fractionalPageIndex: 0.25,
+            directionalTargetPageID: firstPageID,
+            selectedPageID: firstPageID,
+            addressController: addressController,
+            updateChrome: { _ in chromeUpdateCount += 1 },
+            updateFixedChrome: { style, _ in
+                fixedUpdateCount += 1
+                fixedStyle = style
+            },
+            previewPage: { previewUpdates.append($0) }
+        )
+
+        XCTAssertEqual(fixedUpdateCount, 2)
+        XCTAssertEqual(fixedStyle, firstStyle)
+        XCTAssertEqual(previewUpdates.count, 2)
+        XCTAssertNil(previewUpdates[1])
+    }
+
+    @MainActor
+    func testAddressMorphControllerAttachesDeduplicatesAndDetachesRenderer() {
+        let controller = SidebarAddressMorphController()
+        let renderer = SidebarAddressMorphRendererSpy()
+        let state = SidebarAddressMorphState(
+            sourceText: "First",
+            destinationText: "Second",
+            progress: 0.5
+        )
+
+        controller.attach(renderer)
+        controller.attach(renderer)
+        XCTAssertEqual(controller.attachedRendererCountForTesting, 1)
+        XCTAssertEqual(renderer.states.count, 2)
+
+        controller.update(state)
+        controller.update(state)
+        XCTAssertEqual(renderer.states.count, 3)
+        XCTAssertEqual(renderer.states.last!, state)
+
+        controller.detach(renderer)
+        controller.update(nil)
+        XCTAssertEqual(controller.attachedRendererCountForTesting, 0)
+        XCTAssertEqual(renderer.states.count, 3)
+    }
+
+    @MainActor
+    func testCreationPullControllerUsesRetainedRendererAndResetsExactly() {
+        let controller = SidebarSpaceCreationPullController()
+        let renderer = SidebarCreationPullRendererSpy()
+
+        controller.attach(renderer)
+        controller.attach(renderer)
+        XCTAssertEqual(controller.attachedRendererCountForTesting, 1)
+        XCTAssertEqual(renderer.updates.count, 2)
+
+        for _ in 0..<500 {
+            controller.update(displayedDistance: 24, progress: 0.5)
+        }
+        XCTAssertEqual(renderer.updates.count, 3)
+        XCTAssertEqual(renderer.updates.last?.0.displayedDistance, 24)
+        XCTAssertEqual(renderer.updates.last?.0.progress, 0.5)
+        XCTAssertEqual(renderer.updates.last?.1, false)
+
+        controller.returnToRest(animated: true)
+        XCTAssertEqual(renderer.updates.count, 4)
+        XCTAssertEqual(
+            renderer.updates.last?.0,
+            SidebarSpaceCreationPullPresentation()
+        )
+        XCTAssertEqual(renderer.updates.last?.1, true)
+
+        controller.detach(renderer)
+        XCTAssertEqual(controller.attachedRendererCountForTesting, 0)
     }
 
     func testCommitsActivityPageBeforeFirstSpace() {
@@ -2016,6 +2230,38 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
 
         state.setPreviewTabID(nil)
         XCTAssertNil(state.previewTabID)
+    }
+
+    @MainActor
+    func testPagerPreviewPublishesOncePerResolvedTarget() {
+        let tabID = UUID()
+        let spaceID = UUID()
+        let state = BrowserContentPresentationState()
+        var publicationCount = 0
+        let observation = state.objectWillChange.sink {
+            publicationCount += 1
+        }
+
+        for _ in 0..<500 {
+            state.setPagerPreviewTarget(.tab(tabID))
+        }
+        XCTAssertEqual(publicationCount, 1)
+        XCTAssertEqual(state.previewTabID, tabID)
+        XCTAssertEqual(state.activityPagePreviewOverride, false)
+
+        state.setPagerPreviewTarget(.startPage(spaceID))
+        XCTAssertEqual(publicationCount, 2)
+        XCTAssertNil(state.previewTabID)
+        XCTAssertEqual(state.previewStartPageSpaceID, spaceID)
+
+        state.setPagerPreviewTarget(.activity)
+        XCTAssertEqual(publicationCount, 3)
+        XCTAssertEqual(state.activityPagePreviewOverride, true)
+
+        state.setPagerPreviewTarget(nil)
+        XCTAssertEqual(publicationCount, 4)
+        XCTAssertNil(state.activityPagePreviewOverride)
+        withExtendedLifetime(observation) {}
     }
 
     @MainActor

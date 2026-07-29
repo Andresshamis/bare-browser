@@ -1,5 +1,6 @@
 import AppKit
 import OSLog
+import QuartzCore
 import SwiftUI
 
 private let browserContentLogger = Logger(
@@ -8,6 +9,88 @@ private let browserContentLogger = Logger(
 )
 
 private let activeTabSnapshotHandoffDelayNanoseconds: UInt64 = 90_000_000
+
+private struct BrowserContentSnapshotOverlay: NSViewRepresentable {
+    let image: NSImage?
+
+    func makeNSView(context: Context) -> BrowserContentSnapshotOverlayView {
+        let view = BrowserContentSnapshotOverlayView()
+        view.setImage(image)
+        return view
+    }
+
+    func updateNSView(_ nsView: BrowserContentSnapshotOverlayView, context: Context) {
+        nsView.setImage(image)
+    }
+}
+
+@MainActor
+private final class BrowserContentSnapshotOverlayView: NSView {
+    private weak var representedImage: NSImage?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configureLayer()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureLayer()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        withoutImplicitLayerActions {
+            layer?.contentsScale = window?.backingScaleFactor
+                ?? NSScreen.main?.backingScaleFactor
+                ?? 2
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    func setImage(_ image: NSImage?) {
+        guard representedImage !== image else {
+            return
+        }
+        representedImage = image
+
+        var proposedRect = NSRect(
+            origin: .zero,
+            size: image?.size ?? .zero
+        )
+        let contents = image?.cgImage(
+            forProposedRect: &proposedRect,
+            context: nil,
+            hints: nil
+        )
+        withoutImplicitLayerActions {
+            layer?.contents = contents
+            layer?.opacity = contents == nil ? 0 : 1
+        }
+    }
+
+    private func configureLayer() {
+        wantsLayer = true
+        layerContentsRedrawPolicy = .never
+        withoutImplicitLayerActions {
+            layer?.masksToBounds = true
+            layer?.contentsGravity = .resizeAspectFill
+            layer?.minificationFilter = .linear
+            layer?.magnificationFilter = .linear
+            layer?.opacity = 0
+        }
+    }
+
+    private func withoutImplicitLayerActions(_ updates: () -> Void) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        updates()
+        CATransaction.commit()
+    }
+}
 
 public struct BrowserContentView: View {
     @ObservedObject private var store: BrowserStore
@@ -88,8 +171,9 @@ public struct BrowserContentView: View {
                 if !activityPageIsPresented {
                     beginSnapshotHandoffIfNeeded(for: store.selectedTabID)
                 }
-                if store.selectedTabID != nil {
-                    presentationState.setPreviewStartPageSpaceID(nil)
+                if store.selectedTabID != nil,
+                   case .startPage = presentationState.pagerPreviewTarget {
+                    presentationState.setPagerPreviewTarget(nil)
                 }
                 syncWebViewState()
                 if !activityPageIsPresented {
@@ -98,8 +182,7 @@ public struct BrowserContentView: View {
             }
             .onChange(of: activityPageIsSelected) { _, isSelected in
                 if isSelected {
-                    presentationState.setPreviewTabID(nil)
-                    presentationState.setPreviewStartPageSpaceID(nil)
+                    presentationState.setPagerPreviewTarget(nil)
                     presentationState.clearSnapshotHandoff()
                 } else {
                     beginSnapshotHandoffIfNeeded(for: store.selectedTabID)
@@ -404,16 +487,11 @@ public struct BrowserContentView: View {
             )
     }
 
-    @ViewBuilder
     private var snapshotOverlay: some View {
-        if let image = snapshotOverlayImage {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .allowsHitTesting(false)
-        }
+        BrowserContentSnapshotOverlay(image: snapshotOverlayImage)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     private var snapshotOverlayImage: NSImage? {
