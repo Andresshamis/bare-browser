@@ -14,6 +14,44 @@ private final class SidebarAddressMorphRendererSpy: SidebarAddressMorphRendering
 }
 
 final class SidebarSpacePagerSelectionTests: XCTestCase {
+    func testPageTransitionKeepsSettledPageExact() {
+        XCTAssertEqual(
+            SidebarSpacePagerPageTransition.presentation(forPhaseValue: 0),
+            SidebarSpacePagerPageTransitionPresentation(
+                opacity: 1,
+                scale: 1,
+                verticalOffset: 0
+            )
+        )
+        XCTAssertEqual(
+            SidebarSpacePagerPageTransition.presentation(forPhaseValue: .nan),
+            SidebarSpacePagerPageTransitionPresentation(
+                opacity: 1,
+                scale: 1,
+                verticalOffset: 0
+            )
+        )
+    }
+
+    func testPageTransitionCrossfadesSymmetricallyWithoutHidingPages() {
+        let leading = SidebarSpacePagerPageTransition.presentation(
+            forPhaseValue: -0.5
+        )
+        let trailing = SidebarSpacePagerPageTransition.presentation(
+            forPhaseValue: 0.5
+        )
+        let edge = SidebarSpacePagerPageTransition.presentation(
+            forPhaseValue: 1
+        )
+
+        XCTAssertEqual(leading, trailing)
+        XCTAssertEqual(leading.opacity, 0.79, accuracy: 0.0001)
+        XCTAssertEqual(leading.scale, 0.994, accuracy: 0.0001)
+        XCTAssertEqual(leading.verticalOffset, 1.25, accuracy: 0.0001)
+        XCTAssertEqual(edge.opacity, 0.58, accuracy: 0.0001)
+        XCTAssertGreaterThan(edge.opacity, 0.5)
+    }
+
     func testSpaceDragPayloadRoundTripsSpaceID() {
         let spaceID = UUID()
 

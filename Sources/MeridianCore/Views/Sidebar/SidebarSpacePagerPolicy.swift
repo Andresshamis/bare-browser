@@ -18,6 +18,37 @@ enum SidebarSpacePagerMetrics {
     static let creationReturnAnimation: Animation = .smooth(duration: 0.24, extraBounce: 0.08)
 }
 
+struct SidebarSpacePagerPageTransitionPresentation: Equatable, Sendable {
+    let opacity: Double
+    let scale: CGFloat
+    let verticalOffset: CGFloat
+}
+
+enum SidebarSpacePagerPageTransition {
+    /// A compositor-only emphasis curve for page contents. Foregrounds remain
+    /// contrast-correct for their own themes, while the outgoing page recedes
+    /// and the incoming page resolves without publishing scroll geometry.
+    static func presentation(
+        forPhaseValue phaseValue: Double
+    ) -> SidebarSpacePagerPageTransitionPresentation {
+        guard phaseValue.isFinite else {
+            return SidebarSpacePagerPageTransitionPresentation(
+                opacity: 1,
+                scale: 1,
+                verticalOffset: 0
+            )
+        }
+
+        let distance = min(abs(phaseValue), 1)
+        let easedDistance = distance * distance * (3 - 2 * distance)
+        return SidebarSpacePagerPageTransitionPresentation(
+            opacity: 1 - 0.42 * easedDistance,
+            scale: CGFloat(1 - 0.012 * easedDistance),
+            verticalOffset: CGFloat(2.5 * easedDistance)
+        )
+    }
+}
+
 enum SidebarSpacePagerHorizontalIntent: Equatable, Sendable {
     case backward
     case forward
