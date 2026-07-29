@@ -371,6 +371,17 @@ public struct SidebarView: View {
             }
             .accessibilityHidden(true)
         }
+        .simultaneousGesture(sidebarInteractionGesture)
+    }
+
+    private var sidebarInteractionGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { _ in
+                guard store.isCommandBarPresented else {
+                    return
+                }
+                store.hideCommandBar()
+            }
     }
 
     private var browserControlsHeader: some View {
@@ -2898,6 +2909,27 @@ private struct WindowReader: NSViewRepresentable {
     }
 }
 
+private func sidebarSpacePagerPageTransitionEffect(
+    _ content: EmptyVisualEffect,
+    phase: ScrollTransitionPhase
+) -> some VisualEffect {
+    let presentation = SidebarSpacePagerPageTransition.presentation(
+        forPhaseValue: phase.value
+    )
+    return content
+        .opacity(presentation.opacity)
+        .scaleEffect(presentation.scale)
+        .offset(y: presentation.verticalOffset)
+}
+
+private struct SidebarSpacePagerPageTransitionModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content.scrollTransition(.interactive, axis: .horizontal) { content, phase in
+            sidebarSpacePagerPageTransitionEffect(content, phase: phase)
+        }
+    }
+}
+
 private struct SidebarSpacePagerView: View {
     let snapshot: SidebarSpacePagerSnapshot
     let navigationRequest: SidebarSpacePagerNavigationRequest?
@@ -2959,6 +2991,7 @@ private struct SidebarSpacePagerView: View {
                         pageView(page)
                         .id(page.id)
                         .frame(width: pageWidth, height: proxy.size.height, alignment: .top)
+                        .modifier(SidebarSpacePagerPageTransitionModifier())
                         // Once horizontal paging owns the gesture, tab rows no
                         // longer participate in hit testing until the pager is idle.
                         .allowsHitTesting(!scrollIsActive)
