@@ -93,6 +93,7 @@ private final class BrowserContentSnapshotOverlayView: NSView {
 }
 
 public struct BrowserContentView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var store: BrowserStore
     @ObservedObject private var webViewState: WebViewState
     @ObservedObject private var presentationState: BrowserContentPresentationState

@@ -9,6 +9,7 @@ enum SidebarSpacePagerMetrics {
     static let directionalVelocityThreshold: CGFloat = 20
     static let creationDirectionInferenceDistance: CGFloat = 2
     static let creationSettledOffsetTolerance: CGFloat = 0.75
+    static let creationSettledPageTolerance: CGFloat = 0.02
     static let creationPullThreshold: CGFloat = 160
     static let creationPullResistance: CGFloat = 0.55
     static let creationRailMaximumWidth: CGFloat = 72

@@ -6,7 +6,9 @@ struct SidebarSpaceCreationPullEligibility {
         gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin,
         currentOffsetX: CGFloat,
         lastPageOffsetX: CGFloat,
-        lastPageIndex: Int
+        lastPageIndex: Int,
+        visibleFractionalPageIndex: CGFloat? = nil,
+        selectedPageIsLast: Bool = false
     ) -> Bool {
         guard creationIsAvailable,
               currentOffsetX.isFinite,
@@ -19,9 +21,23 @@ struct SidebarSpaceCreationPullEligibility {
             return true
         }
 
-        return gestureOrigin.scrollWasIdle
-            && abs(currentOffsetX - lastPageOffsetX)
-                <= SidebarSpacePagerMetrics.creationSettledOffsetTolerance
+        guard gestureOrigin.scrollWasIdle else {
+            return false
+        }
+
+        if selectedPageIsLast {
+            return true
+        }
+
+        if let visibleFractionalPageIndex,
+           visibleFractionalPageIndex.isFinite,
+           abs(visibleFractionalPageIndex - CGFloat(lastPageIndex))
+            <= SidebarSpacePagerMetrics.creationSettledPageTolerance {
+            return true
+        }
+
+        return abs(currentOffsetX - lastPageOffsetX)
+            <= SidebarSpacePagerMetrics.creationSettledOffsetTolerance
     }
 }
 
@@ -40,6 +56,43 @@ enum SidebarSpaceCreationPullReleaseOutcome: Equatable, Sendable {
     case none
     case cancel
     case create
+}
+
+enum SidebarSpaceCreationPagerIdleDisposition: Equatable, Sendable {
+    case commitNormally
+    case suppressCommit
+    case adoptCreatedPage(SidebarSpacePagerPageID)
+}
+
+@MainActor
+final class SidebarSpaceCreationCommitCoordinator {
+    private var creationIsPending = false
+    private var createdPageID: SidebarSpacePagerPageID?
+
+    func beginCreation() {
+        creationIsPending = true
+        createdPageID = nil
+    }
+
+    func completeCreation(with pageID: SidebarSpacePagerPageID) {
+        guard creationIsPending else {
+            return
+        }
+        createdPageID = pageID
+    }
+
+    func cancelCreation() {
+        creationIsPending = false
+        createdPageID = nil
+    }
+
+    func pagerIdleDisposition() -> SidebarSpaceCreationPagerIdleDisposition {
+        if let createdPageID {
+            cancelCreation()
+            return .adoptCreatedPage(createdPageID)
+        }
+        return creationIsPending ? .suppressCommit : .commitNormally
+    }
 }
 
 struct SidebarSpaceCreationPullState: Equatable, Sendable {
@@ -286,26 +339,8 @@ struct SidebarSpaceCreationAffordanceLayout {
 }
 
 @MainActor
-protocol SidebarSpaceCreationPullRendering: AnyObject {
-    func setCreationPullPresentation(
-        _ presentation: SidebarSpaceCreationPullPresentation,
-        animated: Bool
-    )
-}
-
-@MainActor
-private final class SidebarSpaceCreationPullWeakRenderer {
-    weak var renderer: (any SidebarSpaceCreationPullRendering)?
-
-    init(_ renderer: any SidebarSpaceCreationPullRendering) {
-        self.renderer = renderer
-    }
-}
-
-@MainActor
-final class SidebarSpaceCreationPullController {
-    private(set) var presentation = SidebarSpaceCreationPullPresentation()
-    private var renderers: [SidebarSpaceCreationPullWeakRenderer] = []
+final class SidebarSpaceCreationPullController: ObservableObject {
+    @Published private(set) var presentation = SidebarSpaceCreationPullPresentation()
 
     func update(displayedDistance: CGFloat, progress: CGFloat) {
         let presentation = SidebarSpaceCreationPullPresentation(
@@ -316,49 +351,80 @@ final class SidebarSpaceCreationPullController {
             return
         }
         self.presentation = presentation
-        applyPresentation(animated: false)
     }
 
     func returnToRest(animated: Bool) {
-        let restingPresentation = SidebarSpaceCreationPullPresentation()
-        guard presentation != restingPresentation else {
-            return
+        let update = {
+            self.presentation = SidebarSpaceCreationPullPresentation()
         }
-        presentation = restingPresentation
-        applyPresentation(animated: animated)
+        if animated {
+            withAnimation(SidebarSpacePagerMetrics.creationReturnAnimation, update)
+        } else {
+            update()
+        }
     }
+}
 
-    func attach(_ renderer: any SidebarSpaceCreationPullRendering) {
-        renderers.removeAll {
-            guard let attachedRenderer = $0.renderer else {
-                return true
+private struct SidebarSpaceCreationRailView: View {
+    let presentation: SidebarSpaceCreationPullPresentation
+    let foregroundColor: Color
+
+    var body: some View {
+        let revealScale = SidebarSpaceCreationAffordanceLayout.revealScale(
+            forDisplayedDistance: presentation.displayedDistance
+        )
+
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+
+            ZStack {
+                Circle()
+                    .stroke(foregroundColor.opacity(0.20), lineWidth: 2.2)
+
+                Circle()
+                    .trim(from: 0, to: presentation.progress)
+                    .stroke(
+                        foregroundColor.opacity(presentation.isArmed ? 1 : 0.84),
+                        style: StrokeStyle(lineWidth: 2.4, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(foregroundColor.opacity(presentation.isArmed ? 1 : 0.78))
             }
-            return attachedRenderer === renderer
-        }
-        renderers.append(SidebarSpaceCreationPullWeakRenderer(renderer))
-        renderer.setCreationPullPresentation(presentation, animated: false)
-    }
-
-    func detach(_ renderer: any SidebarSpaceCreationPullRendering) {
-        renderers.removeAll {
-            guard let attachedRenderer = $0.renderer else {
-                return true
-            }
-            return attachedRenderer === renderer
-        }
-    }
-
-    var attachedRendererCountForTesting: Int {
-        renderers.lazy.compactMap(\.renderer).count
-    }
-
-    private func applyPresentation(animated: Bool) {
-        renderers.removeAll { $0.renderer == nil }
-        for renderer in renderers {
-            renderer.renderer?.setCreationPullPresentation(
-                presentation,
-                animated: animated
+            .frame(
+                width: SidebarSpacePagerMetrics.creationAffordanceDiameter,
+                height: SidebarSpacePagerMetrics.creationAffordanceDiameter
             )
+            .scaleEffect(revealScale, anchor: .trailing)
+            .opacity(revealScale)
+
+            Spacer()
+                .frame(width: SidebarSpacePagerMetrics.creationRailTrailingPadding)
         }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+struct SidebarSpaceCreationPullPresentationModifier: ViewModifier {
+    @ObservedObject var controller: SidebarSpaceCreationPullController
+    let foregroundColor: Color
+
+    func body(content: Content) -> some View {
+        let presentation = controller.presentation
+
+        ZStack(alignment: .trailing) {
+            SidebarSpaceCreationRailView(
+                presentation: presentation,
+                foregroundColor: foregroundColor
+            )
+            .frame(width: SidebarSpacePagerMetrics.creationRailMaximumWidth)
+
+            content
+                .offset(x: -presentation.displayedDistance)
+        }
+        .clipped()
     }
 }
