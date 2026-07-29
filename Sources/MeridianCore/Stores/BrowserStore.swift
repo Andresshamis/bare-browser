@@ -728,15 +728,12 @@ public final class BrowserStore: ObservableObject {
         guard let space = spaces.first(where: { $0.id == id }) else {
             return
         }
-        let shouldPreserveCommandBar = isCommandBarPresented && commandBarMode == .newTab
         selectedSpaceID = id
         selectedTabID = space.selectedTabID
             ?? space.favoriteTabIDs.first
             ?? space.pinnedTabIDs.first
             ?? space.regularTabIDs.first
-        if !shouldPreserveCommandBar {
-            hideCommandBar()
-        }
+        hideCommandBar()
         refreshActivePageSecurityStatus()
         schedulePersistSession()
     }
@@ -778,6 +775,7 @@ public final class BrowserStore: ObservableObject {
         updateTab(id) { tab in
             tab.lastActiveDate = Date()
         }
+        hideCommandBar()
         refreshActivePageSecurityStatus()
         persistSession()
     }
