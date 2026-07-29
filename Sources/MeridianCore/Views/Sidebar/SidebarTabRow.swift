@@ -14,7 +14,10 @@ public struct SidebarTabRow: View {
     private let dragStarted: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.sidebarForegroundColor) private var sidebarForegroundColor
+    @Environment(\.sidebarDefersRemoteFaviconLoading)
+    private var defersRemoteFaviconLoading
     @State private var isHovered = false
+    @State private var closeIsHovered = false
 
     public init(
         tab: BrowserTab,
@@ -58,7 +61,7 @@ public struct SidebarTabRow: View {
 
             Spacer(minLength: 4)
 
-            if showsLoadingIndicator && tab.isLoading {
+            if showsLoadingIndicator && tab.isLoading && !defersRemoteFaviconLoading {
                 ProgressView()
                     .controlSize(.small)
                     .frame(width: 14, height: 14)
@@ -66,12 +69,33 @@ public struct SidebarTabRow: View {
 
             if canClose {
                 Button(action: close) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 22, height: 22)
+                    ZStack {
+                        Color.clear
+
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(
+                                closeIsHovered
+                                    ? sidebarForegroundColor.opacity(closeHoverBackgroundOpacity)
+                                    : .clear
+                            )
+                            .opacity(isHovered || isSelected ? 1 : 0)
+
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(
+                                closeIsHovered
+                                    ? sidebarForegroundColor
+                                    : sidebarForegroundColor.opacity(0.72)
+                                )
+                            .opacity(isHovered || isSelected ? 1 : 0)
+                    }
+                    .frame(width: 24, height: 24)
+                    .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .opacity(isHovered || isSelected ? 1 : 0)
+                .onHover { closeIsHovered = $0 }
+                .animation(.easeOut(duration: 0.12), value: closeIsHovered)
+                .animation(.easeOut(duration: 0.12), value: isHovered)
                 .help("Close tab")
                 .accessibilityLabel("Close \(tab.title)")
             }
@@ -84,6 +108,7 @@ public struct SidebarTabRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: select)
         .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
         .onDrag {
             dragStarted()
             return NSItemProvider(object: tab.id.uuidString as NSString)
@@ -153,13 +178,29 @@ public struct SidebarTabRow: View {
     }
 
     private var selectionBackground: some ShapeStyle {
-        isSelected
-            ? AnyShapeStyle(sidebarForegroundColor.opacity(selectionBackgroundOpacity))
-            : AnyShapeStyle(.clear)
+        if isSelected {
+            return AnyShapeStyle(
+                sidebarForegroundColor.opacity(selectionBackgroundOpacity)
+            )
+        }
+        if isHovered {
+            return AnyShapeStyle(
+                sidebarForegroundColor.opacity(hoverBackgroundOpacity)
+            )
+        }
+        return AnyShapeStyle(.clear)
     }
 
     private var selectionBackgroundOpacity: Double {
         colorScheme == .dark ? 0.12 : 0.055
+    }
+
+    private var hoverBackgroundOpacity: Double {
+        colorScheme == .dark ? 0.075 : 0.045
+    }
+
+    private var closeHoverBackgroundOpacity: Double {
+        colorScheme == .dark ? 0.16 : 0.10
     }
 
     private var iconName: String {

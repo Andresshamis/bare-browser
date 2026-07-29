@@ -1,9 +1,15 @@
 import AppKit
 
+enum BrowserContentPagerPreviewTarget: Equatable, Sendable {
+    case activity
+    case space
+    case tab(TabID)
+    case startPage(SpaceID)
+}
+
 @MainActor
 public final class BrowserContentPresentationState: ObservableObject {
-    @Published public private(set) var previewTabID: TabID?
-    @Published public private(set) var previewStartPageSpaceID: SpaceID?
+    @Published private(set) var pagerPreviewTarget: BrowserContentPagerPreviewTarget?
     @Published public private(set) var activeContentTabID: TabID?
     @Published public private(set) var snapshotHandoffIdentity: WebContentSessionIdentity?
     private var snapshotHandoffID: UUID?
@@ -15,6 +21,28 @@ public final class BrowserContentPresentationState: ObservableObject {
         snapshotHandoffIdentity?.tabID
     }
 
+    public var previewTabID: TabID? {
+        guard case .tab(let tabID) = pagerPreviewTarget else {
+            return nil
+        }
+        return tabID
+    }
+
+    public var previewStartPageSpaceID: SpaceID? {
+        guard case .startPage(let spaceID) = pagerPreviewTarget else {
+            return nil
+        }
+        return spaceID
+    }
+
+    // nil follows the committed selection; true/false follows the live pager target.
+    var activityPagePreviewOverride: Bool? {
+        guard let pagerPreviewTarget else {
+            return nil
+        }
+        return pagerPreviewTarget == .activity
+    }
+
     public init(snapshotHandoffExpirationNanoseconds: UInt64 = 1_200_000_000) {
         self.snapshotHandoffExpirationNanoseconds = snapshotHandoffExpirationNanoseconds
     }
@@ -23,20 +51,38 @@ public final class BrowserContentPresentationState: ObservableObject {
         snapshotHandoffExpirationTask?.cancel()
     }
 
-    public func setPreviewTabID(_ tabID: TabID?) {
-        guard previewTabID != tabID else {
+    func setPagerPreviewTarget(_ target: BrowserContentPagerPreviewTarget?) {
+        guard pagerPreviewTarget != target else {
             return
         }
+        pagerPreviewTarget = target
+    }
 
-        previewTabID = tabID
+    public func setPreviewTabID(_ tabID: TabID?) {
+        if let tabID {
+            setPagerPreviewTarget(.tab(tabID))
+        } else if case .tab = pagerPreviewTarget {
+            setPagerPreviewTarget(nil)
+        }
     }
 
     public func setPreviewStartPageSpaceID(_ spaceID: SpaceID?) {
-        guard previewStartPageSpaceID != spaceID else {
-            return
+        if let spaceID {
+            setPagerPreviewTarget(.startPage(spaceID))
+        } else if case .startPage = pagerPreviewTarget {
+            setPagerPreviewTarget(nil)
         }
+    }
 
-        previewStartPageSpaceID = spaceID
+    func setActivityPagePreviewOverride(_ isPresented: Bool?) {
+        switch isPresented {
+        case true:
+            setPagerPreviewTarget(.activity)
+        case false:
+            setPagerPreviewTarget(.space)
+        case nil:
+            setPagerPreviewTarget(nil)
+        }
     }
 
     public func setActiveContentTabID(_ tabID: TabID?) {
@@ -139,6 +185,15 @@ public final class BrowserContentPresentationState: ObservableObject {
 
             self?.completeSnapshotHandoff(handoffID, for: identity)
         }
+    }
+}
+
+struct BrowserActivityPagePresentation {
+    static func isPresented(
+        isSelected: Bool,
+        previewOverride: Bool?
+    ) -> Bool {
+        previewOverride ?? isSelected
     }
 }
 

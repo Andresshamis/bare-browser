@@ -63,6 +63,83 @@ final class SidebarSpacePagerGestureTests: XCTestCase {
         ))
     }
 
+    func testScrollAxisLockLeavesVerticalTabScrollingOnNativePath() {
+        var axisLock = SidebarSpacePagerScrollAxisLock()
+
+        XCTAssertEqual(
+            axisLock.update(
+                scrollingDeltaX: 0.05,
+                scrollingDeltaY: 0.2,
+                minimumDisplacement: 0.5
+            ),
+            .undecided
+        )
+        XCTAssertEqual(
+            axisLock.update(
+                scrollingDeltaX: 0.1,
+                scrollingDeltaY: 1.4,
+                minimumDisplacement: 0.5
+            ),
+            .vertical
+        )
+
+        // Once vertical scrolling owns the physical gesture, diagonal noise
+        // must not reroute later events through the horizontal pager.
+        XCTAssertEqual(
+            axisLock.update(
+                scrollingDeltaX: 20,
+                scrollingDeltaY: 0,
+                minimumDisplacement: 0.5
+            ),
+            .vertical
+        )
+    }
+
+    func testScrollAxisLockAccumulatesHighRefreshHorizontalSamples() {
+        var axisLock = SidebarSpacePagerScrollAxisLock()
+
+        XCTAssertEqual(
+            axisLock.update(
+                scrollingDeltaX: 0.2,
+                scrollingDeltaY: 0.02,
+                minimumDisplacement: 0.5
+            ),
+            .undecided
+        )
+        XCTAssertEqual(
+            axisLock.update(
+                scrollingDeltaX: 0.35,
+                scrollingDeltaY: 0.03,
+                minimumDisplacement: 0.5
+            ),
+            .horizontal
+        )
+
+        axisLock.reset()
+        XCTAssertEqual(axisLock.axis, .undecided)
+    }
+
+    func testScrollAxisLockIgnoresInvalidSamples() {
+        var axisLock = SidebarSpacePagerScrollAxisLock()
+
+        XCTAssertEqual(
+            axisLock.update(
+                scrollingDeltaX: .nan,
+                scrollingDeltaY: 10,
+                minimumDisplacement: 0.5
+            ),
+            .undecided
+        )
+        XCTAssertEqual(
+            axisLock.update(
+                scrollingDeltaX: 10,
+                scrollingDeltaY: .infinity,
+                minimumDisplacement: 0.5
+            ),
+            .undecided
+        )
+    }
+
     func testAppKitWheelDirectionRoutesForwardToCreationAndBackwardToPaging() throws {
         let forwardInput = try XCTUnwrap(SidebarSpacePagerHorizontalInputSample(
             scrollingDeltaX: -3

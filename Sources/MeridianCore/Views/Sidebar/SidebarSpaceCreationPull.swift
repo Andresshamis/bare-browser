@@ -6,7 +6,9 @@ struct SidebarSpaceCreationPullEligibility {
         gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin,
         currentOffsetX: CGFloat,
         lastPageOffsetX: CGFloat,
-        lastPageIndex: Int
+        lastPageIndex: Int,
+        visibleFractionalPageIndex: CGFloat? = nil,
+        selectedPageIsLast: Bool = false
     ) -> Bool {
         guard creationIsAvailable,
               currentOffsetX.isFinite,
@@ -19,9 +21,23 @@ struct SidebarSpaceCreationPullEligibility {
             return true
         }
 
-        return gestureOrigin.scrollWasIdle
-            && abs(currentOffsetX - lastPageOffsetX)
-                <= SidebarSpacePagerMetrics.creationSettledOffsetTolerance
+        guard gestureOrigin.scrollWasIdle else {
+            return false
+        }
+
+        if selectedPageIsLast {
+            return true
+        }
+
+        if let visibleFractionalPageIndex,
+           visibleFractionalPageIndex.isFinite,
+           abs(visibleFractionalPageIndex - CGFloat(lastPageIndex))
+            <= SidebarSpacePagerMetrics.creationSettledPageTolerance {
+            return true
+        }
+
+        return abs(currentOffsetX - lastPageOffsetX)
+            <= SidebarSpacePagerMetrics.creationSettledOffsetTolerance
     }
 }
 
@@ -40,6 +56,43 @@ enum SidebarSpaceCreationPullReleaseOutcome: Equatable, Sendable {
     case none
     case cancel
     case create
+}
+
+enum SidebarSpaceCreationPagerIdleDisposition: Equatable, Sendable {
+    case commitNormally
+    case suppressCommit
+    case adoptCreatedPage(SidebarSpacePagerPageID)
+}
+
+@MainActor
+final class SidebarSpaceCreationCommitCoordinator {
+    private var creationIsPending = false
+    private var createdPageID: SidebarSpacePagerPageID?
+
+    func beginCreation() {
+        creationIsPending = true
+        createdPageID = nil
+    }
+
+    func completeCreation(with pageID: SidebarSpacePagerPageID) {
+        guard creationIsPending else {
+            return
+        }
+        createdPageID = pageID
+    }
+
+    func cancelCreation() {
+        creationIsPending = false
+        createdPageID = nil
+    }
+
+    func pagerIdleDisposition() -> SidebarSpaceCreationPagerIdleDisposition {
+        if let createdPageID {
+            cancelCreation()
+            return .adoptCreatedPage(createdPageID)
+        }
+        return creationIsPending ? .suppressCommit : .commitNormally
+    }
 }
 
 struct SidebarSpaceCreationPullState: Equatable, Sendable {
@@ -344,9 +397,6 @@ private struct SidebarSpaceCreationRailView: View {
                 width: SidebarSpacePagerMetrics.creationAffordanceDiameter,
                 height: SidebarSpacePagerMetrics.creationAffordanceDiameter
             )
-            // Keep the complete circular affordance inside the revealed gap.
-            // The former rectangular clip sliced through the ring and exposed
-            // its darker gradient backing as a visible square.
             .scaleEffect(revealScale, anchor: .trailing)
             .opacity(revealScale)
 

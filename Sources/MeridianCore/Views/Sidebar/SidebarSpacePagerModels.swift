@@ -73,6 +73,13 @@ struct SidebarSpacePageSnapshot: Identifiable, Equatable, Sendable {
     let pinnedTabs: [SidebarTabItemSnapshot]
     let folders: [SidebarFolderItemSnapshot]
     let regularTabs: [SidebarTabItemSnapshot]
+
+    var tabLifecycleIDs: [TabID] {
+        favoriteTabs.map(\.id)
+            + pinnedTabs.map(\.id)
+            + folders.flatMap(\.tabLifecycleIDs)
+            + regularTabs.map(\.id)
+    }
 }
 
 struct SidebarFolderItemSnapshot: Identifiable, Equatable, Sendable {
@@ -81,6 +88,10 @@ struct SidebarFolderItemSnapshot: Identifiable, Equatable, Sendable {
     let folder: BrowserFolder
     let tabs: [SidebarTabItemSnapshot]
     let childFolders: [SidebarFolderItemSnapshot]
+
+    var tabLifecycleIDs: [TabID] {
+        tabs.map(\.id) + childFolders.flatMap(\.tabLifecycleIDs)
+    }
 
     static func == (lhs: SidebarFolderItemSnapshot, rhs: SidebarFolderItemSnapshot) -> Bool {
         lhs.folder == rhs.folder

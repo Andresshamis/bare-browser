@@ -9,6 +9,63 @@ enum SidebarTabReorderInteractionMetrics {
     static let emptySectionDropSlotHitHeight: CGFloat = 40
 }
 
+private struct SidebarTabLifecycleRemovalEffect: @MainActor AnimatableModifier {
+    var progress: Double
+    let minimumScale: CGFloat
+    let anchor: UnitPoint
+
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let scale = minimumScale + ((1 - minimumScale) * CGFloat(progress))
+
+        content
+            .opacity(progress)
+            .scaleEffect(scale, anchor: anchor)
+            .allowsHitTesting(progress >= 1)
+    }
+}
+
+@MainActor
+enum SidebarTabLifecycleMotion {
+    static let animation = Animation.easeOut(duration: 0.08)
+    static let rowTransition = AnyTransition.asymmetric(
+        insertion: .opacity
+            .combined(with: .move(edge: .top))
+            .combined(with: .scale(scale: 0.97, anchor: .top)),
+        removal: removalTransition(minimumScale: 0.92, anchor: .top)
+    )
+    static let tileTransition = AnyTransition.asymmetric(
+        insertion: .opacity.combined(with: .scale(scale: 0.86)),
+        removal: removalTransition(minimumScale: 0.84, anchor: .center)
+    )
+    static let sectionTransition = AnyTransition.asymmetric(
+        insertion: .opacity.combined(with: .move(edge: .top)),
+        removal: removalTransition(minimumScale: 0.98, anchor: .top)
+    )
+
+    private static func removalTransition(
+        minimumScale: CGFloat,
+        anchor: UnitPoint
+    ) -> AnyTransition {
+        .modifier(
+            active: SidebarTabLifecycleRemovalEffect(
+                progress: 0,
+                minimumScale: minimumScale,
+                anchor: anchor
+            ),
+            identity: SidebarTabLifecycleRemovalEffect(
+                progress: 1,
+                minimumScale: minimumScale,
+                anchor: anchor
+            )
+        )
+    }
+}
+
 struct SidebarTabDropState: Equatable {
     var activeSlotID: String?
     var isDragging = false

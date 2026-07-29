@@ -64,6 +64,31 @@ repeat prompting for this rollout, “Set as Default” must register both HTTP 
 and a link opened from another app must arrive in a new Lumen Browser tab. No prompt
 should appear when Lumen Browser already handles both schemes.
 
+### Sidebar Space-Paging Performance
+
+Profile a Release app bundle launched with `./script/build_and_run.sh` on a
+120 Hz ProMotion display, with the app active, AC power connected, and Low
+Power Mode disabled. Use at least eight differently themed spaces containing
+large tab lists, folders, favorites, loading tabs, and long URLs.
+
+- Record at least 100 forward, reverse, cancelled, and interrupted horizontal
+  swipes with Instruments Animation Hitches, SwiftUI, and Time Profiler.
+- Include Activity-to-space transitions and the pull-to-create interaction
+  beyond the final space.
+- Confirm the live webpage preview still changes at the directional threshold,
+  while the selected space commits only after the pager settles.
+- At least 99% of offered 120 Hz gesture frames must complete within 8.33 ms,
+  with no consecutive app-caused misses and no display-rate SwiftUI
+  body/layout invalidation from pager geometry samples.
+- Check light and dark appearance, pinned and floating sidebars, Reduce Motion,
+  Reduce Transparency, exact theme endpoints, and the live glass/tint/noise
+  interpolation.
+
+Debug builds expose the `Sidebar Space Paging`, `Sidebar Pager Live Render`,
+`Sidebar Preview Handoff`, and `Sidebar Pager Frame Summary` points of
+interest for local Instruments traces. These measurements are not persisted
+or transmitted.
+
 ## Required Future Tests
 
 - UI tests for creating spaces, folders, profiles, opening tabs, switching tabs, restoring sessions, and split view.
