@@ -678,7 +678,9 @@ public struct SidebarView: View {
             revealDownload: { revealDownload($0) },
             selectSpace: { selectSpace($0) },
             selectAuxiliaryPage: { selectAuxiliaryPage($0) },
-            createSpace: { _ = store.createSpace(name: "New Space") },
+            createSpace: {
+                .space(store.createSpace(name: "New Space").id)
+            },
             previewPage: { setPreviewPage($0) },
             sidebarIsPinned: store.sidebarIsLockedOpen,
             updateSidebarFixedChromeLiveStyle: { style, animated in
@@ -2912,7 +2914,7 @@ private struct SidebarSpacePagerView: View {
     let revealDownload: (BrowserDownload) -> Void
     let selectSpace: (SpaceID) -> Void
     let selectAuxiliaryPage: (SidebarSpacePagerPageID?) -> Void
-    let createSpace: () -> Void
+    let createSpace: () -> SidebarSpacePagerPageID
     let previewPage: (SidebarSpacePagerPageID?) -> Void
     let sidebarIsPinned: Bool
     let updateSidebarFixedChromeLiveStyle: (SidebarChromeLiveStyle?, Bool) -> Void
@@ -2928,7 +2930,9 @@ private struct SidebarSpacePagerView: View {
     // latest offset, but publishing every offset would rebuild the pager per frame.
     @State private var geometryTracker = SidebarSpacePagerGeometryTracker()
     @State private var liveRenderController = SidebarPagerLiveRenderController()
-    @State private var creationPullController = SidebarSpaceCreationPullController()
+    @StateObject private var creationPullController = SidebarSpaceCreationPullController()
+    @State private var creationCommitCoordinator =
+        SidebarSpaceCreationCommitCoordinator()
 
     var body: some View {
         GeometryReader { proxy in
@@ -2945,6 +2949,9 @@ private struct SidebarSpacePagerView: View {
                 for: pageChromeLiveStyles.last ?? SidebarChromeLiveStyle(theme: .standard),
                 isPinned: sidebarIsPinned,
                 colorScheme: colorScheme
+            )
+            let creationRailForegroundColor = SidebarForegroundPalette.color(
+                whiteAmount: creationRailWhiteAmount
             )
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 0) {
@@ -2966,10 +2973,13 @@ private struct SidebarSpacePagerView: View {
                             pageWidth: pageWidth,
                             pageCount: snapshot.pageCount,
                             creationIsAvailable: creationIsAvailable,
-                            creationRailForegroundWhiteAmount: creationRailWhiteAmount,
+                            selectedPageIsLast:
+                                selectedPageID == snapshot.pages.last?.id,
                             performanceTrackingIsActive: scrollIsActive,
                             geometryTracker: geometryTracker,
                             creationPullController: creationPullController,
+                            creationCommitCoordinator:
+                                creationCommitCoordinator,
                             createSpace: createSpace
                         )
                         .allowsHitTesting(false)
@@ -3090,7 +3100,14 @@ private struct SidebarSpacePagerView: View {
                         updateFixedChrome: updateSidebarFixedChromeLiveStyle,
                         previewPage: previewPage
                     )
-                    commitPageIfNeeded(scrollPositionPageID)
+                    switch creationCommitCoordinator.pagerIdleDisposition() {
+                    case .commitNormally:
+                        commitPageIfNeeded(scrollPositionPageID)
+                    case .suppressCommit:
+                        break
+                    case .adoptCreatedPage(let createdPageID):
+                        scrollPositionPageID = createdPageID
+                    }
                 }
             }
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
@@ -3141,6 +3158,7 @@ private struct SidebarSpacePagerView: View {
             }
             .onDisappear {
                 geometryTracker.cancelDirectionalSnap()
+                creationCommitCoordinator.cancelCreation()
                 creationPullController.returnToRest(animated: false)
                 liveRenderController.reset(
                     addressController: addressMorphController,
@@ -3149,6 +3167,10 @@ private struct SidebarSpacePagerView: View {
                     previewPage: previewPage
                 )
             }
+            .modifier(SidebarSpaceCreationPullPresentationModifier(
+                controller: creationPullController,
+                foregroundColor: creationRailForegroundColor
+            ))
         }
     }
 

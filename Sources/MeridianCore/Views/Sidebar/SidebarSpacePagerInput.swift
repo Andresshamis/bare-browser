@@ -10,35 +10,38 @@ struct SidebarSpacePagerScrollInputScalingInstaller: NSViewRepresentable {
     let pageWidth: CGFloat
     let pageCount: Int
     let creationIsAvailable: Bool
-    let creationRailForegroundWhiteAmount: Double
+    let selectedPageIsLast: Bool
     let performanceTrackingIsActive: Bool
     let geometryTracker: SidebarSpacePagerGeometryTracker
     let creationPullController: SidebarSpaceCreationPullController
-    let createSpace: () -> Void
+    let creationCommitCoordinator: SidebarSpaceCreationCommitCoordinator
+    let createSpace: () -> SidebarSpacePagerPageID
 
     func makeNSView(context: Context) -> SidebarSpacePagerScrollInputScalingView {
         let view = SidebarSpacePagerScrollInputScalingView()
         view.geometryTracker = geometryTracker
-        view.attachCreationPullController(creationPullController)
+        view.creationPullController = creationPullController
+        view.creationCommitCoordinator = creationCommitCoordinator
         view.createSpace = createSpace
         view.sensitivity = sensitivity
         view.pageWidth = pageWidth
         view.pageCount = pageCount
         view.creationIsAvailable = creationIsAvailable
-        view.creationRailForegroundWhiteAmount = creationRailForegroundWhiteAmount
+        view.selectedPageIsLast = selectedPageIsLast
         view.performanceTrackingIsActive = performanceTrackingIsActive
         return view
     }
 
     func updateNSView(_ nsView: SidebarSpacePagerScrollInputScalingView, context: Context) {
         nsView.geometryTracker = geometryTracker
-        nsView.attachCreationPullController(creationPullController)
+        nsView.creationPullController = creationPullController
+        nsView.creationCommitCoordinator = creationCommitCoordinator
         nsView.createSpace = createSpace
         nsView.sensitivity = sensitivity
         nsView.pageWidth = pageWidth
         nsView.pageCount = pageCount
         nsView.creationIsAvailable = creationIsAvailable
-        nsView.creationRailForegroundWhiteAmount = creationRailForegroundWhiteAmount
+        nsView.selectedPageIsLast = selectedPageIsLast
         nsView.performanceTrackingIsActive = performanceTrackingIsActive
         nsView.installIfNeeded()
     }
@@ -96,28 +99,12 @@ struct SidebarSpacePagerPhysicalGestureLifecycle: Equatable, Sendable {
 }
 
 
-final class SidebarSpacePagerScrollInputScalingView:
-    NSView,
-    SidebarSpaceCreationPullRendering
-{
+final class SidebarSpacePagerScrollInputScalingView: NSView {
     weak var geometryTracker: SidebarSpacePagerGeometryTracker?
-    private weak var creationPullController: SidebarSpaceCreationPullController?
-    var createSpace: (() -> Void)?
+    weak var creationPullController: SidebarSpaceCreationPullController?
+    weak var creationCommitCoordinator: SidebarSpaceCreationCommitCoordinator?
+    var createSpace: (() -> SidebarSpacePagerPageID)?
     var sensitivity: CGFloat = 1
-    var creationRailForegroundWhiteAmount = 1.0 {
-        didSet {
-            creationRailForegroundWhiteAmount = min(
-                max(
-                    creationRailForegroundWhiteAmount.isFinite
-                        ? creationRailForegroundWhiteAmount
-                        : 0,
-                    0
-                ),
-                1
-            )
-            applyCreationPullColors()
-        }
-    }
 #if DEBUG
     var performanceTrackingIsActive = false {
         didSet {
@@ -153,6 +140,7 @@ final class SidebarSpacePagerScrollInputScalingView:
             cancelCreationInteraction(animated: false)
         }
     }
+    var selectedPageIsLast = false
     var creationIsAvailable = false {
         didSet {
             if !creationIsAvailable, !gestureLifecycle.isActive {
@@ -172,29 +160,11 @@ final class SidebarSpacePagerScrollInputScalingView:
         SidebarSpacePagerHorizontalGestureAccumulator()
     private var creationSession = SidebarSpaceCreationGestureSession()
     private var suppressesCreationMomentum = false
-    private let creationRailLayer = CALayer()
-    private let creationAffordanceLayer = CALayer()
-    private let creationTrackLayer = CAShapeLayer()
-    private let creationProgressLayer = CAShapeLayer()
-    private let creationPlusHorizontalLayer = CAShapeLayer()
-    private let creationPlusVerticalLayer = CAShapeLayer()
-    private weak var creationDocumentView: NSView?
-    private var renderedCreationPresentation = SidebarSpaceCreationPullPresentation()
 #if DEBUG
     private var performanceDisplayLink: CADisplayLink?
     private var lastPerformanceTimestamp: CFTimeInterval?
     private var performanceFrameIntervals: [CFTimeInterval] = []
 #endif
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        configureCreationPullLayers()
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        configureCreationPullLayers()
-    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -223,7 +193,6 @@ final class SidebarSpacePagerScrollInputScalingView:
     override func layout() {
         super.layout()
         installIfNeeded()
-        layoutCreationPullLayers()
     }
 
     deinit {
@@ -258,7 +227,6 @@ final class SidebarSpacePagerScrollInputScalingView:
         }
 
         configuredScrollView = candidateScrollView
-        installCreationPullLayers(in: candidateScrollView)
         installEventMonitorIfNeeded()
     }
 
@@ -266,39 +234,10 @@ final class SidebarSpacePagerScrollInputScalingView:
 #if DEBUG
         stopPerformanceDisplayLink()
 #endif
-        creationPullController?.detach(self)
-        creationPullController = nil
-        removeCreationPullLayers()
         clearConfiguredScrollView()
         removeEventMonitor()
         resetLocalGestureState()
         deferredInstallationIsScheduled = false
-    }
-
-    func attachCreationPullController(
-        _ controller: SidebarSpaceCreationPullController
-    ) {
-        guard creationPullController !== controller else {
-            return
-        }
-        creationPullController?.detach(self)
-        creationPullController = controller
-        controller.attach(self)
-    }
-
-    func setCreationPullPresentation(
-        _ presentation: SidebarSpaceCreationPullPresentation,
-        animated: Bool
-    ) {
-        let previousPresentation = renderedCreationPresentation
-        renderedCreationPresentation = presentation
-        applyCreationPullPresentation(presentation)
-        if animated {
-            animateCreationPullReturn(
-                from: previousPresentation,
-                to: presentation
-            )
-        }
     }
 
     private var nearestScrollView: NSScrollView? {
@@ -350,254 +289,7 @@ final class SidebarSpacePagerScrollInputScalingView:
     }
 
     private func clearConfiguredScrollView() {
-        removeCreationPullLayers()
         configuredScrollView = nil
-    }
-
-    private func configureCreationPullLayers() {
-        withoutImplicitLayerActions {
-            creationRailLayer.masksToBounds = true
-
-            creationAffordanceLayer.anchorPoint = CGPoint(x: 1, y: 0.5)
-            creationRailLayer.addSublayer(creationAffordanceLayer)
-
-            for ringLayer in [creationTrackLayer, creationProgressLayer] {
-                ringLayer.fillColor = nil
-                ringLayer.lineCap = .round
-                creationAffordanceLayer.addSublayer(ringLayer)
-            }
-            creationTrackLayer.lineWidth = 2.2
-            creationProgressLayer.lineWidth = 2.4
-            creationProgressLayer.strokeStart = 0
-            creationProgressLayer.strokeEnd = 0
-            creationProgressLayer.transform = CATransform3DMakeRotation(
-                -.pi / 2,
-                0,
-                0,
-                1
-            )
-
-            for plusLayer in [
-                creationPlusHorizontalLayer,
-                creationPlusVerticalLayer
-            ] {
-                plusLayer.fillColor = nil
-                plusLayer.lineWidth = 1.8
-                plusLayer.lineCap = .round
-                creationAffordanceLayer.addSublayer(plusLayer)
-            }
-
-            creationAffordanceLayer.opacity = 0
-        }
-        applyCreationPullColors()
-    }
-
-    private func installCreationPullLayers(in scrollView: NSScrollView) {
-        scrollView.wantsLayer = true
-        guard let scrollLayer = scrollView.layer else {
-            return
-        }
-
-        if creationRailLayer.superlayer !== scrollLayer {
-            creationRailLayer.removeFromSuperlayer()
-            scrollLayer.addSublayer(creationRailLayer)
-        }
-
-        creationDocumentView = scrollView.documentView
-        creationDocumentView?.wantsLayer = true
-        layoutCreationPullLayers()
-        applyCreationPullPresentation(renderedCreationPresentation)
-    }
-
-    private func removeCreationPullLayers() {
-        withoutImplicitLayerActions {
-            creationDocumentView?.layer?.sublayerTransform = CATransform3DIdentity
-            creationRailLayer.removeFromSuperlayer()
-        }
-        creationDocumentView = nil
-    }
-
-    private func layoutCreationPullLayers() {
-        guard let scrollView = configuredScrollView,
-              creationRailLayer.superlayer != nil else {
-            return
-        }
-
-        let maximumWidth = SidebarSpacePagerMetrics.creationRailMaximumWidth
-        let diameter = SidebarSpacePagerMetrics.creationAffordanceDiameter
-        let trailingPadding = SidebarSpacePagerMetrics.creationRailTrailingPadding
-        let railFrame = CGRect(
-            x: max(scrollView.bounds.maxX - maximumWidth, scrollView.bounds.minX),
-            y: scrollView.bounds.minY,
-            width: min(maximumWidth, scrollView.bounds.width),
-            height: scrollView.bounds.height
-        )
-        let ringBounds = CGRect(origin: .zero, size: CGSize(width: diameter, height: diameter))
-        let ringPath = CGPath(
-            ellipseIn: ringBounds.insetBy(dx: 1.5, dy: 1.5),
-            transform: nil
-        )
-        let plusCenter = diameter / 2
-        let plusHalfLength: CGFloat = 4.5
-        let horizontalPath = CGMutablePath()
-        horizontalPath.move(to: CGPoint(x: plusCenter - plusHalfLength, y: plusCenter))
-        horizontalPath.addLine(to: CGPoint(x: plusCenter + plusHalfLength, y: plusCenter))
-        let verticalPath = CGMutablePath()
-        verticalPath.move(to: CGPoint(x: plusCenter, y: plusCenter - plusHalfLength))
-        verticalPath.addLine(to: CGPoint(x: plusCenter, y: plusCenter + plusHalfLength))
-
-        withoutImplicitLayerActions {
-            creationRailLayer.frame = railFrame
-            creationAffordanceLayer.bounds = ringBounds
-            creationAffordanceLayer.position = CGPoint(
-                x: railFrame.width - trailingPadding,
-                y: railFrame.height / 2
-            )
-            for ringLayer in [creationTrackLayer, creationProgressLayer] {
-                ringLayer.frame = ringBounds
-                ringLayer.path = ringPath
-            }
-            creationPlusHorizontalLayer.frame = ringBounds
-            creationPlusHorizontalLayer.path = horizontalPath
-            creationPlusVerticalLayer.frame = ringBounds
-            creationPlusVerticalLayer.path = verticalPath
-            updateCreationPullContentsScale()
-        }
-    }
-
-    private func applyCreationPullColors() {
-        let foregroundColor = NSColor(
-            calibratedWhite: creationRailForegroundWhiteAmount,
-            alpha: 1
-        )
-        withoutImplicitLayerActions {
-            creationTrackLayer.strokeColor = foregroundColor
-                .withAlphaComponent(0.20)
-                .cgColor
-            let progressAlpha = renderedCreationPresentation.isArmed ? 1 : 0.84
-            creationProgressLayer.strokeColor = foregroundColor
-                .withAlphaComponent(progressAlpha)
-                .cgColor
-            let plusAlpha = renderedCreationPresentation.isArmed ? 1 : 0.78
-            let plusColor = foregroundColor
-                .withAlphaComponent(plusAlpha)
-                .cgColor
-            creationPlusHorizontalLayer.strokeColor = plusColor
-            creationPlusVerticalLayer.strokeColor = plusColor
-        }
-    }
-
-    private func applyCreationPullPresentation(
-        _ presentation: SidebarSpaceCreationPullPresentation
-    ) {
-        let revealScale = SidebarSpaceCreationAffordanceLayout.revealScale(
-            forDisplayedDistance: presentation.displayedDistance
-        )
-        withoutImplicitLayerActions {
-            creationDocumentView?.layer?.sublayerTransform =
-                CATransform3DMakeTranslation(
-                    -presentation.displayedDistance,
-                    0,
-                    0
-                )
-            creationProgressLayer.strokeEnd = presentation.progress
-            creationAffordanceLayer.opacity = Float(revealScale)
-            creationAffordanceLayer.transform = CATransform3DMakeScale(
-                revealScale,
-                revealScale,
-                1
-            )
-        }
-        applyCreationPullColors()
-    }
-
-    private func animateCreationPullReturn(
-        from source: SidebarSpaceCreationPullPresentation,
-        to destination: SidebarSpaceCreationPullPresentation
-    ) {
-        let duration: CFTimeInterval = 0.24
-        let timing = CAMediaTimingFunction(name: .easeOut)
-        let sourceScale = SidebarSpaceCreationAffordanceLayout.revealScale(
-            forDisplayedDistance: source.displayedDistance
-        )
-        let destinationScale = SidebarSpaceCreationAffordanceLayout.revealScale(
-            forDisplayedDistance: destination.displayedDistance
-        )
-
-        addAnimation(
-            to: creationDocumentView?.layer,
-            keyPath: "sublayerTransform",
-            from: CATransform3DMakeTranslation(-source.displayedDistance, 0, 0),
-            to: CATransform3DMakeTranslation(-destination.displayedDistance, 0, 0),
-            duration: duration,
-            timing: timing
-        )
-        addAnimation(
-            to: creationProgressLayer,
-            keyPath: "strokeEnd",
-            from: source.progress,
-            to: destination.progress,
-            duration: duration,
-            timing: timing
-        )
-        addAnimation(
-            to: creationAffordanceLayer,
-            keyPath: "opacity",
-            from: sourceScale,
-            to: destinationScale,
-            duration: duration,
-            timing: timing
-        )
-        addAnimation(
-            to: creationAffordanceLayer,
-            keyPath: "transform",
-            from: CATransform3DMakeScale(sourceScale, sourceScale, 1),
-            to: CATransform3DMakeScale(destinationScale, destinationScale, 1),
-            duration: duration,
-            timing: timing
-        )
-    }
-
-    private func addAnimation(
-        to layer: CALayer?,
-        keyPath: String,
-        from source: Any,
-        to destination: Any,
-        duration: CFTimeInterval,
-        timing: CAMediaTimingFunction
-    ) {
-        guard let layer else {
-            return
-        }
-        let animation = CABasicAnimation(keyPath: keyPath)
-        animation.fromValue = source
-        animation.toValue = destination
-        animation.duration = duration
-        animation.timingFunction = timing
-        layer.add(animation, forKey: "sidebarCreationPull.\(keyPath)")
-    }
-
-    private func updateCreationPullContentsScale() {
-        let scale = window?.backingScaleFactor
-            ?? NSScreen.main?.backingScaleFactor
-            ?? 2
-        creationRailLayer.contentsScale = scale
-        creationAffordanceLayer.contentsScale = scale
-        for layer in [
-            creationTrackLayer,
-            creationProgressLayer,
-            creationPlusHorizontalLayer,
-            creationPlusVerticalLayer
-        ] {
-            layer.contentsScale = scale
-        }
-    }
-
-    private func withoutImplicitLayerActions(_ updates: () -> Void) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        updates()
-        CATransaction.commit()
     }
 
 #if DEBUG
@@ -822,11 +514,29 @@ final class SidebarSpacePagerScrollInputScalingView:
                 gestureOrigin: gestureOrigin,
                 currentOffsetX: currentOffsetX,
                 lastPageOffsetX: lastPageOffsetX,
-                lastPageIndex: lastPageIndex
+                lastPageIndex: lastPageIndex,
+                visibleFractionalPageIndex:
+                    geometryTracker?.visibleFractionalPageIndex,
+                selectedPageIsLast: selectedPageIsLast
             )
         } else {
             canPullPastLastPage = false
         }
+#if DEBUG
+        os_signpost(
+            .event,
+            log: sidebarPagerPerformanceLog,
+            name: "Sidebar Creation Eligibility",
+            "eligible=%{public}d idle=%{public}d anchored=%{public}d visible=%{public}.3f offset_error=%{public}.3f",
+            canPullPastLastPage ? 1 : 0,
+            gestureOrigin?.scrollWasIdle == true ? 1 : 0,
+            gestureOrigin?.anchoredPageIndex ?? -1,
+            Double(geometryTracker?.visibleFractionalPageIndex ?? -.infinity),
+            Double(
+                abs((currentOffsetX ?? -.infinity) - (lastPageOffsetX ?? .infinity))
+            )
+        )
+#endif
         creationSession.begin(canPullForward: canPullPastLastPage)
     }
 
@@ -855,6 +565,25 @@ final class SidebarSpacePagerScrollInputScalingView:
         let consumedCreationInput = creationSession.isPulling || creationSession.isCancelled
         if consumedCreationInput {
             let outcome = creationSession.finishPull(cancelled: cancelled)
+#if DEBUG
+            let outcomeCode: Int
+            switch outcome {
+            case .none:
+                outcomeCode = 0
+            case .cancel:
+                outcomeCode = 1
+            case .create:
+                outcomeCode = 2
+            }
+            os_signpost(
+                .event,
+                log: sidebarPagerPerformanceLog,
+                name: "Sidebar Creation Release",
+                "outcome=%{public}d cancelled=%{public}d",
+                outcomeCode,
+                cancelled ? 1 : 0
+            )
+#endif
             suppressesCreationMomentum = true
             switch outcome {
             case .none:
@@ -863,8 +592,20 @@ final class SidebarSpacePagerScrollInputScalingView:
                 creationPullController?.returnToRest(animated: true)
             case .create:
                 let createSpace = createSpace
-                DispatchQueue.main.async { [weak creationPullController] in
-                    createSpace?()
+                let creationPullController = creationPullController
+                let creationCommitCoordinator = creationCommitCoordinator
+                creationCommitCoordinator?.beginCreation()
+                DispatchQueue.main.async {
+                    [weak creationPullController, weak creationCommitCoordinator] in
+                    guard let createSpace else {
+                        creationCommitCoordinator?.cancelCreation()
+                        creationPullController?.returnToRest(animated: true)
+                        return
+                    }
+                    let createdPageID = createSpace()
+                    creationCommitCoordinator?.completeCreation(
+                        with: createdPageID
+                    )
                     creationPullController?.returnToRest(animated: true)
                 }
             }

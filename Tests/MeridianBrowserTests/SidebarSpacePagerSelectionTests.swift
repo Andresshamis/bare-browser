@@ -13,18 +13,6 @@ private final class SidebarAddressMorphRendererSpy: SidebarAddressMorphRendering
     }
 }
 
-@MainActor
-private final class SidebarCreationPullRendererSpy: SidebarSpaceCreationPullRendering {
-    private(set) var updates: [(SidebarSpaceCreationPullPresentation, Bool)] = []
-
-    func setCreationPullPresentation(
-        _ presentation: SidebarSpaceCreationPullPresentation,
-        animated: Bool
-    ) {
-        updates.append((presentation, animated))
-    }
-}
-
 final class SidebarSpacePagerSelectionTests: XCTestCase {
     func testSpaceDragPayloadRoundTripsSpaceID() {
         let spaceID = UUID()
@@ -603,33 +591,24 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
     }
 
     @MainActor
-    func testCreationPullControllerUsesRetainedRendererAndResetsExactly() {
+    func testCreationPullControllerPublishesDistinctPresentationAndResetsExactly() {
         let controller = SidebarSpaceCreationPullController()
-        let renderer = SidebarCreationPullRendererSpy()
-
-        controller.attach(renderer)
-        controller.attach(renderer)
-        XCTAssertEqual(controller.attachedRendererCountForTesting, 1)
-        XCTAssertEqual(renderer.updates.count, 2)
+        var publicationCount = 0
+        let cancellable = controller.objectWillChange.sink {
+            publicationCount += 1
+        }
 
         for _ in 0..<500 {
             controller.update(displayedDistance: 24, progress: 0.5)
         }
-        XCTAssertEqual(renderer.updates.count, 3)
-        XCTAssertEqual(renderer.updates.last?.0.displayedDistance, 24)
-        XCTAssertEqual(renderer.updates.last?.0.progress, 0.5)
-        XCTAssertEqual(renderer.updates.last?.1, false)
+        XCTAssertEqual(publicationCount, 1)
+        XCTAssertEqual(controller.presentation.displayedDistance, 24)
+        XCTAssertEqual(controller.presentation.progress, 0.5)
 
         controller.returnToRest(animated: true)
-        XCTAssertEqual(renderer.updates.count, 4)
-        XCTAssertEqual(
-            renderer.updates.last?.0,
-            SidebarSpaceCreationPullPresentation()
-        )
-        XCTAssertEqual(renderer.updates.last?.1, true)
-
-        controller.detach(renderer)
-        XCTAssertEqual(controller.attachedRendererCountForTesting, 0)
+        XCTAssertEqual(publicationCount, 2)
+        XCTAssertEqual(controller.presentation, SidebarSpaceCreationPullPresentation())
+        withExtendedLifetime(cancellable) {}
     }
 
     func testCommitsActivityPageBeforeFirstSpace() {
@@ -822,6 +801,85 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
             lastPageOffsetX: 800,
             lastPageIndex: 4
         ))
+    }
+
+    func testCreationPullUsesNormalizedVisiblePageWhenNativeOffsetIsStale() {
+        XCTAssertTrue(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: true,
+                anchoredPageIndex: nil
+            ),
+            currentOffsetX: 790,
+            lastPageOffsetX: 800,
+            lastPageIndex: 4,
+            visibleFractionalPageIndex: 4
+        ))
+        XCTAssertFalse(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: true,
+                anchoredPageIndex: nil
+            ),
+            currentOffsetX: 790,
+            lastPageOffsetX: 800,
+            lastPageIndex: 4,
+            visibleFractionalPageIndex: 3.9
+        ))
+    }
+
+    func testCreationPullUsesSettledLastSelectionWhenGeometryIsStale() {
+        XCTAssertTrue(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: true,
+                anchoredPageIndex: nil
+            ),
+            currentOffsetX: 790,
+            lastPageOffsetX: 800,
+            lastPageIndex: 4,
+            visibleFractionalPageIndex: 3.9,
+            selectedPageIsLast: true
+        ))
+        XCTAssertFalse(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: false,
+                anchoredPageIndex: nil
+            ),
+            currentOffsetX: 790,
+            lastPageOffsetX: 800,
+            lastPageIndex: 4,
+            visibleFractionalPageIndex: 3.9,
+            selectedPageIsLast: true
+        ))
+    }
+
+    @MainActor
+    func testCreationCommitSuppressesStalePagerCommitUntilCreatedPageArrives() {
+        let coordinator = SidebarSpaceCreationCommitCoordinator()
+        let createdPageID = SidebarSpacePagerPageID.space(UUID())
+
+        XCTAssertEqual(
+            coordinator.pagerIdleDisposition(),
+            .commitNormally
+        )
+
+        coordinator.beginCreation()
+        XCTAssertEqual(
+            coordinator.pagerIdleDisposition(),
+            .suppressCommit
+        )
+
+        coordinator.completeCreation(with: createdPageID)
+        XCTAssertEqual(
+            coordinator.pagerIdleDisposition(),
+            .adoptCreatedPage(createdPageID)
+        )
+        XCTAssertEqual(
+            coordinator.pagerIdleDisposition(),
+            .commitNormally
+        )
     }
 
     func testForwardCreationPullUsesAdjustedDeltaAndReversesNaturally() throws {
