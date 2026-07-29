@@ -169,6 +169,100 @@ private enum BrowserFaviconScript {
     }
 }
 
+enum BrowserPasskeyUnavailableScript {
+    static let messageHandlerName = "meridianPasskeyUnavailable"
+    static let messageToken = "public-key-credential"
+    static let userMessage =
+        "Passkeys are coming soon. Please use another sign-in method."
+
+    @MainActor static var contentWorld: WKContentWorld {
+        WKContentWorld.page
+    }
+
+    static let source = """
+    (() => {
+        if (window.__meridianPasskeyUnavailableInstalled) {
+            return;
+        }
+        window.__meridianPasskeyUnavailableInstalled = true;
+
+        const credentials = navigator.credentials;
+        if (!credentials) {
+            return;
+        }
+
+        const isPublicKeyRequest = options => {
+            return options &&
+                typeof options === "object" &&
+                options.publicKey !== null &&
+                typeof options.publicKey === "object";
+        };
+
+        var lastNoticeTime = 0;
+        const postUnavailableNotice = () => {
+            const now = Date.now();
+            if (now - lastNoticeTime < 1000) {
+                return;
+            }
+            lastNoticeTime = now;
+
+            const handlers = window.webkit && window.webkit.messageHandlers;
+            const handler = handlers && handlers.\(messageHandlerName);
+            if (handler) {
+                handler.postMessage("\(messageToken)");
+            }
+        };
+
+        const rejectPublicKeyRequest = () => {
+            postUnavailableNotice();
+            const message = "\(userMessage)";
+            const error = typeof DOMException === "function"
+                ? new DOMException(message, "NotSupportedError")
+                : new Error(message);
+            return Promise.reject(error);
+        };
+
+        const installWrapper = methodName => {
+            const prototype = Object.getPrototypeOf(credentials);
+            const installationTarget = prototype &&
+                typeof prototype[methodName] === "function"
+                ? prototype
+                : credentials;
+            const original = installationTarget[methodName];
+            if (typeof original !== "function") {
+                return;
+            }
+
+            const wrapper = function(...args) {
+                if (isPublicKeyRequest(args[0])) {
+                    return rejectPublicKeyRequest();
+                }
+                return Reflect.apply(original, this, args);
+            };
+
+            try {
+                Object.defineProperty(installationTarget, methodName, {
+                    configurable: true,
+                    enumerable: false,
+                    writable: false,
+                    value: wrapper
+                });
+            } catch {
+                try {
+                    installationTarget[methodName] = wrapper;
+                } catch {
+                    // Leave the platform implementation untouched if WebKit
+                    // makes the CredentialContainer method non-configurable.
+                }
+            }
+        };
+
+        installWrapper("create");
+        installWrapper("get");
+    })();
+    """
+}
+
 enum BrowserPasswordCaptureScript {
     static let messageHandlerName = "meridianPasswordCredential"
     @MainActor static var contentWorld: WKContentWorld {
@@ -1318,6 +1412,21 @@ public final class BrowserWebViewRegistry: ObservableObject {
             contentWorld: BrowserContextMenuScript.contentWorld,
             name: BrowserContextMenuScript.messageHandlerName
         )
+        if BrowserPasskeyAccessPolicy.shouldInstallUnavailableInterception(
+            isBrowserEntitled: BrowserPasskeyCapability.hasSignedBrowserEntitlement
+        ) {
+            configuration.userContentController.addUserScript(WKUserScript(
+                source: BrowserPasskeyUnavailableScript.source,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: false,
+                in: BrowserPasskeyUnavailableScript.contentWorld
+            ))
+            configuration.userContentController.add(
+                WeakScriptMessageHandler(target: coordinator),
+                contentWorld: BrowserPasskeyUnavailableScript.contentWorld,
+                name: BrowserPasskeyUnavailableScript.messageHandlerName
+            )
+        }
         configuration.userContentController.addUserScript(WKUserScript(
             source: BrowserPasswordCaptureScript.source,
             injectionTime: .atDocumentStart,
@@ -2387,6 +2496,15 @@ public struct WebViewHost: NSViewRepresentable {
 
                 webViewLogger.info("password credential capture candidate received")
                 callbacks.onPasswordCredentialCaptured(candidate)
+            case BrowserPasskeyUnavailableScript.messageHandlerName:
+                guard let token = message.body as? String,
+                      token == BrowserPasskeyUnavailableScript.messageToken else {
+                    webViewLogger.info("passkey unavailable notice ignored invalid message")
+                    return
+                }
+
+                webViewLogger.info("passkey request intercepted while browser entitlement is unavailable")
+                callbacks.onSecurityMessage(BrowserPasskeyUnavailableScript.userMessage)
             default:
                 return
             }

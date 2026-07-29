@@ -4,6 +4,15 @@ import Foundation
 @testable import MeridianCore
 import XCTest
 
+@MainActor
+private final class SidebarAddressMorphRendererSpy: SidebarAddressMorphRendering {
+    private(set) var states: [SidebarAddressMorphState?] = []
+
+    func setMorphState(_ state: SidebarAddressMorphState?) {
+        states.append(state)
+    }
+}
+
 final class SidebarSpacePagerSelectionTests: XCTestCase {
     func testSpaceDragPayloadRoundTripsSpaceID() {
         let spaceID = UUID()
@@ -87,6 +96,59 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         XCTAssertNil(SidebarSpaceSwitcherLayout.target(for: 0, spaceIDs: []))
         XCTAssertNil(SidebarSpaceSwitcherLayout.indicatorX(for: .before(spaceID), spaceIDs: []))
         XCTAssertNil(SidebarSpaceSwitcherLayout.indicatorX(for: .before(UUID()), spaceIDs: [spaceID]))
+    }
+
+    func testSpaceSwitcherSelectionResolvesTheActiveButtonScrollTarget() {
+        let spaceID = UUID()
+
+        XCTAssertEqual(
+            SidebarSpaceSwitcherSelection.scrollTarget(
+                visualSelectedSpaceID: spaceID,
+                isActivitySelected: false
+            ),
+            .space(spaceID)
+        )
+        XCTAssertEqual(
+            SidebarSpaceSwitcherSelection.scrollTarget(
+                visualSelectedSpaceID: spaceID,
+                isActivitySelected: true
+            ),
+            .activity
+        )
+        XCTAssertNil(
+            SidebarSpaceSwitcherSelection.scrollTarget(
+                visualSelectedSpaceID: nil,
+                isActivitySelected: false
+            )
+        )
+    }
+
+    func testSpaceSwitcherSelectionOnlyRevealsOffscreenTargets() {
+        let visibleSpaceID = UUID()
+        let hiddenSpaceID = UUID()
+        let visibleTargets: Set<SidebarSpacePagerPageID> = [
+            .activity,
+            .space(visibleSpaceID)
+        ]
+
+        XCTAssertFalse(
+            SidebarSpaceSwitcherSelection.shouldReveal(
+                .activity,
+                visibleTargets: visibleTargets
+            )
+        )
+        XCTAssertFalse(
+            SidebarSpaceSwitcherSelection.shouldReveal(
+                .space(visibleSpaceID),
+                visibleTargets: visibleTargets
+            )
+        )
+        XCTAssertTrue(
+            SidebarSpaceSwitcherSelection.shouldReveal(
+                .space(hiddenSpaceID),
+                visibleTargets: visibleTargets
+            )
+        )
     }
 
     func testSpaceSwitcherLayoutIndicatorPositionsAdvanceAcrossSlots() throws {
@@ -182,6 +244,13 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         let destinationID = UUID()
 
         XCTAssertEqual(
+            SidebarSpacePagerPreview.pageID(
+                for: .space(destinationID),
+                selectedPageID: .space(selectedID)
+            ),
+            .space(destinationID)
+        )
+        XCTAssertEqual(
             SidebarSpacePagerPreview.spaceID(
                 for: .space(destinationID),
                 selectedPageID: .space(selectedID)
@@ -190,9 +259,25 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         )
     }
 
-    func testDoesNotPreviewCurrentSpaceOrActivityPage() {
+    func testPreviewsActivityDestinationBeforePagerSettles() {
         let selectedID = UUID()
 
+        XCTAssertEqual(
+            SidebarSpacePagerPreview.pageID(
+                for: .activity,
+                selectedPageID: .space(selectedID)
+            ),
+            .activity
+        )
+    }
+
+    func testDoesNotPreviewCurrentPageOrResolveActivityAsSpace() {
+        let selectedID = UUID()
+
+        XCTAssertNil(SidebarSpacePagerPreview.pageID(
+            for: .space(selectedID),
+            selectedPageID: .space(selectedID)
+        ))
         XCTAssertNil(SidebarSpacePagerPreview.spaceID(
             for: .space(selectedID),
             selectedPageID: .space(selectedID)
@@ -238,6 +323,81 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         ))
     }
 
+    func testAddressCrossfadeRendersExactSourceAtBeginning() {
+        let presentation = SidebarAddressCrossfadePresentation.resolved(
+            progress: 0,
+            isActive: true
+        )
+
+        XCTAssertEqual(presentation.sourceOpacity, 1, accuracy: 0.0001)
+        XCTAssertEqual(presentation.destinationOpacity, 0, accuracy: 0.0001)
+        XCTAssertEqual(presentation.sourceTranslationY, 0, accuracy: 0.0001)
+        XCTAssertEqual(presentation.destinationTranslationY, 1.5, accuracy: 0.0001)
+    }
+
+    func testAddressCrossfadeRendersExactDestinationAtEnd() {
+        let presentation = SidebarAddressCrossfadePresentation.resolved(
+            progress: 1,
+            isActive: true
+        )
+
+        XCTAssertEqual(presentation.sourceOpacity, 0, accuracy: 0.0001)
+        XCTAssertEqual(presentation.destinationOpacity, 1, accuracy: 0.0001)
+        XCTAssertEqual(presentation.sourceTranslationY, -1.5, accuracy: 0.0001)
+        XCTAssertEqual(presentation.destinationTranslationY, 0, accuracy: 0.0001)
+    }
+
+    func testAddressCrossfadeTracksMidpointAndSettledState() {
+        let midpoint = SidebarAddressCrossfadePresentation.resolved(
+            progress: 0.5,
+            isActive: true
+        )
+        XCTAssertEqual(midpoint.sourceOpacity, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(midpoint.destinationOpacity, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(midpoint.sourceTranslationY, -0.75, accuracy: 0.0001)
+        XCTAssertEqual(midpoint.destinationTranslationY, 0.75, accuracy: 0.0001)
+
+        let settled = SidebarAddressCrossfadePresentation.resolved(
+            progress: 0.8,
+            isActive: false
+        )
+        XCTAssertEqual(settled.sourceOpacity, 1, accuracy: 0.0001)
+        XCTAssertEqual(settled.destinationOpacity, 0, accuracy: 0.0001)
+        XCTAssertEqual(settled.sourceTranslationY, 0, accuracy: 0.0001)
+        XCTAssertEqual(settled.destinationTranslationY, 0, accuracy: 0.0001)
+    }
+
+    func testAddressTextLayoutCentersRetainedTextWithinControl() {
+        let bounds = CGRect(x: 0, y: 0, width: 180, height: 30)
+
+        XCTAssertEqual(
+            SidebarAddressTextLayout.textFrame(
+                in: bounds,
+                preferredHeight: 16
+            ),
+            CGRect(x: 0, y: 7, width: 180, height: 16)
+        )
+    }
+
+    func testAddressTextLayoutClampsInvalidOrOversizedHeight() {
+        let bounds = CGRect(x: 4, y: 6, width: 180, height: 30)
+
+        XCTAssertEqual(
+            SidebarAddressTextLayout.textFrame(
+                in: bounds,
+                preferredHeight: 40
+            ),
+            CGRect(x: 4, y: 6, width: 180, height: 30)
+        )
+        XCTAssertEqual(
+            SidebarAddressTextLayout.textFrame(
+                in: bounds,
+                preferredHeight: .nan
+            ),
+            CGRect(x: 4, y: 21, width: 180, height: 0)
+        )
+    }
+
     func testChromeHandoffDefersExactStyleOnlyWhenPageTravelIsRequired() {
         let first = SidebarSpacePagerPageID.space(UUID())
         let second = SidebarSpacePagerPageID.space(UUID())
@@ -262,7 +422,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
             SidebarSpacePagerFixedChromeTarget.pageID(
                 visibleFractionalPageIndex: 1.08,
                 gestureStartFractionalPageIndex: 1,
-                rawGestureDisplacementX: 24,
+                adjustedGestureDisplacementX: 24,
                 pageWidth: 300,
                 pages: pages
             ),
@@ -272,7 +432,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
             SidebarSpacePagerFixedChromeTarget.pageID(
                 visibleFractionalPageIndex: 0.92,
                 gestureStartFractionalPageIndex: 1,
-                rawGestureDisplacementX: -24,
+                adjustedGestureDisplacementX: -24,
                 pageWidth: 300,
                 pages: pages
             ),
@@ -292,7 +452,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
             SidebarSpacePagerFixedChromeTarget.pageID(
                 visibleFractionalPageIndex: 1.0005,
                 gestureStartFractionalPageIndex: 1,
-                rawGestureDisplacementX: 0.1,
+                adjustedGestureDisplacementX: 0.1,
                 pageWidth: 300,
                 pages: pages
             ),
@@ -302,7 +462,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
             SidebarSpacePagerFixedChromeTarget.pageID(
                 visibleFractionalPageIndex: -0.08,
                 gestureStartFractionalPageIndex: 0,
-                rawGestureDisplacementX: -24,
+                adjustedGestureDisplacementX: -24,
                 pageWidth: 300,
                 pages: pages
             ),
@@ -312,7 +472,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
             SidebarSpacePagerFixedChromeTarget.pageID(
                 visibleFractionalPageIndex: 0,
                 gestureStartFractionalPageIndex: 0,
-                rawGestureDisplacementX: nil,
+                adjustedGestureDisplacementX: nil,
                 pageWidth: 0,
                 pages: pages
             )
@@ -340,6 +500,115 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         controller.update(secondStyle)
         XCTAssertEqual(publicationCount, 2)
         withExtendedLifetime(observation) {}
+    }
+
+    @MainActor
+    func testLiveRenderControllerPublishesFixedChromeAndPreviewOnlyAtTargetChanges() {
+        let firstPageID = SidebarSpacePagerPageID.space(UUID())
+        let secondPageID = SidebarSpacePagerPageID.space(UUID())
+        let firstStyle = SidebarChromeLiveStyle(theme: .standard)
+        let secondStyle = SidebarChromeLiveStyle(theme: SidebarChromeTheme(
+            appearance: SidebarAppearance(tintSource: .spaceColor),
+            spaceColorHex: "#3366FF"
+        ))
+        let addressController = SidebarAddressMorphController()
+        let controller = SidebarPagerLiveRenderController()
+        var fixedUpdateCount = 0
+        var fixedStyle: SidebarChromeLiveStyle?
+        var previewUpdates: [SidebarSpacePagerPageID?] = []
+        var chromeUpdateCount = 0
+
+        controller.begin(
+            pageIDs: [firstPageID, secondPageID],
+            pageTexts: ["First", "Second"],
+            pageStyles: [firstStyle, secondStyle]
+        )
+
+        for _ in 0..<500 {
+            controller.update(
+                fractionalPageIndex: 0.75,
+                directionalTargetPageID: secondPageID,
+                selectedPageID: firstPageID,
+                addressController: addressController,
+                updateChrome: { _ in chromeUpdateCount += 1 },
+                updateFixedChrome: { style, _ in
+                    fixedUpdateCount += 1
+                    fixedStyle = style
+                },
+                previewPage: { previewUpdates.append($0) }
+            )
+        }
+
+        XCTAssertEqual(chromeUpdateCount, 500)
+        XCTAssertEqual(fixedUpdateCount, 1)
+        XCTAssertEqual(fixedStyle, secondStyle)
+        XCTAssertEqual(previewUpdates.count, 1)
+        XCTAssertEqual(previewUpdates[0], secondPageID)
+
+        controller.update(
+            fractionalPageIndex: 0.25,
+            directionalTargetPageID: firstPageID,
+            selectedPageID: firstPageID,
+            addressController: addressController,
+            updateChrome: { _ in chromeUpdateCount += 1 },
+            updateFixedChrome: { style, _ in
+                fixedUpdateCount += 1
+                fixedStyle = style
+            },
+            previewPage: { previewUpdates.append($0) }
+        )
+
+        XCTAssertEqual(fixedUpdateCount, 2)
+        XCTAssertEqual(fixedStyle, firstStyle)
+        XCTAssertEqual(previewUpdates.count, 2)
+        XCTAssertNil(previewUpdates[1])
+    }
+
+    @MainActor
+    func testAddressMorphControllerAttachesDeduplicatesAndDetachesRenderer() {
+        let controller = SidebarAddressMorphController()
+        let renderer = SidebarAddressMorphRendererSpy()
+        let state = SidebarAddressMorphState(
+            sourceText: "First",
+            destinationText: "Second",
+            progress: 0.5
+        )
+
+        controller.attach(renderer)
+        controller.attach(renderer)
+        XCTAssertEqual(controller.attachedRendererCountForTesting, 1)
+        XCTAssertEqual(renderer.states.count, 2)
+
+        controller.update(state)
+        controller.update(state)
+        XCTAssertEqual(renderer.states.count, 3)
+        XCTAssertEqual(renderer.states.last!, state)
+
+        controller.detach(renderer)
+        controller.update(nil)
+        XCTAssertEqual(controller.attachedRendererCountForTesting, 0)
+        XCTAssertEqual(renderer.states.count, 3)
+    }
+
+    @MainActor
+    func testCreationPullControllerPublishesDistinctPresentationAndResetsExactly() {
+        let controller = SidebarSpaceCreationPullController()
+        var publicationCount = 0
+        let cancellable = controller.objectWillChange.sink {
+            publicationCount += 1
+        }
+
+        for _ in 0..<500 {
+            controller.update(displayedDistance: 24, progress: 0.5)
+        }
+        XCTAssertEqual(publicationCount, 1)
+        XCTAssertEqual(controller.presentation.displayedDistance, 24)
+        XCTAssertEqual(controller.presentation.progress, 0.5)
+
+        controller.returnToRest(animated: true)
+        XCTAssertEqual(publicationCount, 2)
+        XCTAssertEqual(controller.presentation, SidebarSpaceCreationPullPresentation())
+        withExtendedLifetime(cancellable) {}
     }
 
     func testCommitsActivityPageBeforeFirstSpace() {
@@ -373,7 +642,6 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
             scaledEvent.isDirectionInvertedFromDevice,
             originalEvent.isDirectionInvertedFromDevice
         )
-        XCTAssertEqual(state.cumulativeRawDisplacementX, 40, accuracy: 0.0001)
     }
 
     func testPagerInputScalingCarriesSubpointRemaindersAcrossEvents() throws {
@@ -389,7 +657,6 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         }
 
         XCTAssertEqual(deliveredDisplacementX, 7, accuracy: 0.0001)
-        XCTAssertEqual(state.cumulativeRawDisplacementX, 20, accuracy: 0.0001)
     }
 
     func testPagerInputScalingPreservesSignedReversals() throws {
@@ -404,7 +671,6 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         ))
 
         XCTAssertEqual(forward.scrollingDeltaX + reverse.scrollingDeltaX, 0, accuracy: 0.0001)
-        XCTAssertEqual(state.cumulativeRawDisplacementX, 0, accuracy: 0.0001)
     }
 
     func testPagerInputScalingClampsSensitivityAndResets() throws {
@@ -419,7 +685,6 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         )
 
         state.reset()
-        XCTAssertEqual(state.cumulativeRawDisplacementX, 0, accuracy: 0.0001)
         XCTAssertEqual(
             try XCTUnwrap(state.scaledEvent(
                 from: scrollEvent(horizontalDelta: 10),
@@ -429,6 +694,37 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
             accuracy: 0.0001
         )
         XCTAssertEqual(SidebarSpacePagerScrollInputScalingState.normalizedSensitivity(.nan), 1)
+    }
+
+    func testPagerHorizontalInputConvertsAppKitWheelToContentCoordinates() throws {
+        XCTAssertEqual(
+            try XCTUnwrap(SidebarSpacePagerHorizontalInputSample(
+                scrollingDeltaX: -40
+            )).adjustedDisplacementX,
+            40
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(SidebarSpacePagerHorizontalInputSample(
+                scrollingDeltaX: 40
+            )).adjustedDisplacementX,
+            -40
+        )
+        XCTAssertNil(SidebarSpacePagerHorizontalInputSample(scrollingDeltaX: .nan))
+    }
+
+    func testPagerHorizontalGestureAccumulatorOwnsSemanticDisplacement() throws {
+        var accumulator = SidebarSpacePagerHorizontalGestureAccumulator()
+        accumulator.append(try XCTUnwrap(SidebarSpacePagerHorizontalInputSample(
+            scrollingDeltaX: -40
+        )))
+        accumulator.append(try XCTUnwrap(SidebarSpacePagerHorizontalInputSample(
+            scrollingDeltaX: 10
+        )))
+
+        XCTAssertEqual(accumulator.cumulativeAdjustedDisplacementX, 30)
+
+        accumulator.reset()
+        XCTAssertEqual(accumulator.cumulativeAdjustedDisplacementX, 0)
     }
 
     func testPagerGestureCancellationIgnoresChangesUntilNextBegin() {
@@ -446,13 +742,296 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         XCTAssertFalse(gate.ignoresChangedEvents)
     }
 
-    func testPagerUsesUnscaledGestureDirectionWhenDisplayedMovementIsSubthreshold() {
+    func testPagerHorizontalIntentUsesAdjustedDeltaConvention() {
+        XCTAssertEqual(
+            SidebarSpacePagerHorizontalIntent.intent(
+                forAdjustedDisplacement: -24,
+                minimumDisplacement: 2
+            ),
+            .backward
+        )
+        XCTAssertEqual(
+            SidebarSpacePagerHorizontalIntent.intent(
+                forAdjustedDisplacement: 24,
+                minimumDisplacement: 2
+            ),
+            .forward
+        )
+    }
+
+    func testPagerHorizontalIntentWaitsForMeaningfulInput() {
+        XCTAssertNil(SidebarSpacePagerHorizontalIntent.intent(
+            forAdjustedDisplacement: 0.5,
+            minimumDisplacement: 2
+        ))
+        XCTAssertNil(SidebarSpacePagerHorizontalIntent.intent(
+            forAdjustedDisplacement: .nan,
+            minimumDisplacement: 2
+        ))
+    }
+
+    func testCreationPullBeginsOnlyFromSettledLastPage() {
+        XCTAssertTrue(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: true,
+                anchoredPageIndex: nil
+            ),
+            currentOffsetX: 800,
+            lastPageOffsetX: 800,
+            lastPageIndex: 4
+        ))
+        XCTAssertFalse(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: true,
+                anchoredPageIndex: nil
+            ),
+            currentOffsetX: 600,
+            lastPageOffsetX: 800,
+            lastPageIndex: 4
+        ))
+        XCTAssertFalse(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: false,
+                anchoredPageIndex: nil
+            ),
+            currentOffsetX: 800,
+            lastPageOffsetX: 800,
+            lastPageIndex: 4
+        ))
+    }
+
+    func testCreationPullUsesNormalizedVisiblePageWhenNativeOffsetIsStale() {
+        XCTAssertTrue(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: true,
+                anchoredPageIndex: nil
+            ),
+            currentOffsetX: 790,
+            lastPageOffsetX: 800,
+            lastPageIndex: 4,
+            visibleFractionalPageIndex: 4
+        ))
+        XCTAssertFalse(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: true,
+                anchoredPageIndex: nil
+            ),
+            currentOffsetX: 790,
+            lastPageOffsetX: 800,
+            lastPageIndex: 4,
+            visibleFractionalPageIndex: 3.9
+        ))
+    }
+
+    func testCreationPullUsesSettledLastSelectionWhenGeometryIsStale() {
+        XCTAssertTrue(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: true,
+                anchoredPageIndex: nil
+            ),
+            currentOffsetX: 790,
+            lastPageOffsetX: 800,
+            lastPageIndex: 4,
+            visibleFractionalPageIndex: 3.9,
+            selectedPageIsLast: true
+        ))
+        XCTAssertFalse(SidebarSpaceCreationPullEligibility.canBegin(
+            creationIsAvailable: true,
+            gestureOrigin: SidebarSpacePagerPhysicalGestureOrigin(
+                scrollWasIdle: false,
+                anchoredPageIndex: nil
+            ),
+            currentOffsetX: 790,
+            lastPageOffsetX: 800,
+            lastPageIndex: 4,
+            visibleFractionalPageIndex: 3.9,
+            selectedPageIsLast: true
+        ))
+    }
+
+    @MainActor
+    func testCreationCommitSuppressesStalePagerCommitUntilCreatedPageArrives() {
+        let coordinator = SidebarSpaceCreationCommitCoordinator()
+        let createdPageID = SidebarSpacePagerPageID.space(UUID())
+
+        XCTAssertEqual(
+            coordinator.pagerIdleDisposition(),
+            .commitNormally
+        )
+
+        coordinator.beginCreation()
+        XCTAssertEqual(
+            coordinator.pagerIdleDisposition(),
+            .suppressCommit
+        )
+
+        coordinator.completeCreation(with: createdPageID)
+        XCTAssertEqual(
+            coordinator.pagerIdleDisposition(),
+            .adoptCreatedPage(createdPageID)
+        )
+        XCTAssertEqual(
+            coordinator.pagerIdleDisposition(),
+            .commitNormally
+        )
+    }
+
+    func testForwardCreationPullUsesAdjustedDeltaAndReversesNaturally() throws {
+        var pull = SidebarSpaceCreationPullState()
+        let initial = try XCTUnwrap(pull.begin(
+            initialForwardDistance: 40,
+            pageWidth: 300
+        ))
+        let continued = try XCTUnwrap(pull.consumeAdjustedDelta(40, pageWidth: 300))
+        let reversed = try XCTUnwrap(pull.consumeAdjustedDelta(-20, pageWidth: 300))
+
+        XCTAssertEqual(initial.progress, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(continued.progress, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(reversed.progress, 0.375, accuracy: 0.0001)
+        XCTAssertLessThan(reversed.progress, continued.progress)
+        XCTAssertEqual(reversed.disposition, .pulling)
+    }
+
+    func testCreationPullHasIncreasingNonlinearResistance() throws {
+        var pull = SidebarSpaceCreationPullState()
+        let first = try XCTUnwrap(pull.begin(
+            initialForwardDistance: 40,
+            pageWidth: 300
+        ))
+        let second = try XCTUnwrap(pull.consumeAdjustedDelta(40, pageWidth: 300))
+        let third = try XCTUnwrap(pull.consumeAdjustedDelta(40, pageWidth: 300))
+
+        let firstDisplayedIncrement = first.displayedDistance
+        let secondDisplayedIncrement = second.displayedDistance - first.displayedDistance
+        let thirdDisplayedIncrement = third.displayedDistance - second.displayedDistance
+        XCTAssertGreaterThan(firstDisplayedIncrement, secondDisplayedIncrement)
+        XCTAssertGreaterThan(secondDisplayedIncrement, thirdDisplayedIncrement)
+        XCTAssertLessThan(third.displayedDistance, pull.unresistedDistance)
+        XCTAssertGreaterThan(third.progress, second.progress)
+    }
+
+    func testBackwardInputCannotCreateProgressWithoutForwardBoundaryInference() {
+        var pull = SidebarSpaceCreationPullState()
+
+        XCTAssertNil(pull.consumeAdjustedDelta(-40, pageWidth: 300))
+        XCTAssertEqual(pull.progress, 0)
+        XCTAssertEqual(pull.release(), .none)
+    }
+
+    func testCreationPullReversalPastOriginCancelsAtLastPage() throws {
+        var pull = SidebarSpaceCreationPullState()
+        _ = try XCTUnwrap(pull.begin(
+            initialForwardDistance: 30,
+            pageWidth: 300
+        ))
+        let update = try XCTUnwrap(pull.consumeAdjustedDelta(-40, pageWidth: 300))
+
+        XCTAssertEqual(update.disposition, .cancelled)
+        XCTAssertEqual(update.displayedDistance, 0)
+        XCTAssertEqual(update.progress, 0)
+        XCTAssertEqual(pull.release(), .none)
+    }
+
+    func testBelowThresholdCreationPullCancels() throws {
+        var pull = SidebarSpaceCreationPullState()
+        _ = try XCTUnwrap(pull.begin(
+            initialForwardDistance: SidebarSpacePagerMetrics.creationPullThreshold - 1,
+            pageWidth: 300
+        ))
+
+        XCTAssertEqual(pull.release(), .cancel)
+        XCTAssertEqual(pull.release(), .none)
+    }
+
+    func testAboveThresholdCreationPullCreatesExactlyOnce() throws {
+        var pull = SidebarSpaceCreationPullState()
+        _ = try XCTUnwrap(pull.begin(
+            initialForwardDistance: SidebarSpacePagerMetrics.creationPullThreshold,
+            pageWidth: 300
+        ))
+        var creationCount = 0
+
+        if pull.release() == .create {
+            creationCount += 1
+        }
+        if pull.release() == .create {
+            creationCount += 1
+        }
+
+        XCTAssertEqual(creationCount, 1)
+    }
+
+    func testCreationPresentationDoesNotAdvanceAddressMorphPastLastRealPage() throws {
+        var pull = SidebarSpaceCreationPullState()
+        _ = try XCTUnwrap(pull.begin(
+            initialForwardDistance: SidebarSpacePagerMetrics.creationPullThreshold,
+            pageWidth: 300
+        ))
+        let addressState = try XCTUnwrap(SidebarAddressScrollMorph.state(
+            at: 2,
+            pageTexts: ["Activity", "https://one.example", "https://two.example"]
+        ))
+
+        XCTAssertEqual(pull.progress, 1)
+        XCTAssertEqual(addressState.sourceText, "https://two.example")
+        XCTAssertEqual(addressState.destinationText, "https://two.example")
+        XCTAssertEqual(addressState.progress, 0)
+    }
+
+    func testCreationAffordanceAlwaysFitsInsideRevealedGap() {
+        for displayedDistance in stride(
+            from: CGFloat(0),
+            through: SidebarSpacePagerMetrics.creationRailMaximumWidth,
+            by: 0.5
+        ) {
+            let revealScale = SidebarSpaceCreationAffordanceLayout.revealScale(
+                forDisplayedDistance: displayedDistance
+            )
+            let availableWidth = max(
+                displayedDistance - SidebarSpacePagerMetrics.creationRailTrailingPadding,
+                0
+            )
+            let scaledDiameter =
+                SidebarSpacePagerMetrics.creationAffordanceDiameter * revealScale
+
+            XCTAssertGreaterThanOrEqual(revealScale, 0)
+            XCTAssertLessThanOrEqual(revealScale, 1)
+            XCTAssertLessThanOrEqual(scaledDiameter, availableWidth + 0.0001)
+        }
+    }
+
+    func testCreationAffordanceBecomesFullyVisibleWithoutNonfiniteLayout() {
+        let fullyVisibleDistance =
+            SidebarSpacePagerMetrics.creationRailTrailingPadding
+            + SidebarSpacePagerMetrics.creationAffordanceDiameter
+
+        XCTAssertEqual(
+            SidebarSpaceCreationAffordanceLayout.revealScale(
+                forDisplayedDistance: fullyVisibleDistance
+            ),
+            1
+        )
+        XCTAssertEqual(
+            SidebarSpaceCreationAffordanceLayout.revealScale(
+                forDisplayedDistance: .nan
+            ),
+            0
+        )
+    }
+
+    func testPagerUsesAdjustedGestureDirectionWhenDisplayedMovementIsSubthreshold() {
         XCTAssertEqual(
             SidebarSpacePagerSnap.targetPageIndex(
                 originalOffsetX: 200,
                 proposedOffsetX: 200,
                 visibleFractionalPageIndex: 1.001,
-                rawGestureDisplacementX: 1,
+                adjustedGestureDisplacementX: 1,
                 velocityX: 0,
                 pageWidth: 200,
                 pageCount: 5
@@ -464,7 +1043,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
                 originalOffsetX: 200,
                 proposedOffsetX: 200,
                 visibleFractionalPageIndex: 0.999,
-                rawGestureDisplacementX: -1,
+                adjustedGestureDisplacementX: -1,
                 velocityX: 0,
                 pageWidth: 200,
                 pageCount: 5
@@ -476,17 +1055,23 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
     func testPagerSensitivityDoesNotChangeSlowDragDestination() throws {
         func destination(sensitivity: CGFloat) throws -> Int {
             var state = SidebarSpacePagerScrollInputScalingState()
+            var accumulator = SidebarSpacePagerHorizontalGestureAccumulator()
+            let input = try XCTUnwrap(SidebarSpacePagerHorizontalInputSample(
+                scrollingDeltaX: -1
+            ))
+            accumulator.append(input)
             let scaledEvent = try XCTUnwrap(state.scaledEvent(
-                from: scrollEvent(horizontalDelta: 1),
+                from: scrollEvent(horizontalDelta: -1),
                 sensitivity: sensitivity
             ))
-            let displayedOffset = 200 + scaledEvent.scrollingDeltaX
+            let displayedOffset = 200 - scaledEvent.scrollingDeltaX
 
             return SidebarSpacePagerSnap.targetPageIndex(
                 originalOffsetX: 200,
                 proposedOffsetX: 200,
                 visibleFractionalPageIndex: displayedOffset / 200,
-                rawGestureDisplacementX: state.cumulativeRawDisplacementX,
+                adjustedGestureDisplacementX:
+                    accumulator.cumulativeAdjustedDisplacementX,
                 velocityX: 0,
                 pageWidth: 200,
                 pageCount: 5
@@ -584,7 +1169,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
                 originalOffsetX: 200,
                 proposedOffsetX: 200,
                 visibleFractionalPageIndex: 1.01,
-                rawGestureDisplacementX: 20,
+                adjustedGestureDisplacementX: 20,
                 velocityX: -5_000,
                 pageWidth: 200,
                 pageCount: 5
@@ -599,7 +1184,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
                 originalOffsetX: 200,
                 proposedOffsetX: 201,
                 visibleFractionalPageIndex: 0.99,
-                rawGestureDisplacementX: -20,
+                adjustedGestureDisplacementX: -20,
                 velocityX: -5_000,
                 pageWidth: 200,
                 pageCount: 5
@@ -691,7 +1276,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         tracker.transition(from: .idle, to: .tracking)
         XCTAssertTrue(tracker.acceptsDirectionalSnap)
         XCTAssertEqual(tracker.gestureStartFractionalPageIndex, 1.75)
-        tracker.rawGestureDisplacementX = 12
+        tracker.adjustedGestureDisplacementX = 12
 
         tracker.visibleFractionalPageIndex = 1.8
         tracker.transition(from: .tracking, to: .interacting)
@@ -702,12 +1287,12 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
 
         tracker.transition(from: .decelerating, to: .interacting)
         XCTAssertEqual(tracker.gestureStartFractionalPageIndex, 1.8)
-        XCTAssertNil(tracker.rawGestureDisplacementX)
+        XCTAssertNil(tracker.adjustedGestureDisplacementX)
 
         tracker.transition(from: .interacting, to: .idle)
         XCTAssertFalse(tracker.acceptsDirectionalSnap)
         XCTAssertNil(tracker.gestureStartFractionalPageIndex)
-        XCTAssertNil(tracker.rawGestureDisplacementX)
+        XCTAssertNil(tracker.adjustedGestureDisplacementX)
 
         tracker.transition(from: .idle, to: .tracking)
         tracker.transition(from: .tracking, to: .animating)
@@ -724,14 +1309,14 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         tracker.visibleFractionalPageIndex = 2
 
         tracker.transition(from: .idle, to: .tracking)
-        tracker.rawGestureDisplacementX = 18
+        tracker.adjustedGestureDisplacementX = 18
         tracker.visibleFractionalPageIndex = 2.04
         tracker.transition(from: .tracking, to: .interacting)
         tracker.transition(from: .interacting, to: .animating)
 
         XCTAssertTrue(tracker.acceptsDirectionalSnap)
         XCTAssertEqual(tracker.gestureStartFractionalPageIndex, 2)
-        XCTAssertEqual(tracker.rawGestureDisplacementX, 18)
+        XCTAssertEqual(tracker.adjustedGestureDisplacementX, 18)
     }
 
     func testPagerAnchorsGestureInterruptingAnimationToPreviousDestination() {
@@ -747,7 +1332,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
 
         XCTAssertEqual(tracker.gestureStartFractionalPageIndex, 1.2)
         XCTAssertEqual(tracker.gestureSourcePageIndex, 2)
-        XCTAssertNil(tracker.rawGestureDisplacementX)
+        XCTAssertNil(tracker.adjustedGestureDisplacementX)
         XCTAssertTrue(tracker.acceptsDirectionalSnap)
     }
 
@@ -755,12 +1340,12 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         let tracker = SidebarSpacePagerGeometryTracker()
         tracker.visibleFractionalPageIndex = 1
 
-        tracker.beginPhysicalGesture()
+        tracker.beginPhysicalGesture(id: 1)
         tracker.transition(from: .idle, to: .interacting)
         tracker.recordResolvedTargetPageIndex(2)
 
         tracker.visibleFractionalPageIndex = 1.2
-        tracker.beginPhysicalGesture()
+        tracker.beginPhysicalGesture(id: 2)
 
         XCTAssertEqual(tracker.gestureStartFractionalPageIndex, 1.2)
         XCTAssertEqual(tracker.gestureSourcePageIndex, 2)
@@ -773,7 +1358,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
                 gestureStartFractionalPageIndex: tracker.gestureStartFractionalPageIndex,
                 gestureSourcePageIndex: tracker.gestureSourcePageIndex,
                 visibleFractionalPageIndex: 1.205,
-                rawGestureDisplacementX: 1,
+                adjustedGestureDisplacementX: 1,
                 velocityX: 0,
                 pageWidth: 200,
                 pageCount: 5
@@ -790,7 +1375,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
                 gestureStartFractionalPageIndex: 1.2,
                 gestureSourcePageIndex: 2,
                 visibleFractionalPageIndex: 1.205,
-                rawGestureDisplacementX: 1,
+                adjustedGestureDisplacementX: 1,
                 velocityX: 0,
                 pageWidth: 200,
                 pageCount: 5
@@ -804,7 +1389,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
                 gestureStartFractionalPageIndex: 1.2,
                 gestureSourcePageIndex: 2,
                 visibleFractionalPageIndex: 1.195,
-                rawGestureDisplacementX: -1,
+                adjustedGestureDisplacementX: -1,
                 velocityX: 0,
                 pageWidth: 200,
                 pageCount: 5
@@ -821,7 +1406,7 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
 
         XCTAssertFalse(tracker.acceptsDirectionalSnap)
         XCTAssertNil(tracker.gestureStartFractionalPageIndex)
-        XCTAssertNil(tracker.rawGestureDisplacementX)
+        XCTAssertNil(tracker.adjustedGestureDisplacementX)
     }
 
     func testPagerCanMoveInwardFromBothEdges() {
@@ -1579,6 +2164,68 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
         XCTAssertEqual(page.regularTabs.first?.hasLiveSession, false)
     }
 
+    func testPageLifecycleIDsIncludeEveryVisibleTabInDisplayOrder() {
+        let profileID = UUID()
+        let space = BrowserSpace(name: "Work", profileID: profileID)
+        let parentFolder = BrowserFolder(name: "Parent", parentSpaceID: space.id)
+        let childFolder = BrowserFolder(
+            name: "Child",
+            parentSpaceID: space.id,
+            parentFolderID: parentFolder.id
+        )
+        let favorite = sidebarTabItem(
+            title: "Favorite",
+            spaceID: space.id,
+            profileID: profileID,
+            isFavorite: true
+        )
+        let pinned = sidebarTabItem(
+            title: "Pinned",
+            spaceID: space.id,
+            profileID: profileID,
+            isPinned: true
+        )
+        let parentTab = sidebarTabItem(
+            title: "Parent Tab",
+            spaceID: space.id,
+            profileID: profileID,
+            folderID: parentFolder.id
+        )
+        let childTab = sidebarTabItem(
+            title: "Child Tab",
+            spaceID: space.id,
+            profileID: profileID,
+            folderID: childFolder.id
+        )
+        let regular = sidebarTabItem(
+            title: "Regular",
+            spaceID: space.id,
+            profileID: profileID
+        )
+        let childItem = SidebarFolderItemSnapshot(
+            folder: childFolder,
+            tabs: [childTab],
+            childFolders: []
+        )
+        let parentItem = SidebarFolderItemSnapshot(
+            folder: parentFolder,
+            tabs: [parentTab],
+            childFolders: [childItem]
+        )
+        let page = sidebarPage(
+            space: space,
+            favoriteTabs: [favorite],
+            pinnedTabs: [pinned],
+            folders: [parentItem],
+            regularTabs: [regular]
+        )
+
+        XCTAssertEqual(
+            page.tabLifecycleIDs,
+            [favorite.id, pinned.id, parentTab.id, childTab.id, regular.id]
+        )
+    }
+
     func testShowsEmptyRegularDropSectionDuringDragWhenOnlyEssentialsHaveTabs() throws {
         let profileID = UUID()
         let space = BrowserSpace(name: "Work", profileID: profileID)
@@ -1881,6 +2528,38 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
     }
 
     @MainActor
+    func testPagerPreviewPublishesOncePerResolvedTarget() {
+        let tabID = UUID()
+        let spaceID = UUID()
+        let state = BrowserContentPresentationState()
+        var publicationCount = 0
+        let observation = state.objectWillChange.sink {
+            publicationCount += 1
+        }
+
+        for _ in 0..<500 {
+            state.setPagerPreviewTarget(.tab(tabID))
+        }
+        XCTAssertEqual(publicationCount, 1)
+        XCTAssertEqual(state.previewTabID, tabID)
+        XCTAssertEqual(state.activityPagePreviewOverride, false)
+
+        state.setPagerPreviewTarget(.startPage(spaceID))
+        XCTAssertEqual(publicationCount, 2)
+        XCTAssertNil(state.previewTabID)
+        XCTAssertEqual(state.previewStartPageSpaceID, spaceID)
+
+        state.setPagerPreviewTarget(.activity)
+        XCTAssertEqual(publicationCount, 3)
+        XCTAssertEqual(state.activityPagePreviewOverride, true)
+
+        state.setPagerPreviewTarget(nil)
+        XCTAssertEqual(publicationCount, 4)
+        XCTAssertNil(state.activityPagePreviewOverride)
+        withExtendedLifetime(observation) {}
+    }
+
+    @MainActor
     func testPresentationStateCanPreviewStartPageSpace() {
         let spaceID = UUID()
         let state = BrowserContentPresentationState()
@@ -1890,6 +2569,89 @@ final class SidebarSpacePagerSelectionTests: XCTestCase {
 
         state.setPreviewStartPageSpaceID(nil)
         XCTAssertNil(state.previewStartPageSpaceID)
+    }
+
+    @MainActor
+    func testPresentationStateCanOverrideActivityPageDuringPagerPreview() {
+        let state = BrowserContentPresentationState()
+
+        state.setActivityPagePreviewOverride(true)
+        XCTAssertEqual(state.activityPagePreviewOverride, true)
+
+        state.setActivityPagePreviewOverride(false)
+        XCTAssertEqual(state.activityPagePreviewOverride, false)
+
+        state.setActivityPagePreviewOverride(nil)
+        XCTAssertNil(state.activityPagePreviewOverride)
+    }
+
+    func testActivityPresentationUsesPagerTargetBeforeCommittedSelection() {
+        XCTAssertTrue(BrowserActivityPagePresentation.isPresented(
+            isSelected: false,
+            previewOverride: true
+        ))
+        XCTAssertFalse(BrowserActivityPagePresentation.isPresented(
+            isSelected: true,
+            previewOverride: false
+        ))
+        XCTAssertTrue(BrowserActivityPagePresentation.isPresented(
+            isSelected: true,
+            previewOverride: nil
+        ))
+    }
+
+    func testUnloadedWebPreviewUsesPlaceholderUntilSnapshotExists() throws {
+        let selectedTabID = UUID()
+        let previewTab = BrowserTab(
+            title: "Target",
+            url: try XCTUnwrap(URL(string: "https://example.com")),
+            parentSpaceID: UUID(),
+            profileID: UUID()
+        )
+
+        XCTAssertTrue(
+            BrowserContentPreviewPlaceholder.shouldShow(
+                for: previewTab,
+                selectedTabID: selectedTabID,
+                snapshotIsAvailable: false
+            )
+        )
+        XCTAssertFalse(
+            BrowserContentPreviewPlaceholder.shouldShow(
+                for: previewTab,
+                selectedTabID: selectedTabID,
+                snapshotIsAvailable: true
+            )
+        )
+    }
+
+    func testPreviewPlaceholderIgnoresCurrentAndStartPageTabs() throws {
+        let currentTab = BrowserTab(
+            title: "Current",
+            url: try XCTUnwrap(URL(string: "https://example.com")),
+            parentSpaceID: UUID(),
+            profileID: UUID()
+        )
+        let startPageTab = BrowserTab(
+            title: "New Tab",
+            parentSpaceID: UUID(),
+            profileID: UUID()
+        )
+
+        XCTAssertFalse(
+            BrowserContentPreviewPlaceholder.shouldShow(
+                for: currentTab,
+                selectedTabID: currentTab.id,
+                snapshotIsAvailable: false
+            )
+        )
+        XCTAssertFalse(
+            BrowserContentPreviewPlaceholder.shouldShow(
+                for: startPageTab,
+                selectedTabID: currentTab.id,
+                snapshotIsAvailable: false
+            )
+        )
     }
 
     @MainActor
